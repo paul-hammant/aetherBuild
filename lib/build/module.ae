@@ -1,0 +1,1103 @@
+// aether.build — Build system SDK for polyglot monorepos
+//
+// Usage in .build.ae files:
+//   import build
+//
+//   main() {
+//       b = build.start()
+//       build.dep(b, "java/components/vowelbase")
+//       build.javac(b)
+//   }
+//
+// Environment variables (set by runner):
+//   BUILD_ROOT       — absolute path to monorepo root
+//   BUILD_MODULE_DIR — module path relative to root (e.g. java/components/vowelbase)
+
+// Runtime externs (linked from libaether.a)
+extern map_new() -> ptr
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_getenv(name: string) -> string
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern aether_args_get(index: int) -> string
+extern file_exists(path: string) -> int
+extern file_mtime(path: string) -> int
+extern dir_create(path: string) -> int
+extern dir_list_count(dl: ptr) -> int
+extern dir_list_get(dl: ptr, index: int) -> string
+extern dir_list_free(dl: ptr)
+extern fs_glob(pattern: string) -> ptr
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_trim(s: string) -> string
+extern string_ends_with(s: string, suffix: string) -> int
+extern io_read_file(path: string) -> string
+extern io_write_file(path: string, content: string) -> int
+
+// --- Session (shared across all modules in one build) ---
+
+session(root_path: string) {
+    s = map_new()
+    map_put(s, "root", root_path)
+    map_put(s, "visited", map_new())
+    return s
+}
+
+// Begin a module build. Returns module context, or 0 if already done.
+begin(s: ptr, module_dir: string) {
+    visited = map_get(s, "visited")
+    if map_has(visited, module_dir) == 1 {
+        // Return null pointer (same type as the map we'd return)
+        return map_get(s, "_null_")
+    }
+
+    root = map_get(s, "root")
+    ctx = map_new()
+    map_put(ctx, "root", root)
+    map_put(ctx, "module_dir", module_dir)
+
+    mod_name = module_dir
+    lang_prefix = ""
+    slash = string_index_of(module_dir, "/")
+    if slash >= 0 {
+        lang_prefix = string_substring(module_dir, 0, slash)
+        mod_name = string_substring(module_dir, slash + 1, string_length(module_dir))
+    }
+    map_put(ctx, "module", mod_name)
+
+    source_dir = path_join(root, module_dir)
+    map_put(ctx, "source_dir", source_dir)
+
+    // Test modules (language prefix ends with "tests") go to target/tests/
+    target_base = path_join(root, "target")
+    is_test = string_ends_with(lang_prefix, "tests")
+    if is_test == 1 {
+        target_base = path_join(target_base, "tests")
+    }
+    tgt_dir = path_join(target_base, mod_name)
+    map_put(ctx, "target_dir", tgt_dir)
+
+    map_put(ctx, "deps", list_new())
+    map_put(ctx, "libs", list_new())
+    map_put(ctx, "cargo_deps", list_new())
+    map_put(ctx, "npm_deps", list_new())
+
+    return ctx
+}
+
+// Mark a module as done in the session
+done(s: ptr, module_dir: string) {
+    visited = map_get(s, "visited")
+    map_put(visited, module_dir, "1")
+}
+
+// --- Context creation (standalone mode, env-var based) ---
+
+start() {
+    ctx = map_new()
+    root = os_getenv("BUILD_ROOT")
+    module_dir = os_getenv("BUILD_MODULE_DIR")
+
+    map_put(ctx, "root", root)
+    map_put(ctx, "module_dir", module_dir)
+
+    // Strip language prefix: "java/components/vowelbase" -> "components/vowelbase"
+    mod_name = module_dir
+    slash = string_index_of(module_dir, "/")
+    if slash >= 0 {
+        mod_name = string_substring(module_dir, slash + 1, string_length(module_dir))
+    }
+    map_put(ctx, "module", mod_name)
+
+    source_dir = path_join(root, module_dir)
+    map_put(ctx, "source_dir", source_dir)
+
+    target_base = path_join(root, "target")
+    tgt_dir = path_join(target_base, mod_name)
+    map_put(ctx, "target_dir", tgt_dir)
+
+    map_put(ctx, "deps", list_new())
+    map_put(ctx, "libs", list_new())
+    map_put(ctx, "cargo_deps", list_new())
+    map_put(ctx, "npm_deps", list_new())
+
+    return ctx
+}
+
+// --- Dependency declarations (one per line, greppable) ---
+
+dep(ctx: ptr, path: string) {
+    deps = map_get(ctx, "deps")
+    list_add(deps, path)
+}
+
+lib(ctx: ptr, path: string) {
+    libs = map_get(ctx, "libs")
+    list_add(libs, path)
+}
+
+cargo_dep(ctx: ptr, path: string) {
+    cdeps = map_get(ctx, "cargo_deps")
+    list_add(cdeps, path)
+}
+
+npm_dep(ctx: ptr, path: string) {
+    ndeps = map_get(ctx, "npm_deps")
+    list_add(ndeps, path)
+}
+
+// --- Internal helpers ---
+
+_mkdirs(dir_path: string) {
+    os_system("mkdir -p ${dir_path}")
+}
+
+_get(ctx: ptr, key: string) {
+    return map_get(ctx, key)
+}
+
+_strip_lang(dep_path: string) {
+    slash = string_index_of(dep_path, "/")
+    if slash >= 0 {
+        return string_substring(dep_path, slash + 1, string_length(dep_path))
+    }
+    return dep_path
+}
+
+_read_dep_artifact(ctx: ptr, dep_module: string, artifact: string) {
+    root = _get(ctx, "root")
+    t = path_join(root, "target")
+    t2 = path_join(t, dep_module)
+    p = path_join(t2, artifact)
+    if file_exists(p) == 1 {
+        return io_read_file(p)
+    }
+    return ""
+}
+
+_write_artifact(ctx: ptr, artifact: string, content: string) {
+    td = _get(ctx, "target_dir")
+    p = path_join(td, artifact)
+    io_write_file(p, content)
+}
+
+_needs_rebuild(source_dir: string, ts_file: string) {
+    if file_exists(ts_file) == 0 {
+        return 1
+    }
+    prev = file_mtime(ts_file)
+    pat = path_join(source_dir, "*")
+    files = fs_glob(pat)
+    count = dir_list_count(files)
+    i = 0
+    while i < count {
+        f = dir_list_get(files, i)
+        mt = file_mtime(f)
+        if mt > prev {
+            dir_list_free(files)
+            return 1
+        }
+        i = i + 1
+    }
+    dir_list_free(files)
+    return 0
+}
+
+_collect_file_list(pattern: string) {
+    files = fs_glob(pattern)
+    count = dir_list_count(files)
+    result = ""
+    i = 0
+    while i < count {
+        f = dir_list_get(files, i)
+        if i == 0 {
+            result = string_concat(f, "")
+        } else {
+            sp = string_concat(result, " ")
+            result = string_concat(sp, f)
+        }
+        i = i + 1
+    }
+    dir_list_free(files)
+    return result
+}
+
+_build_dep_classpath(ctx: ptr) {
+    deps = map_get(ctx, "deps")
+    cp = ""
+    count = list_size(deps)
+    i = 0
+    while i < count {
+        dp = list_get(deps, i)
+        dm = _strip_lang(dp)
+        dep_cp_raw = _read_dep_artifact(ctx, dm, "jvm_classpath_deps_including_transitive")
+        if string_length(dep_cp_raw) > 0 {
+            // Convert newlines to : for classpath
+            dep_cp = string_trim(os_exec("echo '${dep_cp_raw}' | tr '\n' ':' | sed 's/:$//'"))
+            if string_length(cp) > 0 {
+                tmp = string_concat(cp, ":")
+                cp = string_concat(tmp, dep_cp)
+            } else {
+                cp = dep_cp
+            }
+        }
+        i = i + 1
+    }
+    return cp
+}
+
+_build_lib_classpath(ctx: ptr) {
+    root = _get(ctx, "root")
+    libs = map_get(ctx, "libs")
+    cp = ""
+    count = list_size(libs)
+    i = 0
+    while i < count {
+        lp = list_get(libs, i)
+        libs_dir = path_join(root, "libs")
+        full = path_join(libs_dir, lp)
+        if string_length(cp) > 0 {
+            tmp = string_concat(cp, ":")
+            cp = string_concat(tmp, full)
+        } else {
+            cp = full
+        }
+        i = i + 1
+    }
+    return cp
+}
+
+// --- Java SDK ---
+
+javac(ctx: ptr) {
+    source_dir = _get(ctx, "source_dir")
+    target_dir = _get(ctx, "target_dir")
+    mod_name = _get(ctx, "module")
+    mod_dir = _get(ctx, "module_dir")
+
+    classes_dir = path_join(target_dir, "classes")
+    _mkdirs(classes_dir)
+    ts_dir = path_join(classes_dir, mod_name)
+    _mkdirs(ts_dir)
+    ts_file = path_join(ts_dir, ".timestamp")
+
+    if _needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of prod code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling prod code")
+
+    dep_cp = _build_dep_classpath(ctx)
+    classpath = classes_dir
+    if string_length(dep_cp) > 0 {
+        tmp = string_concat(classpath, ":")
+        classpath = string_concat(tmp, dep_cp)
+    }
+
+    pat = path_join(source_dir, "*.java")
+    file_list = _collect_file_list(pat)
+    if string_length(file_list) == 0 {
+        println("${mod_dir}: no Java source files found")
+        return 0
+    }
+
+    cmd = "javac -d ${classes_dir} -cp ${classpath} ${file_list}"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: javac failed")
+        return exit_code
+    }
+
+    // Write classpath artifact
+    cp_out = classes_dir
+    if string_length(dep_cp) > 0 {
+        tmp2 = string_concat(cp_out, "\n")
+        cp_out = string_concat(tmp2, dep_cp)
+    }
+    _write_artifact(ctx, "jvm_classpath_deps_including_transitive", cp_out)
+
+    // Collect ldlibdeps and shared_library_deps from all deps (including non-JVM)
+    deps = map_get(ctx, "deps")
+    dep_count = list_size(deps)
+    ld_out = ""
+    shared_out = ""
+    k = 0
+    while k < dep_count {
+        dp2 = list_get(deps, k)
+        dm2 = _strip_lang(dp2)
+        dep_ld = _read_dep_artifact(ctx, dm2, "ldlibdeps")
+        if string_length(dep_ld) > 0 {
+            if string_length(ld_out) > 0 {
+                ld_out = string_concat(string_concat(ld_out, "\n"), dep_ld)
+            } else {
+                ld_out = dep_ld
+            }
+        }
+        dep_sh = _read_dep_artifact(ctx, dm2, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            if string_length(shared_out) > 0 {
+                shared_out = string_concat(string_concat(shared_out, "\n"), dep_sh)
+            } else {
+                shared_out = dep_sh
+            }
+        }
+        k = k + 1
+    }
+    _write_artifact(ctx, "ldlibdeps", ld_out)
+    _write_artifact(ctx, "shared_library_deps_including_transitive", shared_out)
+    io_write_file(ts_file, "")
+
+    return 0
+}
+
+// --- Rust SDK ---
+
+_write_cargo_config(config_path: string) {
+    line1 = "[source.crates-io]"
+    line2 = "replace-with = 'local-registry'"
+    line3 = "[source.local-registry]"
+    line4 = "local-registry = '../../../libs/rust/registry'"
+    cfg = string_concat(line1, "\n")
+    cfg = string_concat(cfg, line2)
+    cfg = string_concat(cfg, "\n\n")
+    cfg = string_concat(cfg, line3)
+    cfg = string_concat(cfg, "\n")
+    cfg = string_concat(cfg, line4)
+    cfg = string_concat(cfg, "\n")
+    io_write_file(config_path, cfg)
+}
+
+cargo_build(ctx: ptr, lib_name: string) {
+    root = _get(ctx, "root")
+    source_dir = _get(ctx, "source_dir")
+    target_dir = _get(ctx, "target_dir")
+    mod_name = _get(ctx, "module")
+    mod_dir = _get(ctx, "module_dir")
+    cdeps = map_get(ctx, "cargo_deps")
+
+    lib_dir = path_join(target_dir, "lib")
+    _mkdirs(lib_dir)
+
+    ts_file = path_join(lib_dir, ".timestamp")
+    if _needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of prod code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling prod code")
+
+    cdep_count = list_size(cdeps)
+    cdep_content = ""
+    i = 0
+    while i < cdep_count {
+        cd = list_get(cdeps, i)
+        if i == 0 {
+            cdep_content = string_concat(cd, "")
+        } else {
+            nl = string_concat(cdep_content, "\n")
+            cdep_content = string_concat(nl, cd)
+        }
+        i = i + 1
+    }
+    _write_artifact(ctx, "cargo_deps_including_transitive", cdep_content)
+
+    cargo_dir = path_join(target_dir, ".cargo")
+    _mkdirs(cargo_dir)
+    cargo_config = path_join(cargo_dir, "config.toml")
+    os_system("mkdir -p ${cargo_dir}")
+    _write_cargo_config(cargo_config)
+
+    cargo_target = path_join(target_dir, "lib")
+    cmd = "cd ${source_dir} && cargo build --release --target-dir=${cargo_target}"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: cargo build failed")
+        return exit_code
+    }
+
+    release_dir = path_join(lib_dir, "release")
+    full_so = path_join(release_dir, lib_name)
+    _write_artifact(ctx, "ldlibdeps", full_so)
+    _write_artifact(ctx, "shared_library_deps_including_transitive", full_so)
+    io_write_file(ts_file, "")
+    return 0
+}
+
+// --- Java dist SDK ---
+
+// Build a fat jar from this module's classes + all transitive deps + native libs.
+shade(ctx: ptr, main_class: string, jar_name: string) {
+    root = _get(ctx, "root")
+    target_dir = _get(ctx, "target_dir")
+    mod_name = _get(ctx, "module")
+    mod_dir = _get(ctx, "module_dir")
+
+    classes_dir = path_join(target_dir, "classes")
+
+    // Create manifest
+    meta_dir = path_join(classes_dir, "META-INF")
+    _mkdirs(meta_dir)
+    manifest = path_join(meta_dir, "MANIFEST.MF")
+    mf_content = string_concat("Manifest-Version: 1.0\nMain-Class: ", main_class)
+    mf_content = string_concat(mf_content, "\n")
+    io_write_file(manifest, mf_content)
+
+    // Build jar args: own classes first
+    bin_dir = path_join(target_dir, "bin")
+    _mkdirs(bin_dir)
+    jar_path = path_join(bin_dir, jar_name)
+
+    // Collect classpath entries (newline-separated)
+    cp_file = path_join(target_dir, "jvm_classpath_deps_including_transitive")
+    cp_content = ""
+    if file_exists(cp_file) == 1 {
+        cp_content = io_read_file(cp_file)
+    }
+
+    // Collect native lib deps
+    ld_file = path_join(target_dir, "ldlibdeps")
+    ld_content = ""
+    if file_exists(ld_file) == 1 {
+        ld_content = io_read_file(ld_file)
+    }
+
+    println("${mod_dir}: packaging ${jar_name}")
+
+    // Build the jar command via shell — handles the classpath and ldlibdeps iteration
+    // jar cfM output.jar -C classes . [-C dep_classes .] ... [-C libdir libfile] ...
+    jar_cmd = string_concat("jar cfM ", jar_path)
+    jar_cmd = string_concat(jar_cmd, " -C ")
+    jar_cmd = string_concat(jar_cmd, classes_dir)
+    jar_cmd = string_concat(jar_cmd, " .")
+
+    // Add each classpath entry as -C <dir> .
+    if string_length(cp_content) > 0 {
+        add_cp_cmd = string_concat("echo '", cp_content)
+        add_cp_cmd = string_concat(add_cp_cmd, "' | while IFS= read -r line; do [ -n \"$line\" ] && echo \" -C $line .\"; done")
+        extra_cp = os_exec(add_cp_cmd)
+        extra_cp = string_trim(extra_cp)
+        if string_length(extra_cp) > 0 {
+            jar_cmd = string_concat(jar_cmd, " ")
+            jar_cmd = string_concat(jar_cmd, extra_cp)
+        }
+    }
+
+    // Add native libs as -C <dir> <file>
+    if string_length(ld_content) > 0 {
+        add_ld_cmd = string_concat("echo '", ld_content)
+        add_ld_cmd = string_concat(add_ld_cmd, "' | while IFS= read -r line; do [ -n \"$line\" ] && echo \" -C $(dirname $line) $(basename $line)\"; done")
+        extra_ld = os_exec(add_ld_cmd)
+        extra_ld = string_trim(extra_ld)
+        if string_length(extra_ld) > 0 {
+            jar_cmd = string_concat(jar_cmd, " ")
+            jar_cmd = string_concat(jar_cmd, extra_ld)
+        }
+    }
+
+    exit_code = os_system(jar_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: jar packaging failed")
+        return exit_code
+    }
+
+    println("${mod_dir}: built ${jar_path}")
+    println("  run: java -Djava.library.path=. -jar ${jar_path}")
+    return 0
+}
+
+// --- Java test SDK ---
+
+javac_test(ctx: ptr) {
+    source_dir = _get(ctx, "source_dir")
+    target_dir = _get(ctx, "target_dir")
+    mod_name = _get(ctx, "module")
+    mod_dir = _get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+    _mkdirs(test_classes)
+    ts_dir = path_join(test_classes, mod_name)
+    _mkdirs(ts_dir)
+    ts_file = path_join(ts_dir, ".timestamp")
+
+    if _needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of test code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling test code")
+
+    dep_cp = _build_dep_classpath(ctx)
+    lib_cp = _build_lib_classpath(ctx)
+    classpath = test_classes
+    if string_length(dep_cp) > 0 {
+        tmp = string_concat(classpath, ":")
+        classpath = string_concat(tmp, dep_cp)
+    }
+    if string_length(lib_cp) > 0 {
+        tmp2 = string_concat(classpath, ":")
+        classpath = string_concat(tmp2, lib_cp)
+    }
+
+    pat = path_join(source_dir, "*.java")
+    file_list = _collect_file_list(pat)
+    if string_length(file_list) == 0 {
+        println("${mod_dir}: no test source files found")
+        return 0
+    }
+
+    cmd = "javac -d ${test_classes} -cp ${classpath} ${file_list}"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: javac (test) failed")
+        return exit_code
+    }
+
+    io_write_file(ts_file, "")
+    return 0
+}
+
+junit(ctx: ptr) {
+    root = _get(ctx, "root")
+    target_dir = _get(ctx, "target_dir")
+    mod_dir = _get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+
+    dep_cp = _build_dep_classpath(ctx)
+    lib_cp = _build_lib_classpath(ctx)
+    classpath = test_classes
+    if string_length(dep_cp) > 0 {
+        tmp = string_concat(classpath, ":")
+        classpath = string_concat(tmp, dep_cp)
+    }
+    if string_length(lib_cp) > 0 {
+        tmp2 = string_concat(classpath, ":")
+        classpath = string_concat(tmp2, lib_cp)
+    }
+
+    tc_pat = path_join(test_classes, "**/*Tests.class")
+    test_files = fs_glob(tc_pat)
+    tcount = dir_list_count(test_files)
+    if tcount == 0 {
+        println("${mod_dir}: no test classes found")
+        dir_list_free(test_files)
+        return 0
+    }
+
+    prefix_len = string_length(test_classes) + 1
+    class_names = ""
+    j = 0
+    while j < tcount {
+        tf = dir_list_get(test_files, j)
+        tflen = string_length(tf)
+        class_path = string_substring(tf, prefix_len, tflen - 6)
+        raw = os_exec("echo ${class_path} | sed s,/,.,g")
+        class_name = string_trim(raw)
+        if j == 0 {
+            class_names = class_name
+        } else {
+            sp = string_concat(class_names, " ")
+            class_names = string_concat(sp, class_name)
+        }
+        j = j + 1
+    }
+    dir_list_free(test_files)
+
+    // Build LD_LIBRARY_PATH from deps' ldlibdeps (may have multiple lines)
+    deps = map_get(ctx, "deps")
+    ndeps = list_size(deps)
+    ld_path = ""
+    m = 0
+    while m < ndeps {
+        dp3 = list_get(deps, m)
+        dm3 = _strip_lang(dp3)
+        dep_ld = _read_dep_artifact(ctx, dm3, "ldlibdeps")
+        if string_length(dep_ld) > 0 {
+            // dirname each line, dedup, join with :
+            ld_dirs = string_trim(os_exec("echo '${dep_ld}' | while read -r line; do [ -n \"$line\" ] && dirname \"$line\"; done | sort -u | tr '\n' ':' | sed 's/:$//'"))
+            if string_length(ld_dirs) > 0 {
+                if string_length(ld_path) > 0 {
+                    ld_path = string_concat(string_concat(ld_path, ":"), ld_dirs)
+                } else {
+                    ld_path = ld_dirs
+                }
+            }
+        }
+        m = m + 1
+    }
+
+    println("${mod_dir}: running tests")
+    cmd = ""
+    if string_length(ld_path) > 0 {
+        cmd = "LD_LIBRARY_PATH=${ld_path} java -Djava.library.path=${ld_path} -cp ${classpath} org.junit.runner.JUnitCore ${class_names}"
+    } else {
+        cmd = "java -cp ${classpath} org.junit.runner.JUnitCore ${class_names}"
+    }
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}
+
+// --- Kotlin SDK ---
+
+kotlinc(ctx: ptr) {
+    source_dir = _get(ctx, "source_dir")
+    target_dir = _get(ctx, "target_dir")
+    mod_name = _get(ctx, "module")
+    mod_dir = _get(ctx, "module_dir")
+    deps = map_get(ctx, "deps")
+
+    classes_dir = path_join(target_dir, "classes")
+    _mkdirs(classes_dir)
+    ts_dir = path_join(classes_dir, mod_name)
+    _mkdirs(ts_dir)
+    ts_file = path_join(ts_dir, ".timestamp")
+
+    if _needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of prod code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling prod code")
+
+    // Classpath: own classes + kotlin-stdlib + dep classpaths
+    kotlin_home = os_getenv("KOTLIN_HOME")
+    if kotlin_home == 0 {
+        kotlin_home = "/usr/share/kotlin/kotlinc"
+    }
+    stdlib_jar = path_join(kotlin_home, "lib/kotlin-stdlib.jar")
+
+    dep_cp = _build_dep_classpath(ctx)
+    classpath = string_concat(classes_dir, ":")
+    classpath = string_concat(classpath, stdlib_jar)
+    if string_length(dep_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), dep_cp)
+    }
+
+    // Find Kotlin sources
+    kt_pat = path_join(source_dir, "*.kt")
+    file_list = _collect_file_list(kt_pat)
+    if string_length(file_list) == 0 {
+        println("${mod_dir}: no Kotlin source files found")
+        return 0
+    }
+
+    kc_cmd = "kotlinc -d ${classes_dir} -cp ${classpath} ${file_list}"
+    exit_code = os_system(kc_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: kotlinc failed")
+        return exit_code
+    }
+
+    // Write classpath artifact — newline-separated, matching Java format
+    cp_out = string_concat(classes_dir, "\n")
+    cp_out = string_concat(cp_out, stdlib_jar)
+    if string_length(dep_cp) > 0 {
+        cp_out = string_concat(string_concat(cp_out, "\n"), dep_cp)
+    }
+    _write_artifact(ctx, "jvm_classpath_deps_including_transitive", cp_out)
+
+    // Collect ldlibdeps from deps
+    dep_count = list_size(deps)
+    ld_out = ""
+    k = 0
+    while k < dep_count {
+        dp2 = list_get(deps, k)
+        dm2 = _strip_lang(dp2)
+        dep_ld = _read_dep_artifact(ctx, dm2, "ldlibdeps")
+        if string_length(dep_ld) > 0 {
+            if string_length(ld_out) > 0 {
+                ld_out = string_concat(string_concat(ld_out, "\n"), dep_ld)
+            } else {
+                ld_out = dep_ld
+            }
+        }
+        k = k + 1
+    }
+    _write_artifact(ctx, "ldlibdeps", ld_out)
+    io_write_file(ts_file, "")
+    return 0
+}
+
+// Compile Kotlin test sources
+kotlinc_test(ctx: ptr) {
+    source_dir = _get(ctx, "source_dir")
+    target_dir = _get(ctx, "target_dir")
+    mod_name = _get(ctx, "module")
+    mod_dir = _get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+    _mkdirs(test_classes)
+    ts_dir = path_join(test_classes, mod_name)
+    _mkdirs(ts_dir)
+    ts_file = path_join(ts_dir, ".timestamp")
+
+    if _needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of test code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling test code")
+
+    kotlin_home = os_getenv("KOTLIN_HOME")
+    if kotlin_home == 0 {
+        kotlin_home = "/usr/share/kotlin/kotlinc"
+    }
+    stdlib_jar = path_join(kotlin_home, "lib/kotlin-stdlib.jar")
+
+    dep_cp = _build_dep_classpath(ctx)
+    lib_cp = _build_lib_classpath(ctx)
+    classpath = string_concat(test_classes, ":")
+    classpath = string_concat(classpath, stdlib_jar)
+    if string_length(dep_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), dep_cp)
+    }
+    if string_length(lib_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), lib_cp)
+    }
+
+    kt_pat = path_join(source_dir, "*.kt")
+    file_list = _collect_file_list(kt_pat)
+    if string_length(file_list) == 0 {
+        println("${mod_dir}: no Kotlin test source files found")
+        return 0
+    }
+
+    kc_cmd = "kotlinc -d ${test_classes} -cp ${classpath} ${file_list}"
+    exit_code = os_system(kc_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: kotlinc (test) failed")
+        return exit_code
+    }
+
+    io_write_file(ts_file, "")
+    return 0
+}
+
+// Run a Kotlin test class by its fully qualified name via java -ea
+kotlin_test(ctx: ptr, test_class: string) {
+    target_dir = _get(ctx, "target_dir")
+    mod_dir = _get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+    dep_cp = _build_dep_classpath(ctx)
+    lib_cp = _build_lib_classpath(ctx)
+
+    kotlin_home = os_getenv("KOTLIN_HOME")
+    if kotlin_home == 0 {
+        kotlin_home = "/usr/share/kotlin/kotlinc"
+    }
+    stdlib_jar = path_join(kotlin_home, "lib/kotlin-stdlib.jar")
+
+    classpath = string_concat(test_classes, ":")
+    classpath = string_concat(classpath, stdlib_jar)
+    if string_length(dep_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), dep_cp)
+    }
+    if string_length(lib_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), lib_cp)
+    }
+
+    println("${mod_dir}: running tests")
+    run_cmd = "java -ea -cp ${classpath} ${test_class}"
+    exit_code = os_system(run_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}
+
+// --- Go SDK ---
+
+go_build(ctx: ptr, mode: string, output: string) {
+    source_dir = _get(ctx, "source_dir")
+    target_dir = _get(ctx, "target_dir")
+    mod_name = _get(ctx, "module")
+    mod_dir = _get(ctx, "module_dir")
+
+    lib_dir = path_join(target_dir, "lib")
+    _mkdirs(lib_dir)
+
+    ts_file = path_join(lib_dir, ".timestamp")
+    if _needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of Go prod & test code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling Go prod & test code")
+
+    // go mod tidy first
+    os_system("cd ${source_dir} && go mod tidy")
+
+    out_path = path_join(lib_dir, output)
+    build_cmd = "cd ${source_dir} && go build -buildmode=${mode} -o ${out_path}"
+    exit_code = os_system(build_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: go build failed")
+        return exit_code
+    }
+
+    // Write artifacts
+    _write_artifact(ctx, "ldlibdeps", out_path)
+
+    // Shared library deps (own + transitive from deps)
+    deps = map_get(ctx, "deps")
+    shared_libs = string_concat(out_path, "")
+    dep_count = list_size(deps)
+    n = 0
+    while n < dep_count {
+        dp4 = list_get(deps, n)
+        dm4 = _strip_lang(dp4)
+        dep_sh = _read_dep_artifact(ctx, dm4, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            shared_libs = string_concat(string_concat(shared_libs, "\n"), dep_sh)
+        }
+        n = n + 1
+    }
+    _write_artifact(ctx, "shared_library_deps_including_transitive", shared_libs)
+
+    io_write_file(ts_file, "")
+    return 0
+}
+
+go_test(ctx: ptr) {
+    source_dir = _get(ctx, "source_dir")
+    target_dir = _get(ctx, "target_dir")
+    mod_dir = _get(ctx, "module_dir")
+    deps = map_get(ctx, "deps")
+
+    // Build LD_LIBRARY_PATH from deps' shared libs
+    ld_path = ""
+    dep_count = list_size(deps)
+    g = 0
+    while g < dep_count {
+        dp5 = list_get(deps, g)
+        dm5 = _strip_lang(dp5)
+        dep_sh = _read_dep_artifact(ctx, dm5, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            sh_dir = os_exec("dirname ${dep_sh} | head -1")
+            sh_dir = string_trim(sh_dir)
+            if string_length(ld_path) > 0 {
+                ld_path = string_concat(string_concat(ld_path, ":"), sh_dir)
+            } else {
+                ld_path = sh_dir
+            }
+        }
+        g = g + 1
+    }
+
+    println("${mod_dir}: running Go tests")
+    test_cmd = ""
+    if string_length(ld_path) > 0 {
+        test_cmd = "cd ${source_dir} && LD_LIBRARY_PATH=${ld_path} go test -v ."
+    } else {
+        test_cmd = "cd ${source_dir} && go test -v ."
+    }
+    exit_code = os_system(test_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: Go tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: Go tests PASSED")
+    return 0
+}
+
+// --- TypeScript SDK ---
+
+tsc(ctx: ptr) {
+    root = _get(ctx, "root")
+    source_dir = _get(ctx, "source_dir")
+    target_dir = _get(ctx, "target_dir")
+    mod_name = _get(ctx, "module")
+    mod_dir = _get(ctx, "module_dir")
+    deps = map_get(ctx, "deps")
+
+    _mkdirs(target_dir)
+    ts_file = path_join(target_dir, ".timestamp")
+    if _needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of prod code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling prod code")
+
+    // Build typescript_module_deps (paths to compiled JS dirs)
+    dep_count = list_size(deps)
+    ts_deps = path_join(target_dir, "js")
+    i = 0
+    while i < dep_count {
+        dp6 = list_get(deps, i)
+        dm6 = _strip_lang(dp6)
+        dep_td = _read_dep_artifact(ctx, dm6, "typescript_module_deps_including_transitive")
+        if string_length(dep_td) > 0 {
+            ts_deps = string_concat(string_concat(ts_deps, "\n"), dep_td)
+        }
+        i = i + 1
+    }
+    _write_artifact(ctx, "typescript_module_deps_including_transitive", ts_deps)
+
+    // Collect npm deps transitively
+    npm_deps_list = map_get(ctx, "npm_deps")
+    npm_count = list_size(npm_deps_list)
+    npm_out = ""
+    i = 0
+    while i < npm_count {
+        nd = list_get(npm_deps_list, i)
+        if string_length(npm_out) > 0 {
+            npm_out = string_concat(string_concat(npm_out, "\n"), nd)
+        } else {
+            npm_out = string_concat(nd, "")
+        }
+        i = i + 1
+    }
+    // Add transitive npm deps from module deps
+    i = 0
+    while i < dep_count {
+        dp7 = list_get(deps, i)
+        dm7 = _strip_lang(dp7)
+        dep_npm = _read_dep_artifact(ctx, dm7, "npm_deps_including_transitive")
+        if string_length(dep_npm) > 0 {
+            if string_length(npm_out) > 0 {
+                npm_out = string_concat(string_concat(npm_out, "\n"), dep_npm)
+            } else {
+                npm_out = dep_npm
+            }
+        }
+        i = i + 1
+    }
+    _write_artifact(ctx, "npm_deps_including_transitive", npm_out)
+
+    // Collect shared_library_deps transitively
+    shared_out = ""
+    i = 0
+    while i < dep_count {
+        dp8 = list_get(deps, i)
+        dm8 = _strip_lang(dp8)
+        dep_sh = _read_dep_artifact(ctx, dm8, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            if string_length(shared_out) > 0 {
+                shared_out = string_concat(string_concat(shared_out, "\n"), dep_sh)
+            } else {
+                shared_out = dep_sh
+            }
+        }
+        i = i + 1
+    }
+    _write_artifact(ctx, "shared_library_deps_including_transitive", shared_out)
+
+    // Generate base-tsconfig.json and run tsc via shell helper
+    // This delegates the complex tsconfig generation to a shell command
+    // that reads the artifact files we just wrote
+    // Pass deps as a single quoted argument (script expects $4 as one string)
+    gen_cmd = "${root}/shared-build-scripts/generate-typescript-base-tsconfig-json.sh '${root}' '${source_dir}' '${target_dir}' '${ts_deps}'"
+    os_system(gen_cmd)
+
+    // Add npm deps to tsconfig if any
+    npm_file = path_join(target_dir, "npm_deps_including_transitive")
+    if file_exists(npm_file) == 1 {
+        npm_content = io_read_file(npm_file)
+        if string_length(npm_content) > 0 {
+            // Convert newlines to spaces for shell args
+            npm_args = string_trim(os_exec("echo '${npm_content}' | tr '\n' ' '"))
+            // 3rd arg is target dir suffix relative to root/target/
+            tgt_suffix = string_trim(os_exec("echo '${target_dir}' | sed 's|.*/target/||'"))
+            npm_cmd = "${root}/shared-build-scripts/add-npm-deps-to-base-tsconfig-json.sh ${root} ${mod_name} ${tgt_suffix} ${npm_args}"
+            os_system(npm_cmd)
+        }
+    }
+
+    // Run tsc from source dir
+    tsc_cmd = "cd ${source_dir} && tsc"
+    exit_code = os_system(tsc_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tsc failed")
+        return exit_code
+    }
+
+    io_write_file(ts_file, "")
+    return 0
+}
+
+mocha(ctx: ptr, test_file: string) {
+    root = _get(ctx, "root")
+    target_dir = _get(ctx, "target_dir")
+    mod_name = _get(ctx, "module")
+    mod_dir = _get(ctx, "module_dir")
+    deps = map_get(ctx, "deps")
+
+    // Build NODE_PATH
+    js_dir = path_join(target_dir, "js")
+    node_path = js_dir
+    // Add target base dir for alias resolution
+    target_base = path_join(root, "target")
+    node_path = string_concat(string_concat(node_path, ":"), target_base)
+
+    // Add deps' JS dirs (convert newlines to : for NODE_PATH)
+    dep_count = list_size(deps)
+    i = 0
+    while i < dep_count {
+        dp9 = list_get(deps, i)
+        dm9 = _strip_lang(dp9)
+        dep_td = _read_dep_artifact(ctx, dm9, "typescript_module_deps_including_transitive")
+        if string_length(dep_td) > 0 {
+            dep_td_flat = string_trim(os_exec("echo '${dep_td}' | tr '\n' ':' | sed 's/:$//'"))
+            node_path = string_concat(string_concat(node_path, ":"), dep_td_flat)
+        }
+        i = i + 1
+    }
+
+    // Add vendored npm modules
+    npm_vendored = path_join(root, "libs/javascript/npm_vendored/node_modules")
+    node_path = string_concat(string_concat(node_path, ":"), npm_vendored)
+
+    // Build LD_LIBRARY_PATH from shared lib deps
+    ld_path = ""
+    i = 0
+    while i < dep_count {
+        dpA = list_get(deps, i)
+        dmA = _strip_lang(dpA)
+        dep_sh = _read_dep_artifact(ctx, dmA, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            sh_dir = os_exec("dirname ${dep_sh} | head -1")
+            sh_dir = string_trim(sh_dir)
+            if string_length(ld_path) > 0 {
+                ld_path = string_concat(string_concat(ld_path, ":"), sh_dir)
+            } else {
+                ld_path = sh_dir
+            }
+        }
+        i = i + 1
+    }
+
+    mocha_bin = path_join(root, "libs/javascript/npm_vendored/node_modules/mocha/bin/mocha.js")
+    println("${mod_dir}: running tests")
+    run_cmd = ""
+    if string_length(ld_path) > 0 {
+        run_cmd = "NODE_PATH=${node_path} LD_LIBRARY_PATH=${ld_path} node ${mocha_bin} ${test_file}"
+    } else {
+        run_cmd = "NODE_PATH=${node_path} node ${mocha_bin} ${test_file}"
+    }
+    exit_code = os_system(run_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}

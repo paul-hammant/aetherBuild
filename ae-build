@@ -1,0 +1,208 @@
+#!/bin/bash
+# ae-build — Aether Build runner
+# Scans .build.ae and .tests.ae files, extracts deps, generates a single
+# linked program, runs it. One process, one map, no subprocess coordination.
+set -eo pipefail
+
+AETHER="${AETHER:-ae}"
+ROOT="$(pwd)"
+
+# --- Encode module path to C-safe function name ---
+# / → _    _ → __
+encode_name() {
+    echo "$1" | sed 's/__/\x00/g; s|/|_|g; s/\x00/__/g'
+}
+
+# --- Scan for .build.ae and .tests.ae files ---
+declare -A BUILD_DEPS    # module_dir → deps (from .build.ae)
+declare -A BUILD_BODY    # module_dir → body (from .build.ae)
+declare -A TEST_DEPS     # module_dir → deps (from .tests.ae)
+declare -A TEST_BODY     # module_dir → body (from .tests.ae)
+declare -A DIST_BODY     # module_dir → body (from .dist.ae)
+BUILD_MODULES=()
+TEST_MODULES=()
+DIST_MODULES=()
+
+for build_file in $(find . -name '.build.ae' -not -path './target/*' -not -path './lib/*' | sort); do
+    dir=$(dirname "$build_file")
+    module_dir="${dir#./}"
+    BUILD_MODULES+=("$module_dir")
+    BUILD_DEPS["$module_dir"]="$(grep -oP '(?<=dep\(b, ")[^"]+' "$build_file" 2>/dev/null || true)"
+    BUILD_BODY["$module_dir"]="$(sed -n '/build\.start/,/^}/{ /build\.start/d; /^}/d; p; }' "$build_file")"
+done
+
+for dist_file in $(find . -name '.dist.ae' -not -path './target/*' -not -path './lib/*' | sort); do
+    dir=$(dirname "$dist_file")
+    module_dir="${dir#./}"
+    DIST_MODULES+=("$module_dir")
+    DIST_BODY["$module_dir"]="$(sed -n '/build\.start/,/^}/{ /build\.start/d; /^}/d; p; }' "$dist_file")"
+done
+
+for test_file in $(find . -name '.tests.ae' -not -path './target/*' -not -path './lib/*' | sort); do
+    dir=$(dirname "$test_file")
+    module_dir="${dir#./}"
+    TEST_MODULES+=("$module_dir")
+    TEST_DEPS["$module_dir"]="$(grep -oP '(?<=dep\(b, ")[^"]+' "$test_file" 2>/dev/null || true)"
+    TEST_BODY["$module_dir"]="$(sed -n '/build\.start/,/^}/{ /build\.start/d; /^}/d; p; }' "$test_file")"
+done
+
+if [ ${#BUILD_MODULES[@]} -eq 0 ] && [ ${#TEST_MODULES[@]} -eq 0 ]; then
+    echo "No .build.ae or .tests.ae files found"
+    exit 0
+fi
+
+# --- Topological sort (build modules only, tests come after) ---
+declare -A VISITED
+SORTED_BUILD=()
+
+visit() {
+    local mod="$1"
+    if [[ "${VISITED[$mod]}" == "done" ]]; then return; fi
+    if [[ "${VISITED[$mod]}" == "visiting" ]]; then
+        echo "error: circular dependency involving $mod" >&2
+        exit 1
+    fi
+    VISITED["$mod"]="visiting"
+    for dep in ${BUILD_DEPS[$mod]}; do
+        if [[ -n "${BUILD_BODY[$dep]+x}" ]]; then
+            visit "$dep"
+        fi
+    done
+    VISITED["$mod"]="done"
+    SORTED_BUILD+=("$mod")
+}
+
+for mod in "${BUILD_MODULES[@]}"; do
+    visit "$mod"
+done
+
+# --- Generate the combined .ae file ---
+GEN_FILE="$ROOT/target/_ae_build_all.ae"
+mkdir -p "$ROOT/target"
+
+cat > "$GEN_FILE" << 'HEADER'
+import build
+
+HEADER
+
+# Generate build functions (compile targets)
+for mod in "${SORTED_BUILD[@]}"; do
+    fname="build_$(encode_name "$mod")"
+    body="${BUILD_BODY[$mod]}"
+
+    dep_calls=""
+    for dep in ${BUILD_DEPS[$mod]}; do
+        if [[ -n "${BUILD_BODY[$dep]+x}" ]]; then
+            dep_fname="build_$(encode_name "$dep")"
+            dep_calls="$dep_calls    ${dep_fname}(s)
+"
+        fi
+    done
+
+    cat >> "$GEN_FILE" << FUNC
+${fname}(s: ptr) {
+${dep_calls}    ptr b = build.begin(s, "${mod}")
+    if b == 0 { return 0 }
+${body}
+    build.done(s, "${mod}")
+    return 0
+}
+
+FUNC
+done
+
+# Generate test functions — deps call build_ functions
+for mod in "${TEST_MODULES[@]}"; do
+    fname="test_$(encode_name "$mod")"
+    body="${TEST_BODY[$mod]}"
+
+    # Test deps call the BUILD function of the dep (compile it first)
+    dep_calls=""
+    for dep in ${TEST_DEPS[$mod]}; do
+        if [[ -n "${BUILD_BODY[$dep]+x}" ]]; then
+            dep_fname="build_$(encode_name "$dep")"
+            dep_calls="$dep_calls    ${dep_fname}(s)
+"
+        fi
+    done
+
+    cat >> "$GEN_FILE" << FUNC
+${fname}(s: ptr) {
+${dep_calls}    ptr b = build.begin(s, "${mod}")
+    if b == 0 { return 0 }
+${body}
+    build.done(s, "${mod}")
+    return 0
+}
+
+FUNC
+done
+
+# Generate dist functions — call sibling build first, then dist body
+for mod in "${DIST_MODULES[@]}"; do
+    fname="dist_$(encode_name "$mod")"
+    body="${DIST_BODY[$mod]}"
+
+    # Dist always depends on its sibling compile
+    dep_calls=""
+    if [[ -n "${BUILD_BODY[$mod]+x}" ]]; then
+        dep_fname="build_$(encode_name "$mod")"
+        dep_calls="    ${dep_fname}(s)
+"
+    fi
+
+    cat >> "$GEN_FILE" << FUNC
+${fname}(s: ptr) {
+${dep_calls}    ptr b = build.begin(s, "dist:${mod}")
+    if b == 0 { return 0 }
+${body}
+    build.done(s, "dist:${mod}")
+    return 0
+}
+
+FUNC
+done
+
+# Generate main()
+cat >> "$GEN_FILE" << 'MAIN_START'
+main() {
+    ptr s = build.session(aether_args_get(1))
+MAIN_START
+
+# Build all compile targets first
+for mod in "${SORTED_BUILD[@]}"; do
+    fname="build_$(encode_name "$mod")"
+    echo "    ${fname}(s)" >> "$GEN_FILE"
+done
+
+# Then dist
+for mod in "${DIST_MODULES[@]}"; do
+    fname="dist_$(encode_name "$mod")"
+    echo "    ${fname}(s)" >> "$GEN_FILE"
+done
+
+# Then run all tests
+for mod in "${TEST_MODULES[@]}"; do
+    fname="test_$(encode_name "$mod")"
+    echo "    ${fname}(s)" >> "$GEN_FILE"
+done
+
+cat >> "$GEN_FILE" << 'MAIN_END'
+}
+MAIN_END
+
+echo "ae-build: ${#SORTED_BUILD[@]} compile + ${#DIST_MODULES[@]} dist + ${#TEST_MODULES[@]} test"
+for mod in "${SORTED_BUILD[@]}"; do
+    echo "  compile: $mod"
+done
+for mod in "${DIST_MODULES[@]}"; do
+    echo "  dist:    $mod"
+done
+for mod in "${TEST_MODULES[@]}"; do
+    echo "  test:    $mod"
+done
+
+# --- Compile and run ---
+BUILD_BIN="$ROOT/target/_ae_build_all"
+"$AETHER" build "$GEN_FILE" -o "$BUILD_BIN" 2>&1 | grep -v 'warning:' || true
+exec "$BUILD_BIN" "$ROOT"
