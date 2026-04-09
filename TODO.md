@@ -194,6 +194,81 @@ All language SDKs now use `defer` functions with trailing-block DSL:
 - [x] `tsc()` — strict, ts_target, module_kind, out_dir
 - [x] `mocha()` — mocha_timeout, reporter, mocha_grep
 
+## Container SDK — Proxmox support
+
+The container module currently supports OCI images (podman/docker) and
+LXC containers. Proxmox adds two more backends, both using the same
+DSL-setter pattern.
+
+### `container.pct()` — Proxmox LXC containers
+
+Local mode (on the Proxmox host, shells out to `pct`):
+
+```aether
+import container
+import container (template, hostname, memory, cores, net, storage)
+
+container.pct(b) {
+    template("local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst")
+    hostname("web-1")
+    memory("2048")
+    cores("2")
+    net("name=eth0,bridge=vmbr0,ip=dhcp")
+    storage("local-lvm")
+}
+```
+
+Generates: `pct create <vmid> <template> --hostname web-1 --memory 2048 --cores 2 --net0 name=eth0,bridge=vmbr0,ip=dhcp --storage local-lvm`
+
+Remote mode (over the wire via Proxmox REST API):
+
+```aether
+container.pct(b) {
+    host("pve.internal:8006")
+    api_token("user@pam!aeb", "token-secret")
+    node("pve1")
+    template("local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst")
+    hostname("web-1")
+    memory("2048")
+}
+```
+
+Generates: `curl -k -X POST https://pve.internal:8006/api2/json/nodes/pve1/lxc -H "Authorization: PVEAPIToken=user@pam!aeb=token-secret" -d 'ostemplate=local:vztmpl/...'`
+
+### Local vs remote convention
+
+The `host()` setter is the boundary. Present → remote API call via curl.
+Absent → local CLI. Same DSL setters for the container config either way.
+This convention extends to any future backends that have both local and
+remote modes.
+
+### Additional Proxmox setters
+
+- `host(addr)` — Proxmox API address (e.g. `pve.internal:8006`)
+- `api_token(user, secret)` — PVE API token for auth
+- `node(name)` — target Proxmox node
+- `hostname(name)` — container hostname
+- `memory(mb)` — RAM in MB
+- `cores(n)` — CPU cores
+- `swap(mb)` — swap in MB
+- `disk(spec)` — root disk (e.g. `local-lvm:8`)
+- `net(spec)` — network interface config
+- `storage(name)` — storage target
+- `vmid(id)` — explicit VM ID (auto-assign if omitted)
+- `unprivileged()` — create as unprivileged container
+- `start_on_create()` — start immediately after creation
+- `ssh_key(path)` — inject SSH public key
+
+### `container.qm()` — Proxmox VMs (future)
+
+Same pattern for full VMs via `qm create`. Lower priority — containers
+cover most deployment use cases.
+
+### Test approach
+
+Same as other SDKs: test the command string builders (`pct_create_cmd`,
+`pct_api_cmd`) in isolation. No Proxmox host needed for tests.
+
 ## ~~Build environment validation~~ (not doing)
 
 Decided against `aeb --check`. The build already fails fast with a clear

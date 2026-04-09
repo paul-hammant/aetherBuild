@@ -1,0 +1,46 @@
+import build
+// Tests for image_build_cmd() — OCI container build command builder
+
+import container
+import container (image_build_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    // Default engine is podman
+    _assert_eq("default engine",
+        image_build_cmd("myapp:latest", "/workspace", "/tmp/Dockerfile", null),
+        "podman build -t myapp:latest -f /tmp/Dockerfile /workspace")
+
+    // Explicit docker
+    opts2 = map_new()
+    map_put(opts2, "engine", "docker")
+    _assert_eq("docker engine",
+        image_build_cmd("myapp:v1", "/ws", "/tmp/df", opts2),
+        "docker build -t myapp:v1 -f /tmp/df /ws")
+
+    // With extra flags
+    opts3 = map_new()
+    map_put(opts3, "extra", "--no-cache --squash")
+    _assert_eq("extra flags",
+        image_build_cmd("web:latest", ".", "/tmp/Dockerfile", opts3),
+        "podman build -t web:latest -f /tmp/Dockerfile --no-cache --squash .")
+
+    // Docker with extra
+    opts4 = map_new()
+    map_put(opts4, "engine", "docker")
+    map_put(opts4, "extra", "--build-arg VERSION=1.0")
+    _assert_eq("docker + extra",
+        image_build_cmd("app:1.0", "/root", "/root/Dockerfile", opts4),
+        "docker build -t app:1.0 -f /root/Dockerfile --build-arg VERSION=1.0 /root")
+
+    println("image_build_cmd tests done")
+}

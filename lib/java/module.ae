@@ -193,7 +193,7 @@ junit_cmd(classpath: string, class_names: string, ld_path: string, opts: ptr) {
 
 // --- SDK functions ---
 
-defer javac(ctx: ptr) {
+builder javac(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_name = build._get(ctx, "module")
@@ -226,7 +226,7 @@ defer javac(ctx: ptr) {
         return 0
     }
 
-    cmd = javac_cmd(classes_dir, classpath, file_list, _defer)
+    cmd = javac_cmd(classes_dir, classpath, file_list, _builder)
     exit_code = os_system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: javac failed")
@@ -275,7 +275,7 @@ defer javac(ctx: ptr) {
     return 0
 }
 
-defer javac_test(ctx: ptr) {
+builder javac_test(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_name = build._get(ctx, "module")
@@ -313,7 +313,7 @@ defer javac_test(ctx: ptr) {
         return 0
     }
 
-    cmd = javac_cmd(test_classes, classpath, file_list, _defer)
+    cmd = javac_cmd(test_classes, classpath, file_list, _builder)
     exit_code = os_system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: javac (test) failed")
@@ -324,7 +324,7 @@ defer javac_test(ctx: ptr) {
     return 0
 }
 
-defer junit(ctx: ptr) {
+builder junit(ctx: ptr) {
     root = build._get(ctx, "root")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
@@ -394,7 +394,7 @@ defer junit(ctx: ptr) {
     }
 
     println("${mod_dir}: running tests")
-    cmd = junit_cmd(classpath, class_names, ld_path, _defer)
+    cmd = junit_cmd(classpath, class_names, ld_path, _builder)
     exit_code = os_system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")

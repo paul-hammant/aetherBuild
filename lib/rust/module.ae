@@ -86,7 +86,7 @@ _write_cargo_config(config_path: string) {
 
 // --- SDK functions ---
 
-defer cargo_build(ctx: ptr) {
+builder cargo_build(ctx: ptr) {
     root = build._get(ctx, "root")
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
@@ -126,7 +126,7 @@ defer cargo_build(ctx: ptr) {
     os_system("mkdir -p ${cargo_dir}")
     _write_cargo_config(cargo_config)
 
-    cargo_cmd = cargo_build_cmd(source_dir, target_dir, _defer)
+    cargo_cmd = cargo_build_cmd(source_dir, target_dir, _builder)
     exit_code = os_system(cargo_cmd)
     if exit_code != 0 {
         println("${mod_dir}: cargo build failed")
@@ -134,9 +134,9 @@ defer cargo_build(ctx: ptr) {
     }
 
     cb_lib_name = ""
-    if _defer != null {
-        if map_has(_defer, "lib_name") == 1 {
-            cb_lib_name = map_get(_defer, "lib_name")
+    if _builder != null {
+        if map_has(_builder, "lib_name") == 1 {
+            cb_lib_name = map_get(_builder, "lib_name")
         }
     }
     if string_length(cb_lib_name) == 0 {

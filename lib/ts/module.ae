@@ -50,7 +50,7 @@ mocha_grep(_ctx: ptr, pat: string) {
 
 // --- SDK functions ---
 
-defer tsc(ctx: ptr) {
+builder tsc(ctx: ptr) {
     root = build._get(ctx, "root")
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
@@ -142,24 +142,24 @@ defer tsc(ctx: ptr) {
     }
 
     tsc_cmd = "cd ${source_dir} && tsc"
-    if _defer != null {
-        if map_has(_defer, "strict") == 1 {
+    if _builder != null {
+        if map_has(_builder, "strict") == 1 {
             tsc_cmd = string_concat(tsc_cmd, " --strict")
         }
-        if map_has(_defer, "target") == 1 {
-            val = map_get(_defer, "target")
+        if map_has(_builder, "target") == 1 {
+            val = map_get(_builder, "target")
             tsc_cmd = string_concat(tsc_cmd, " --target ${val}")
         }
-        if map_has(_defer, "module_kind") == 1 {
-            val = map_get(_defer, "module_kind")
+        if map_has(_builder, "module_kind") == 1 {
+            val = map_get(_builder, "module_kind")
             tsc_cmd = string_concat(tsc_cmd, " --module ${val}")
         }
-        if map_has(_defer, "out_dir") == 1 {
-            val = map_get(_defer, "out_dir")
+        if map_has(_builder, "out_dir") == 1 {
+            val = map_get(_builder, "out_dir")
             tsc_cmd = string_concat(tsc_cmd, " --outDir ${val}")
         }
-        if map_has(_defer, "extra") == 1 {
-            val = map_get(_defer, "extra")
+        if map_has(_builder, "extra") == 1 {
+            val = map_get(_builder, "extra")
             tsc_cmd = string_concat(tsc_cmd, " ${val}")
         }
     }
@@ -173,7 +173,7 @@ defer tsc(ctx: ptr) {
     return 0
 }
 
-defer mocha(ctx: ptr, test_file: string) {
+builder mocha(ctx: ptr, test_file: string) {
     root = build._get(ctx, "root")
     target_dir = build._get(ctx, "target_dir")
     mod_name = build._get(ctx, "module")
@@ -223,21 +223,21 @@ defer mocha(ctx: ptr, test_file: string) {
     println("${mod_dir}: running tests")
 
     mocha_opts = ""
-    if _defer != null {
-        if map_has(_defer, "timeout") == 1 {
-            val = map_get(_defer, "timeout")
+    if _builder != null {
+        if map_has(_builder, "timeout") == 1 {
+            val = map_get(_builder, "timeout")
             mocha_opts = string_concat(mocha_opts, " --timeout ${val}")
         }
-        if map_has(_defer, "reporter") == 1 {
-            val = map_get(_defer, "reporter")
+        if map_has(_builder, "reporter") == 1 {
+            val = map_get(_builder, "reporter")
             mocha_opts = string_concat(mocha_opts, " --reporter ${val}")
         }
-        if map_has(_defer, "grep") == 1 {
-            val = map_get(_defer, "grep")
+        if map_has(_builder, "grep") == 1 {
+            val = map_get(_builder, "grep")
             mocha_opts = string_concat(mocha_opts, " --grep '${val}'")
         }
-        if map_has(_defer, "extra") == 1 {
-            val = map_get(_defer, "extra")
+        if map_has(_builder, "extra") == 1 {
+            val = map_get(_builder, "extra")
             mocha_opts = string_concat(mocha_opts, " ${val}")
         }
     }

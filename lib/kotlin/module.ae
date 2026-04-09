@@ -67,7 +67,7 @@ kotlinc_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr
 
 // --- SDK functions ---
 
-defer kotlinc(ctx: ptr) {
+builder kotlinc(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_name = build._get(ctx, "module")
@@ -107,7 +107,7 @@ defer kotlinc(ctx: ptr) {
         return 0
     }
 
-    kc_cmd = kotlinc_cmd(classes_dir, classpath, file_list, _defer)
+    kc_cmd = kotlinc_cmd(classes_dir, classpath, file_list, _builder)
     exit_code = os_system(kc_cmd)
     if exit_code != 0 {
         println("${mod_dir}: kotlinc failed")
@@ -142,7 +142,7 @@ defer kotlinc(ctx: ptr) {
     return 0
 }
 
-defer kotlinc_test(ctx: ptr) {
+builder kotlinc_test(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_name = build._get(ctx, "module")
@@ -185,7 +185,7 @@ defer kotlinc_test(ctx: ptr) {
         return 0
     }
 
-    kc_cmd = kotlinc_cmd(test_classes, classpath, file_list, _defer)
+    kc_cmd = kotlinc_cmd(test_classes, classpath, file_list, _builder)
     exit_code = os_system(kc_cmd)
     if exit_code != 0 {
         println("${mod_dir}: kotlinc (test) failed")
@@ -196,7 +196,7 @@ defer kotlinc_test(ctx: ptr) {
     return 0
 }
 
-defer kotlin_test(ctx: ptr, test_class: string) {
+builder kotlin_test(ctx: ptr, test_class: string) {
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
 
@@ -221,13 +221,13 @@ defer kotlin_test(ctx: ptr, test_class: string) {
 
     println("${mod_dir}: running tests")
     run_cmd = "java -ea"
-    if _defer != null {
-        if map_has(_defer, "jvm_args") == 1 {
-            val = map_get(_defer, "jvm_args")
+    if _builder != null {
+        if map_has(_builder, "jvm_args") == 1 {
+            val = map_get(_builder, "jvm_args")
             run_cmd = string_concat(run_cmd, " ${val}")
         }
-        if map_has(_defer, "extra") == 1 {
-            val = map_get(_defer, "extra")
+        if map_has(_builder, "extra") == 1 {
+            val = map_get(_builder, "extra")
             run_cmd = string_concat(run_cmd, " ${val}")
         }
     }

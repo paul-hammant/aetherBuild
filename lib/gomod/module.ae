@@ -138,7 +138,7 @@ go_test_cmd(source_dir: string, ld_path: string, opts: ptr) {
 
 // --- SDK functions ---
 
-defer go_build(ctx: ptr) {
+builder go_build(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_name = build._get(ctx, "module")
@@ -158,9 +158,9 @@ defer go_build(ctx: ptr) {
     os_system("cd ${source_dir} && go mod tidy")
 
     out_name = ""
-    if _defer != null {
-        if map_has(_defer, "output") == 1 {
-            out_name = map_get(_defer, "output")
+    if _builder != null {
+        if map_has(_builder, "output") == 1 {
+            out_name = map_get(_builder, "output")
         }
     }
     if string_length(out_name) == 0 {
@@ -168,7 +168,7 @@ defer go_build(ctx: ptr) {
         return 1
     }
     out_path = path_join(lib_dir, out_name)
-    bld_cmd = go_build_cmd(source_dir, out_path, _defer)
+    bld_cmd = go_build_cmd(source_dir, out_path, _builder)
     exit_code = os_system(bld_cmd)
     if exit_code != 0 {
         println("${mod_dir}: go build failed")
@@ -196,7 +196,7 @@ defer go_build(ctx: ptr) {
     return 0
 }
 
-defer go_test(ctx: ptr) {
+builder go_test(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
@@ -222,7 +222,7 @@ defer go_test(ctx: ptr) {
     }
 
     println("${mod_dir}: running Go tests")
-    test_cmd = go_test_cmd(source_dir, ld_path, _defer)
+    test_cmd = go_test_cmd(source_dir, ld_path, _builder)
     exit_code = os_system(test_cmd)
     if exit_code != 0 {
         println("${mod_dir}: Go tests FAILED")
