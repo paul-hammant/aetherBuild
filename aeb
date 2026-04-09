@@ -1,11 +1,70 @@
 #!/bin/bash
-# ae-build — Aether Build runner
+# aeb — Aether Build runner
 # Scans .build.ae and .tests.ae files, extracts deps, generates a single
 # linked program, runs it. One process, one map, no subprocess coordination.
 set -eo pipefail
 
 AETHER="${AETHER:-ae}"
+AEB_HOME="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(pwd)"
+
+# --- shipped modules (update this list when adding new SDKs) ---
+SHIPPED_MODULES=(build java kotlin gomod rust ts)
+
+# --- argument parsing ---
+TARGET=""
+FORCE_DIST=0
+
+if [[ "${1:-}" == "--init" ]]; then
+    mkdir -p "$ROOT/lib"
+
+    for mod in "${SHIPPED_MODULES[@]}"; do
+        target="$AEB_HOME/lib/$mod"
+        link="$ROOT/lib/$mod"
+        if [[ -L "$link" ]]; then
+            existing="$(readlink "$link")"
+            if [[ "$existing" == "$target" ]]; then
+                echo "  ok: lib/$mod"
+            else
+                rm "$link"
+                ln -s "$target" "$link"
+                echo "  updated: lib/$mod → $target"
+            fi
+        elif [[ -e "$link" ]]; then
+            echo "  skip: lib/$mod (exists and is not a symlink)"
+        else
+            ln -s "$target" "$link"
+            echo "  linked: lib/$mod → $target"
+        fi
+    done
+
+    # update .gitignore
+    gitignore="$ROOT/.gitignore"
+    marker="# aetherBuild modules"
+    if [[ -f "$gitignore" ]] && grep -qF "$marker" "$gitignore"; then
+        echo "  .gitignore already configured"
+    else
+        {
+            echo ""
+            echo "$marker"
+            for mod in "${SHIPPED_MODULES[@]}"; do
+                echo "lib/$mod"
+            done
+        } >> "$gitignore"
+        echo "  updated .gitignore"
+    fi
+
+    echo "aetherBuild initialized."
+    exit 0
+fi
+
+# Parse remaining args
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dist) FORCE_DIST=1; shift ;;
+        *) TARGET="$1"; shift ;;
+    esac
+done
 
 # --- Encode module path to C-safe function name ---
 # / → _    _ → __
@@ -76,14 +135,98 @@ for mod in "${BUILD_MODULES[@]}"; do
     visit "$mod"
 done
 
+# --- Target filtering ---
+if [[ -n "$TARGET" ]]; then
+    # Strip trailing slash
+    TARGET="${TARGET%/}"
+
+    # Collect transitive build deps of a module
+    declare -A NEEDED_BUILD
+    collect_build_deps() {
+        local mod="$1"
+        if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then return; fi
+        NEEDED_BUILD["$mod"]=1
+        for dep in ${BUILD_DEPS[$mod]}; do
+            if [[ -n "${BUILD_BODY[$dep]+x}" ]]; then
+                collect_build_deps "$dep"
+            fi
+        done
+    }
+
+    # Auto-detect: what kind of target is this?
+    IS_TEST=0
+    IS_BUILD=0
+    IS_DIST=0
+    [[ -n "${TEST_BODY[$TARGET]+x}" ]] && IS_TEST=1
+    [[ -n "${BUILD_BODY[$TARGET]+x}" ]] && IS_BUILD=1
+    [[ -n "${DIST_BODY[$TARGET]+x}" ]] && IS_DIST=1
+
+    if [[ $IS_TEST -eq 0 && $IS_BUILD -eq 0 && $IS_DIST -eq 0 ]]; then
+        echo "error: no .build.ae, .tests.ae, or .dist.ae found for $TARGET" >&2
+        exit 1
+    fi
+
+    if [[ $IS_TEST -eq 1 ]]; then
+        # Test target: build its deps, then run the test
+        for dep in ${TEST_DEPS[$TARGET]}; do
+            if [[ -n "${BUILD_BODY[$dep]+x}" ]]; then
+                collect_build_deps "$dep"
+            fi
+        done
+        FILTERED_BUILD=()
+        for mod in "${SORTED_BUILD[@]}"; do
+            if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then
+                FILTERED_BUILD+=("$mod")
+            fi
+        done
+        SORTED_BUILD=("${FILTERED_BUILD[@]}")
+        TEST_MODULES=("$TARGET")
+        DIST_MODULES=()
+    elif [[ $FORCE_DIST -eq 1 && $IS_DIST -eq 1 ]]; then
+        # Explicit --dist: build + package
+        collect_build_deps "$TARGET"
+        FILTERED_BUILD=()
+        for mod in "${SORTED_BUILD[@]}"; do
+            if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then
+                FILTERED_BUILD+=("$mod")
+            fi
+        done
+        SORTED_BUILD=("${FILTERED_BUILD[@]}")
+        DIST_MODULES=("$TARGET")
+        TEST_MODULES=()
+    else
+        # Build target + deps
+        collect_build_deps "$TARGET"
+        FILTERED_BUILD=()
+        for mod in "${SORTED_BUILD[@]}"; do
+            if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then
+                FILTERED_BUILD+=("$mod")
+            fi
+        done
+        SORTED_BUILD=("${FILTERED_BUILD[@]}")
+        TEST_MODULES=()
+        DIST_MODULES=()
+    fi
+fi
+
 # --- Generate the combined .ae file ---
 GEN_FILE="$ROOT/target/_ae_build_all.ae"
 mkdir -p "$ROOT/target"
 
-cat > "$GEN_FILE" << 'HEADER'
-import build
+# Collect unique imports from all build/test/dist files
+declare -A ALL_IMPORTS
+ALL_IMPORTS["import build"]=1
+for f in $(find . \( -name '.build.ae' -o -name '.tests.ae' -o -name '.dist.ae' \) -not -path './target/*' -not -path './lib/*' | sort); do
+    while IFS= read -r line; do
+        ALL_IMPORTS["$line"]=1
+    done < <(grep '^import ' "$f" 2>/dev/null)
+done
 
-HEADER
+> "$GEN_FILE"
+while IFS= read -r imp; do
+    echo "$imp" >> "$GEN_FILE"
+done < <(printf '%s\n' "${!ALL_IMPORTS[@]}" | sort)
+echo "" >> "$GEN_FILE"
 
 # Generate build functions (compile targets)
 for mod in "${SORTED_BUILD[@]}"; do
@@ -191,7 +334,7 @@ cat >> "$GEN_FILE" << 'MAIN_END'
 }
 MAIN_END
 
-echo "ae-build: ${#SORTED_BUILD[@]} compile + ${#DIST_MODULES[@]} dist + ${#TEST_MODULES[@]} test"
+echo "aeb: ${#SORTED_BUILD[@]} compile + ${#DIST_MODULES[@]} dist + ${#TEST_MODULES[@]} test"
 for mod in "${SORTED_BUILD[@]}"; do
     echo "  compile: $mod"
 done

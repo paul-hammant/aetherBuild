@@ -1,0 +1,6 @@
+https://paulhammant.com/2017/02/08/further-experiments-with-expanding-contracting-monorepos/
+
+https://paulhammant.com/2017/01/27/maven-in-a-google-style-monorepo/
+
+https://paulhammant.com/2015/05/20/turning-bazel-back-into-blaze-for-monorepo-nirvana/xy
+

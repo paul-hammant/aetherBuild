@@ -1,0 +1,233 @@
+// gomod — Go SDK for aether.build
+import build
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_trim(s: string) -> string
+extern io_write_file(path: string, content: string) -> int
+
+// --- Go DSL setters ---
+
+build_mode(_ctx: ptr, m: string) {
+    map_put(_ctx, "mode", m)
+}
+
+output_file(_ctx: ptr, f: string) {
+    map_put(_ctx, "output", f)
+}
+
+tags(_ctx: ptr, t: string) {
+    map_put(_ctx, "tags", t)
+}
+
+ldflags(_ctx: ptr, f: string) {
+    map_put(_ctx, "ldflags", f)
+}
+
+race(_ctx: ptr) {
+    map_put(_ctx, "race", "true")
+}
+
+env_var(_ctx: ptr, kv: string) {
+    if map_has(_ctx, "env") == 1 {
+        prev = map_get(_ctx, "env")
+        combined = string_concat(prev, " ")
+        combined = string_concat(combined, kv)
+        map_put(_ctx, "env", combined)
+    } else {
+        map_put(_ctx, "env", kv)
+    }
+}
+
+run_filter(_ctx: ptr, pat: string) {
+    map_put(_ctx, "run", pat)
+}
+
+timeout(_ctx: ptr, dur: string) {
+    map_put(_ctx, "timeout", dur)
+}
+
+// --- Command builders ---
+
+go_build_cmd(source_dir: string, out_path: string, opts: ptr) {
+    env_prefix = ""
+    if opts != null {
+        if map_has(opts, "env") == 1 {
+            env_prefix = map_get(opts, "env")
+            env_prefix = string_concat(env_prefix, " ")
+        }
+    }
+
+    cmd = "cd ${source_dir} && ${env_prefix}go build"
+
+    if opts != null {
+        if map_has(opts, "mode") == 1 {
+            val = map_get(opts, "mode")
+            cmd = string_concat(cmd, " -buildmode=${val}")
+        }
+        if map_has(opts, "tags") == 1 {
+            val = map_get(opts, "tags")
+            cmd = string_concat(cmd, " -tags ${val}")
+        }
+        if map_has(opts, "ldflags") == 1 {
+            val = map_get(opts, "ldflags")
+            cmd = string_concat(cmd, " -ldflags \"${val}\"")
+        }
+        if map_has(opts, "race") == 1 {
+            cmd = string_concat(cmd, " -race")
+        }
+        if map_has(opts, "extra") == 1 {
+            val = map_get(opts, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    cmd = string_concat(cmd, " -o ${out_path}")
+    return cmd
+}
+
+go_test_cmd(source_dir: string, ld_path: string, opts: ptr) {
+    env_prefix = ""
+    if string_length(ld_path) > 0 {
+        env_prefix = "LD_LIBRARY_PATH=${ld_path} "
+    }
+    if opts != null {
+        if map_has(opts, "env") == 1 {
+            val = map_get(opts, "env")
+            env_prefix = string_concat(env_prefix, val)
+            env_prefix = string_concat(env_prefix, " ")
+        }
+    }
+
+    cmd = "cd ${source_dir} && ${env_prefix}go test"
+
+    if opts != null {
+        if map_has(opts, "verbose") == 1 {
+            cmd = string_concat(cmd, " -v")
+        }
+        if map_has(opts, "race") == 1 {
+            cmd = string_concat(cmd, " -race")
+        }
+        if map_has(opts, "run") == 1 {
+            val = map_get(opts, "run")
+            cmd = string_concat(cmd, " -run ${val}")
+        }
+        if map_has(opts, "timeout") == 1 {
+            val = map_get(opts, "timeout")
+            cmd = string_concat(cmd, " -timeout ${val}")
+        }
+        if map_has(opts, "extra") == 1 {
+            val = map_get(opts, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    } else {
+        cmd = string_concat(cmd, " -v")
+    }
+
+    cmd = string_concat(cmd, " .")
+    return cmd
+}
+
+// --- SDK functions ---
+
+defer go_build(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_name = build._get(ctx, "module")
+    mod_dir = build._get(ctx, "module_dir")
+
+    lib_dir = path_join(target_dir, "lib")
+    build._mkdirs(lib_dir)
+
+    ts_file = path_join(lib_dir, ".timestamp")
+    if build._needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of Go prod & test code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling Go prod & test code")
+
+    os_system("cd ${source_dir} && go mod tidy")
+
+    out_name = ""
+    if _defer != null {
+        if map_has(_defer, "output") == 1 {
+            out_name = map_get(_defer, "output")
+        }
+    }
+    if string_length(out_name) == 0 {
+        println("${mod_dir}: output_file() is required for go_build")
+        return 1
+    }
+    out_path = path_join(lib_dir, out_name)
+    bld_cmd = go_build_cmd(source_dir, out_path, _defer)
+    exit_code = os_system(bld_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: go build failed")
+        return exit_code
+    }
+
+    build._write_artifact(ctx, "ldlibdeps", out_path)
+
+    deps = map_get(ctx, "deps")
+    shared_libs = string_concat(out_path, "")
+    dep_count = list_size(deps)
+    n = 0
+    while n < dep_count {
+        dp4 = list_get(deps, n)
+        dm4 = build._strip_lang(dp4)
+        dep_sh = build._read_dep_artifact(ctx, dm4, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            shared_libs = string_concat(string_concat(shared_libs, "\n"), dep_sh)
+        }
+        n = n + 1
+    }
+    build._write_artifact(ctx, "shared_library_deps_including_transitive", shared_libs)
+
+    io_write_file(ts_file, "")
+    return 0
+}
+
+defer go_test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    deps = map_get(ctx, "deps")
+
+    ld_path = ""
+    dep_count = list_size(deps)
+    g = 0
+    while g < dep_count {
+        dp5 = list_get(deps, g)
+        dm5 = build._strip_lang(dp5)
+        dep_sh = build._read_dep_artifact(ctx, dm5, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            sh_dir = os_exec("dirname ${dep_sh} | head -1")
+            sh_dir = string_trim(sh_dir)
+            if string_length(ld_path) > 0 {
+                ld_path = string_concat(string_concat(ld_path, ":"), sh_dir)
+            } else {
+                ld_path = sh_dir
+            }
+        }
+        g = g + 1
+    }
+
+    println("${mod_dir}: running Go tests")
+    test_cmd = go_test_cmd(source_dir, ld_path, _defer)
+    exit_code = os_system(test_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: Go tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: Go tests PASSED")
+    return 0
+}

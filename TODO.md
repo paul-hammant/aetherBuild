@@ -110,15 +110,14 @@ the map after the block runs and translates to compiler flags.
 
 ## Runner improvements
 
-### Target filtering
+### Target filtering (done)
 
-`ae-build <target>` builds only the named target and its transitive deps.
-Currently builds everything.
+`aeb <target>` builds only the named target and its transitive deps.
 
 ```bash
-ae-build java/applications/monorepos_rule          # just this + deps
-ae-build --test javatests/components/vowelbase      # just this test + deps
-ae-build --dist java/applications/monorepos_rule    # compile + dist
+aeb java/applications/monorepos_rule          # just this + deps
+aeb javatests/components/vowelbase            # auto-detects test
+aeb --dist java/applications/monorepos_rule   # compile + package
 ```
 
 ### Parallel execution
@@ -179,9 +178,27 @@ build.javac(b) {
 }
 ```
 
-## Import path for sibling projects
+## ~~`aeb --init` documentation~~ (done)
 
-Currently the monorepo needs a symlink `lib/build/ → aetherBuild/lib/build/`.
-Aether's import resolver should support a project-root marker or config
-that adds search paths, so sibling projects can import each other without
-symlinks.
+Documented in README.
+
+## Trailing-block DSL for remaining languages
+
+All language SDKs now use `defer` functions with trailing-block DSL:
+
+- [x] `javac()` / `javac_test()` — release, source, target, lint, encoding, etc.
+- [x] `junit()` — jvm_args, extra
+- [x] `kotlinc()` / `kotlinc_test()` — jvm_target, api_version, language_version
+- [x] `go_build()` / `go_test()` — build_mode, output_file, tags, ldflags, race, env_var
+- [x] `cargo_build()` — lib_name, profile, features, jobs
+- [x] `tsc()` — strict, ts_target, module_kind, out_dir
+- [x] `mocha()` — mocha_timeout, reporter, mocha_grep
+
+## ~~Build environment validation~~ (not doing)
+
+Decided against `aeb --check`. The build already fails fast with a clear
+error when a tool is missing, scoped to exactly the module that needed it.
+A pre-flight check would need to stay in sync with SDK internals, and
+would report missing tools you don't even need. If a specific SDK's
+failure message is ever cryptic, fix that message rather than adding a
+separate validation system.

@@ -74,7 +74,7 @@ main() {
 Each module directory contains a `.build.ae` file (compilation),
 `.tests.ae` file (tests), and optionally a `.dist.ae` file (packaging).
 
-The runner (`ae-build`) does four things:
+The runner (`aeb`) does four things:
 
 1. **Scan** — find all `.build.ae` / `.tests.ae` / `.dist.ae` files
 2. **Graph** — grep `dep()` lines to build the dependency DAG
@@ -93,19 +93,45 @@ build_java_components_vowels(s)       // calls vowelbase (skip), then javac
 
 Module paths encode to C-safe function names: `/` → `_`, literal `_` → `__`.
 
+## Setup
+
+Initialize a repo to use aetherBuild:
+
+```bash
+/path/to/aeb --init
+```
+
+This creates symlinks in `lib/` for each shipped SDK module (build, java,
+kotlin, gomod, rust, ts) and adds them to `.gitignore`. Safe to run
+repeatedly — existing correct symlinks are left alone.
+
 ## Running
 
 ```bash
 # From the monorepo root:
-AETHER=/path/to/ae ae-build
+AETHER=/path/to/ae aeb
 ```
 
 Builds all compile targets, then runs all dist steps, then runs all tests.
 
-Output:
+### Target filtering
+
+Build a single target and its transitive deps:
+
+```bash
+aeb java/components/vowels                          # just this + deps
+aeb javatests/components/vowelbase                   # auto-detects test, builds deps + runs it
+aeb --dist java/applications/monorepos_rule          # compile + package
+```
+
+The target type is auto-detected from which build file exists at the
+path (`.build.ae`, `.tests.ae`, or `.dist.ae`). Use `--dist` when a
+module has both `.build.ae` and `.dist.ae` and you want packaging.
+
+### Full build output
 
 ```
-ae-build: 18 compile + 2 dist + 17 test
+aeb: 18 compile + 2 dist + 17 test
 go/components/nasal: compiling Go prod & test code
 rust/components/vowelbase: compiling prod code
 java/components/vowelbase: compiling prod code
@@ -210,18 +236,14 @@ always run (only compilation is skipped).
 
 ```
 aetherBuild/
-├── ae-build              # runner script (scan, topo-sort, generate, compile, run)
+├── aeb              # runner script (scan, topo-sort, generate, compile, run)
 ├── lib/build/module.ae   # SDK: all language compilers, test runners, packaging
 ├── README.md
 └── TODO.md               # roadmap: config DSL, parallelism, sandboxing
 ```
 
-The consuming monorepo needs `lib/build/` to resolve the `import build`
-statement. Symlink or copy from aetherBuild:
-
-```bash
-ln -s /path/to/aetherBuild/lib/build monorepo/lib/build
-```
+The consuming monorepo needs SDK modules in `lib/` to resolve imports.
+Run `aeb --init` from the monorepo root to set up the symlinks.
 
 ## Example repo
 
@@ -229,7 +251,7 @@ ln -s /path/to/aetherBuild/lib/build monorepo/lib/build
 a simulated Google-style monorepo with Java, Kotlin, Go, Rust, and TypeScript
 modules, cross-language FFI, and JNI. Originally built with bash scripts,
 now ported to Aether Build: 18 compile targets, 2 fat jars, 17 test suites
-all passing from a single `ae-build` invocation.
+all passing from a single `aeb` invocation.
 
 ## Requirements
 

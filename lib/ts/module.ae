@@ -1,0 +1,258 @@
+// ts — TypeScript SDK for aether.build
+import build
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern file_exists(path: string) -> int
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_trim(s: string) -> string
+extern io_read_file(path: string) -> string
+extern io_write_file(path: string, content: string) -> int
+
+// --- TypeScript DSL setters ---
+
+strict(_ctx: ptr) {
+    map_put(_ctx, "strict", "true")
+}
+
+ts_target(_ctx: ptr, t: string) {
+    map_put(_ctx, "target", t)
+}
+
+module_kind(_ctx: ptr, m: string) {
+    map_put(_ctx, "module_kind", m)
+}
+
+out_dir(_ctx: ptr, d: string) {
+    map_put(_ctx, "out_dir", d)
+}
+
+// --- Mocha DSL setters ---
+
+mocha_timeout(_ctx: ptr, ms: string) {
+    map_put(_ctx, "timeout", ms)
+}
+
+reporter(_ctx: ptr, r: string) {
+    map_put(_ctx, "reporter", r)
+}
+
+mocha_grep(_ctx: ptr, pat: string) {
+    map_put(_ctx, "grep", pat)
+}
+
+// --- SDK functions ---
+
+defer tsc(ctx: ptr) {
+    root = build._get(ctx, "root")
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_name = build._get(ctx, "module")
+    mod_dir = build._get(ctx, "module_dir")
+    deps = map_get(ctx, "deps")
+
+    build._mkdirs(target_dir)
+    ts_file = path_join(target_dir, ".timestamp")
+    if build._needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of prod code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling prod code")
+
+    dep_count = list_size(deps)
+    ts_deps = path_join(target_dir, "js")
+    i = 0
+    while i < dep_count {
+        dp6 = list_get(deps, i)
+        dm6 = build._strip_lang(dp6)
+        dep_td = build._read_dep_artifact(ctx, dm6, "typescript_module_deps_including_transitive")
+        if string_length(dep_td) > 0 {
+            ts_deps = string_concat(string_concat(ts_deps, "\n"), dep_td)
+        }
+        i = i + 1
+    }
+    build._write_artifact(ctx, "typescript_module_deps_including_transitive", ts_deps)
+
+    npm_deps_list = map_get(ctx, "npm_deps")
+    npm_count = list_size(npm_deps_list)
+    npm_out = ""
+    i = 0
+    while i < npm_count {
+        nd = list_get(npm_deps_list, i)
+        if string_length(npm_out) > 0 {
+            npm_out = string_concat(string_concat(npm_out, "\n"), nd)
+        } else {
+            npm_out = string_concat(nd, "")
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < dep_count {
+        dp7 = list_get(deps, i)
+        dm7 = build._strip_lang(dp7)
+        dep_npm = build._read_dep_artifact(ctx, dm7, "npm_deps_including_transitive")
+        if string_length(dep_npm) > 0 {
+            if string_length(npm_out) > 0 {
+                npm_out = string_concat(string_concat(npm_out, "\n"), dep_npm)
+            } else {
+                npm_out = dep_npm
+            }
+        }
+        i = i + 1
+    }
+    build._write_artifact(ctx, "npm_deps_including_transitive", npm_out)
+
+    shared_out = ""
+    i = 0
+    while i < dep_count {
+        dp8 = list_get(deps, i)
+        dm8 = build._strip_lang(dp8)
+        dep_sh = build._read_dep_artifact(ctx, dm8, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            if string_length(shared_out) > 0 {
+                shared_out = string_concat(string_concat(shared_out, "\n"), dep_sh)
+            } else {
+                shared_out = dep_sh
+            }
+        }
+        i = i + 1
+    }
+    build._write_artifact(ctx, "shared_library_deps_including_transitive", shared_out)
+
+    gen_cmd = "${root}/shared-build-scripts/generate-typescript-base-tsconfig-json.sh '${root}' '${source_dir}' '${target_dir}' '${ts_deps}'"
+    os_system(gen_cmd)
+
+    npm_file = path_join(target_dir, "npm_deps_including_transitive")
+    if file_exists(npm_file) == 1 {
+        npm_content = io_read_file(npm_file)
+        if string_length(npm_content) > 0 {
+            npm_args = string_trim(os_exec("echo '${npm_content}' | tr '\n' ' '"))
+            tgt_suffix = string_trim(os_exec("echo '${target_dir}' | sed 's|.*/target/||'"))
+            npm_cmd = "${root}/shared-build-scripts/add-npm-deps-to-base-tsconfig-json.sh ${root} ${mod_name} ${tgt_suffix} ${npm_args}"
+            os_system(npm_cmd)
+        }
+    }
+
+    tsc_cmd = "cd ${source_dir} && tsc"
+    if _defer != null {
+        if map_has(_defer, "strict") == 1 {
+            tsc_cmd = string_concat(tsc_cmd, " --strict")
+        }
+        if map_has(_defer, "target") == 1 {
+            val = map_get(_defer, "target")
+            tsc_cmd = string_concat(tsc_cmd, " --target ${val}")
+        }
+        if map_has(_defer, "module_kind") == 1 {
+            val = map_get(_defer, "module_kind")
+            tsc_cmd = string_concat(tsc_cmd, " --module ${val}")
+        }
+        if map_has(_defer, "out_dir") == 1 {
+            val = map_get(_defer, "out_dir")
+            tsc_cmd = string_concat(tsc_cmd, " --outDir ${val}")
+        }
+        if map_has(_defer, "extra") == 1 {
+            val = map_get(_defer, "extra")
+            tsc_cmd = string_concat(tsc_cmd, " ${val}")
+        }
+    }
+    exit_code = os_system(tsc_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tsc failed")
+        return exit_code
+    }
+
+    io_write_file(ts_file, "")
+    return 0
+}
+
+defer mocha(ctx: ptr, test_file: string) {
+    root = build._get(ctx, "root")
+    target_dir = build._get(ctx, "target_dir")
+    mod_name = build._get(ctx, "module")
+    mod_dir = build._get(ctx, "module_dir")
+    deps = map_get(ctx, "deps")
+
+    js_dir = path_join(target_dir, "js")
+    node_path = js_dir
+    target_base = path_join(root, "target")
+    node_path = string_concat(string_concat(node_path, ":"), target_base)
+
+    dep_count = list_size(deps)
+    i = 0
+    while i < dep_count {
+        dp9 = list_get(deps, i)
+        dm9 = build._strip_lang(dp9)
+        dep_td = build._read_dep_artifact(ctx, dm9, "typescript_module_deps_including_transitive")
+        if string_length(dep_td) > 0 {
+            dep_td_flat = string_trim(os_exec("echo '${dep_td}' | tr '\n' ':' | sed 's/:$//'"))
+            node_path = string_concat(string_concat(node_path, ":"), dep_td_flat)
+        }
+        i = i + 1
+    }
+
+    npm_vendored = path_join(root, "libs/javascript/npm_vendored/node_modules")
+    node_path = string_concat(string_concat(node_path, ":"), npm_vendored)
+
+    ld_path = ""
+    i = 0
+    while i < dep_count {
+        dpA = list_get(deps, i)
+        dmA = build._strip_lang(dpA)
+        dep_sh = build._read_dep_artifact(ctx, dmA, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            sh_dir = os_exec("dirname ${dep_sh} | head -1")
+            sh_dir = string_trim(sh_dir)
+            if string_length(ld_path) > 0 {
+                ld_path = string_concat(string_concat(ld_path, ":"), sh_dir)
+            } else {
+                ld_path = sh_dir
+            }
+        }
+        i = i + 1
+    }
+
+    mocha_bin = path_join(root, "libs/javascript/npm_vendored/node_modules/mocha/bin/mocha.js")
+    println("${mod_dir}: running tests")
+
+    mocha_opts = ""
+    if _defer != null {
+        if map_has(_defer, "timeout") == 1 {
+            val = map_get(_defer, "timeout")
+            mocha_opts = string_concat(mocha_opts, " --timeout ${val}")
+        }
+        if map_has(_defer, "reporter") == 1 {
+            val = map_get(_defer, "reporter")
+            mocha_opts = string_concat(mocha_opts, " --reporter ${val}")
+        }
+        if map_has(_defer, "grep") == 1 {
+            val = map_get(_defer, "grep")
+            mocha_opts = string_concat(mocha_opts, " --grep '${val}'")
+        }
+        if map_has(_defer, "extra") == 1 {
+            val = map_get(_defer, "extra")
+            mocha_opts = string_concat(mocha_opts, " ${val}")
+        }
+    }
+
+    run_cmd = ""
+    if string_length(ld_path) > 0 {
+        run_cmd = "NODE_PATH=${node_path} LD_LIBRARY_PATH=${ld_path} node ${mocha_bin}${mocha_opts} ${test_file}"
+    } else {
+        run_cmd = "NODE_PATH=${node_path} node ${mocha_bin}${mocha_opts} ${test_file}"
+    }
+    exit_code = os_system(run_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}

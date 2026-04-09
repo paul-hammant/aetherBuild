@@ -1,0 +1,98 @@
+import build
+// Tests for javac_cmd() — command string builder
+
+import java
+import java (javac_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    cmd1 = javac_cmd("out/classes", "out/classes", "Foo.java Bar.java", null)
+    _assert_eq("no-config baseline", cmd1,
+        "javac -d out/classes -cp out/classes Foo.java Bar.java")
+
+    opts2 = map_new()
+    map_put(opts2, "release", "21")
+    map_put(opts2, "lint", "all")
+    cmd2 = javac_cmd("out/classes", "out/classes", "Main.java", opts2)
+    _assert_eq("release + lint", cmd2,
+        "javac -d out/classes --release 21 -Xlint:all -cp out/classes Main.java")
+
+    opts3 = map_new()
+    map_put(opts3, "source", "17")
+    map_put(opts3, "target", "17")
+    cmd3 = javac_cmd("out/classes", "out/classes", "Main.java", opts3)
+    _assert_eq("source + target", cmd3,
+        "javac -d out/classes -source 17 -target 17 -cp out/classes Main.java")
+
+    opts4 = map_new()
+    map_put(opts4, "release", "21")
+    map_put(opts4, "source", "17")
+    map_put(opts4, "target", "17")
+    cmd4 = javac_cmd("out/classes", "out/classes", "Main.java", opts4)
+    _assert_eq("release precedence", cmd4,
+        "javac -d out/classes --release 21 -cp out/classes Main.java")
+
+    opts5 = map_new()
+    map_put(opts5, "werror", "true")
+    map_put(opts5, "deprecation", "true")
+    map_put(opts5, "parameters", "true")
+    cmd5 = javac_cmd("out/classes", "cp", "A.java", opts5)
+    _assert_eq("boolean flags", cmd5,
+        "javac -d out/classes -Werror -deprecation -parameters -cp cp A.java")
+
+    opts6a = map_new()
+    map_put(opts6a, "debug", "vars,lines")
+    _assert_eq("debug vars,lines", javac_cmd("out", "cp", "A.java", opts6a),
+        "javac -d out -g:vars,lines -cp cp A.java")
+
+    opts6b = map_new()
+    map_put(opts6b, "debug", "none")
+    _assert_eq("debug none", javac_cmd("out", "cp", "A.java", opts6b),
+        "javac -d out -g:none -cp cp A.java")
+
+    opts6c = map_new()
+    map_put(opts6c, "debug", "all")
+    _assert_eq("debug all", javac_cmd("out", "cp", "A.java", opts6c),
+        "javac -d out -g -cp cp A.java")
+
+    opts7 = map_new()
+    map_put(opts7, "extra", "-XprintRounds -Akey=val")
+    _assert_eq("extra", javac_cmd("out", "cp", "A.java", opts7),
+        "javac -d out -XprintRounds -Akey=val -cp cp A.java")
+
+    opts8 = map_new()
+    map_put(opts8, "encoding", "UTF-8")
+    map_put(opts8, "enable_preview", "true")
+    map_put(opts8, "module_path", "mods")
+    map_put(opts8, "processor", "com.example.MyProcessor")
+    _assert_eq("encoding+preview+modpath+proc", javac_cmd("out", "cp", "A.java", opts8),
+        "javac -d out -encoding UTF-8 --enable-preview --module-path mods -processor com.example.MyProcessor -cp cp A.java")
+
+    opts9 = map_new()
+    map_put(opts9, "release", "21")
+    map_put(opts9, "encoding", "UTF-8")
+    map_put(opts9, "debug", "vars")
+    map_put(opts9, "lint", "all")
+    map_put(opts9, "werror", "true")
+    map_put(opts9, "deprecation", "true")
+    map_put(opts9, "parameters", "true")
+    map_put(opts9, "nowarn", "true")
+    map_put(opts9, "verbose", "true")
+    map_put(opts9, "enable_preview", "true")
+    map_put(opts9, "module_path", "mods")
+    map_put(opts9, "processor", "com.example.AP")
+    map_put(opts9, "extra", "-Xmaxerrs 1")
+    _assert_eq("all combined", javac_cmd("out", "cp", "A.java", opts9),
+        "javac -d out --release 21 -encoding UTF-8 -g:vars -Xlint:all -Werror -deprecation -parameters -nowarn -verbose --enable-preview --module-path mods -processor com.example.AP -Xmaxerrs 1 -cp cp A.java")
+
+    println("javac_cmd tests done")
+}

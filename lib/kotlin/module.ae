@@ -1,0 +1,242 @@
+// kotlin — Kotlin SDK for aether.build
+import build
+
+extern map_new() -> ptr
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_getenv(name: string) -> string
+extern os_system(cmd: string) -> int
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern io_write_file(path: string, content: string) -> int
+
+// --- Kotlin DSL setters ---
+
+jvm_target(_ctx: ptr, ver: string) {
+    map_put(_ctx, "jvm_target", ver)
+}
+
+api_version(_ctx: ptr, ver: string) {
+    map_put(_ctx, "api_version", ver)
+}
+
+language_version(_ctx: ptr, ver: string) {
+    map_put(_ctx, "language_version", ver)
+}
+
+// --- Command builder ---
+
+kotlinc_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr) {
+    cmd = "kotlinc -d ${classes_dir}"
+
+    if opts != null {
+        if map_has(opts, "jvm_target") == 1 {
+            val = map_get(opts, "jvm_target")
+            cmd = string_concat(cmd, " -jvm-target ${val}")
+        }
+        if map_has(opts, "api_version") == 1 {
+            val = map_get(opts, "api_version")
+            cmd = string_concat(cmd, " -api-version ${val}")
+        }
+        if map_has(opts, "language_version") == 1 {
+            val = map_get(opts, "language_version")
+            cmd = string_concat(cmd, " -language-version ${val}")
+        }
+        if map_has(opts, "werror") == 1 {
+            cmd = string_concat(cmd, " -Werror")
+        }
+        if map_has(opts, "nowarn") == 1 {
+            cmd = string_concat(cmd, " -nowarn")
+        }
+        if map_has(opts, "verbose") == 1 {
+            cmd = string_concat(cmd, " -verbose")
+        }
+        if map_has(opts, "extra") == 1 {
+            val = map_get(opts, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    cmd = string_concat(cmd, " -cp ${classpath} ${file_list}")
+    return cmd
+}
+
+// --- SDK functions ---
+
+defer kotlinc(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_name = build._get(ctx, "module")
+    mod_dir = build._get(ctx, "module_dir")
+    deps = map_get(ctx, "deps")
+
+    classes_dir = path_join(target_dir, "classes")
+    build._mkdirs(classes_dir)
+    ts_dir = path_join(classes_dir, mod_name)
+    build._mkdirs(ts_dir)
+    ts_file = path_join(ts_dir, ".timestamp")
+
+    if build._needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of prod code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling prod code")
+
+    kotlin_home = os_getenv("KOTLIN_HOME")
+    if kotlin_home == 0 {
+        kotlin_home = "/usr/share/kotlin/kotlinc"
+    }
+    stdlib_jar = path_join(kotlin_home, "lib/kotlin-stdlib.jar")
+
+    dep_cp = build._build_dep_classpath(ctx)
+    classpath = string_concat(classes_dir, ":")
+    classpath = string_concat(classpath, stdlib_jar)
+    if string_length(dep_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), dep_cp)
+    }
+
+    kt_pat = path_join(source_dir, "*.kt")
+    file_list = build._collect_file_list(kt_pat)
+    if string_length(file_list) == 0 {
+        println("${mod_dir}: no Kotlin source files found")
+        return 0
+    }
+
+    kc_cmd = kotlinc_cmd(classes_dir, classpath, file_list, _defer)
+    exit_code = os_system(kc_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: kotlinc failed")
+        return exit_code
+    }
+
+    cp_out = string_concat(classes_dir, "\n")
+    cp_out = string_concat(cp_out, stdlib_jar)
+    if string_length(dep_cp) > 0 {
+        cp_out = string_concat(string_concat(cp_out, "\n"), dep_cp)
+    }
+    build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", cp_out)
+
+    dep_count = list_size(deps)
+    ld_out = ""
+    k = 0
+    while k < dep_count {
+        dp2 = list_get(deps, k)
+        dm2 = build._strip_lang(dp2)
+        dep_ld = build._read_dep_artifact(ctx, dm2, "ldlibdeps")
+        if string_length(dep_ld) > 0 {
+            if string_length(ld_out) > 0 {
+                ld_out = string_concat(string_concat(ld_out, "\n"), dep_ld)
+            } else {
+                ld_out = dep_ld
+            }
+        }
+        k = k + 1
+    }
+    build._write_artifact(ctx, "ldlibdeps", ld_out)
+    io_write_file(ts_file, "")
+    return 0
+}
+
+defer kotlinc_test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_name = build._get(ctx, "module")
+    mod_dir = build._get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+    build._mkdirs(test_classes)
+    ts_dir = path_join(test_classes, mod_name)
+    build._mkdirs(ts_dir)
+    ts_file = path_join(ts_dir, ".timestamp")
+
+    if build._needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of test code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling test code")
+
+    kotlin_home = os_getenv("KOTLIN_HOME")
+    if kotlin_home == 0 {
+        kotlin_home = "/usr/share/kotlin/kotlinc"
+    }
+    stdlib_jar = path_join(kotlin_home, "lib/kotlin-stdlib.jar")
+
+    dep_cp = build._build_dep_classpath(ctx)
+    lib_cp = build._build_lib_classpath(ctx)
+    classpath = string_concat(test_classes, ":")
+    classpath = string_concat(classpath, stdlib_jar)
+    if string_length(dep_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), dep_cp)
+    }
+    if string_length(lib_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), lib_cp)
+    }
+
+    kt_pat = path_join(source_dir, "*.kt")
+    file_list = build._collect_file_list(kt_pat)
+    if string_length(file_list) == 0 {
+        println("${mod_dir}: no Kotlin test source files found")
+        return 0
+    }
+
+    kc_cmd = kotlinc_cmd(test_classes, classpath, file_list, _defer)
+    exit_code = os_system(kc_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: kotlinc (test) failed")
+        return exit_code
+    }
+
+    io_write_file(ts_file, "")
+    return 0
+}
+
+defer kotlin_test(ctx: ptr, test_class: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+    dep_cp = build._build_dep_classpath(ctx)
+    lib_cp = build._build_lib_classpath(ctx)
+
+    kotlin_home = os_getenv("KOTLIN_HOME")
+    if kotlin_home == 0 {
+        kotlin_home = "/usr/share/kotlin/kotlinc"
+    }
+    stdlib_jar = path_join(kotlin_home, "lib/kotlin-stdlib.jar")
+
+    classpath = string_concat(test_classes, ":")
+    classpath = string_concat(classpath, stdlib_jar)
+    if string_length(dep_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), dep_cp)
+    }
+    if string_length(lib_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), lib_cp)
+    }
+
+    println("${mod_dir}: running tests")
+    run_cmd = "java -ea"
+    if _defer != null {
+        if map_has(_defer, "jvm_args") == 1 {
+            val = map_get(_defer, "jvm_args")
+            run_cmd = string_concat(run_cmd, " ${val}")
+        }
+        if map_has(_defer, "extra") == 1 {
+            val = map_get(_defer, "extra")
+            run_cmd = string_concat(run_cmd, " ${val}")
+        }
+    }
+    run_cmd = string_concat(run_cmd, " -cp ${classpath} ${test_class}")
+    exit_code = os_system(run_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}

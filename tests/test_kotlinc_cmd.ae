@@ -1,0 +1,55 @@
+import build
+// Tests for kotlinc_cmd()
+
+import kotlin
+import kotlin (kotlinc_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    cmd1 = kotlinc_cmd("out/classes", "out/classes:stdlib.jar", "Main.kt", null)
+    _assert_eq("no-config baseline", cmd1,
+        "kotlinc -d out/classes -cp out/classes:stdlib.jar Main.kt")
+
+    opts2 = map_new()
+    map_put(opts2, "jvm_target", "17")
+    map_put(opts2, "api_version", "1.9")
+    _assert_eq("jvm_target + api_version", kotlinc_cmd("out", "cp", "Main.kt", opts2),
+        "kotlinc -d out -jvm-target 17 -api-version 1.9 -cp cp Main.kt")
+
+    opts3 = map_new()
+    map_put(opts3, "language_version", "2.0")
+    _assert_eq("language_version", kotlinc_cmd("out", "cp", "Main.kt", opts3),
+        "kotlinc -d out -language-version 2.0 -cp cp Main.kt")
+
+    opts4 = map_new()
+    map_put(opts4, "werror", "true")
+    map_put(opts4, "nowarn", "true")
+    map_put(opts4, "verbose", "true")
+    _assert_eq("werror+nowarn+verbose", kotlinc_cmd("out", "cp", "Main.kt", opts4),
+        "kotlinc -d out -Werror -nowarn -verbose -cp cp Main.kt")
+
+    opts5 = map_new()
+    map_put(opts5, "extra", "-Xopt-in=kotlin.RequiresOptIn")
+    _assert_eq("extra", kotlinc_cmd("out", "cp", "Main.kt", opts5),
+        "kotlinc -d out -Xopt-in=kotlin.RequiresOptIn -cp cp Main.kt")
+
+    opts6 = map_new()
+    map_put(opts6, "jvm_target", "17")
+    map_put(opts6, "api_version", "1.9")
+    map_put(opts6, "language_version", "2.0")
+    map_put(opts6, "werror", "true")
+    map_put(opts6, "extra", "-Xjsr305=strict")
+    _assert_eq("all combined", kotlinc_cmd("out", "cp", "Main.kt", opts6),
+        "kotlinc -d out -jvm-target 17 -api-version 1.9 -language-version 2.0 -Werror -Xjsr305=strict -cp cp Main.kt")
+
+    println("kotlinc_cmd tests done")
+}

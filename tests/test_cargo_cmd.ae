@@ -1,0 +1,45 @@
+import build
+// Tests for cargo_build_cmd()
+
+import rust
+import rust (cargo_build_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    _assert_eq("no-config defaults to --release",
+        cargo_build_cmd("/src/mymod", "/target/mymod", null),
+        "cd /src/mymod && cargo build --release --target-dir=/target/mymod/lib")
+
+    opts2 = map_new()
+    map_put(opts2, "profile", "dev")
+    _assert_eq("custom profile",
+        cargo_build_cmd("/src", "/target", opts2),
+        "cd /src && cargo build --profile dev --target-dir=/target/lib")
+
+    opts3 = map_new()
+    map_put(opts3, "features", "jni,serde")
+    map_put(opts3, "jobs", "4")
+    _assert_eq("features + jobs",
+        cargo_build_cmd("/src", "/target", opts3),
+        "cd /src && cargo build --release --features jni,serde --jobs 4 --target-dir=/target/lib")
+
+    opts4 = map_new()
+    map_put(opts4, "profile", "release")
+    map_put(opts4, "features", "jni")
+    map_put(opts4, "jobs", "8")
+    map_put(opts4, "extra", "--locked")
+    _assert_eq("all combined",
+        cargo_build_cmd("/src", "/target", opts4),
+        "cd /src && cargo build --profile release --features jni --jobs 8 --locked --target-dir=/target/lib")
+
+    println("cargo_build_cmd tests done")
+}

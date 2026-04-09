@@ -1,0 +1,477 @@
+// java — Java SDK for aether.build
+import build
+
+extern map_new() -> ptr
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_getenv(name: string) -> string
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern file_exists(path: string) -> int
+extern dir_list_count(dl: ptr) -> int
+extern dir_list_get(dl: ptr, index: int) -> string
+extern dir_list_free(dl: ptr)
+extern fs_glob(pattern: string) -> ptr
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_trim(s: string) -> string
+extern io_read_file(path: string) -> string
+extern io_write_file(path: string, content: string) -> int
+
+// --- Java DSL setters ---
+
+release(_ctx: ptr, ver: string) {
+    map_put(_ctx, "release", ver)
+}
+
+source_ver(_ctx: ptr, ver: string) {
+    map_put(_ctx, "source", ver)
+}
+
+target_ver(_ctx: ptr, ver: string) {
+    map_put(_ctx, "target", ver)
+}
+
+lint(_ctx: ptr, level: string) {
+    map_put(_ctx, "lint", level)
+}
+
+encoding(_ctx: ptr, enc: string) {
+    map_put(_ctx, "encoding", enc)
+}
+
+deprecation(_ctx: ptr) {
+    map_put(_ctx, "deprecation", "true")
+}
+
+parameters(_ctx: ptr) {
+    map_put(_ctx, "parameters", "true")
+}
+
+debug(_ctx: ptr, level: string) {
+    map_put(_ctx, "debug", level)
+}
+
+enable_preview(_ctx: ptr) {
+    map_put(_ctx, "enable_preview", "true")
+}
+
+processor(_ctx: ptr, fqcn: string) {
+    map_put(_ctx, "processor", fqcn)
+}
+
+module_path(_ctx: ptr, path: string) {
+    map_put(_ctx, "module_path", path)
+}
+
+jvm_args(_ctx: ptr, arg: string) {
+    if map_has(_ctx, "jvm_args") == 1 {
+        prev = map_get(_ctx, "jvm_args")
+        combined = string_concat(prev, " ")
+        combined = string_concat(combined, arg)
+        map_put(_ctx, "jvm_args", combined)
+    } else {
+        map_put(_ctx, "jvm_args", arg)
+    }
+}
+
+// --- Command builders ---
+
+javac_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr) {
+    cmd = "javac -d ${classes_dir}"
+
+    if opts != null {
+        if map_has(opts, "release") == 1 {
+            val = map_get(opts, "release")
+            cmd = string_concat(cmd, " --release ${val}")
+        } else {
+            if map_has(opts, "source") == 1 {
+                val = map_get(opts, "source")
+                cmd = string_concat(cmd, " -source ${val}")
+            }
+            if map_has(opts, "target") == 1 {
+                val = map_get(opts, "target")
+                cmd = string_concat(cmd, " -target ${val}")
+            }
+        }
+
+        if map_has(opts, "encoding") == 1 {
+            val = map_get(opts, "encoding")
+            cmd = string_concat(cmd, " -encoding ${val}")
+        }
+
+        if map_has(opts, "debug") == 1 {
+            val = map_get(opts, "debug")
+            if val == "none" {
+                cmd = string_concat(cmd, " -g:none")
+            } else {
+                if val == "all" {
+                    cmd = string_concat(cmd, " -g")
+                } else {
+                    cmd = string_concat(cmd, " -g:${val}")
+                }
+            }
+        }
+
+        if map_has(opts, "lint") == 1 {
+            val = map_get(opts, "lint")
+            cmd = string_concat(cmd, " -Xlint:${val}")
+        }
+
+        if map_has(opts, "werror") == 1 {
+            cmd = string_concat(cmd, " -Werror")
+        }
+
+        if map_has(opts, "deprecation") == 1 {
+            cmd = string_concat(cmd, " -deprecation")
+        }
+
+        if map_has(opts, "parameters") == 1 {
+            cmd = string_concat(cmd, " -parameters")
+        }
+
+        if map_has(opts, "nowarn") == 1 {
+            cmd = string_concat(cmd, " -nowarn")
+        }
+
+        if map_has(opts, "verbose") == 1 {
+            cmd = string_concat(cmd, " -verbose")
+        }
+
+        if map_has(opts, "enable_preview") == 1 {
+            cmd = string_concat(cmd, " --enable-preview")
+        }
+
+        if map_has(opts, "module_path") == 1 {
+            val = map_get(opts, "module_path")
+            cmd = string_concat(cmd, " --module-path ${val}")
+        }
+
+        if map_has(opts, "processor") == 1 {
+            val = map_get(opts, "processor")
+            cmd = string_concat(cmd, " -processor ${val}")
+        }
+
+        if map_has(opts, "extra") == 1 {
+            val = map_get(opts, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    cmd = string_concat(cmd, " -cp ${classpath} ${file_list}")
+    return cmd
+}
+
+junit_cmd(classpath: string, class_names: string, ld_path: string, opts: ptr) {
+    cmd = ""
+    if string_length(ld_path) > 0 {
+        cmd = "LD_LIBRARY_PATH=${ld_path} java"
+        cmd = string_concat(cmd, " -Djava.library.path=${ld_path}")
+    } else {
+        cmd = "java"
+    }
+
+    if opts != null {
+        if map_has(opts, "jvm_args") == 1 {
+            val = map_get(opts, "jvm_args")
+            cmd = string_concat(cmd, " ${val}")
+        }
+        if map_has(opts, "extra") == 1 {
+            val = map_get(opts, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    cmd = string_concat(cmd, " -cp ${classpath} org.junit.runner.JUnitCore ${class_names}")
+    return cmd
+}
+
+// --- SDK functions ---
+
+defer javac(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_name = build._get(ctx, "module")
+    mod_dir = build._get(ctx, "module_dir")
+
+    classes_dir = path_join(target_dir, "classes")
+    build._mkdirs(classes_dir)
+    ts_dir = path_join(classes_dir, mod_name)
+    build._mkdirs(ts_dir)
+    ts_file = path_join(ts_dir, ".timestamp")
+
+    if build._needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of prod code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling prod code")
+
+    dep_cp = build._build_dep_classpath(ctx)
+    classpath = classes_dir
+    if string_length(dep_cp) > 0 {
+        tmp = string_concat(classpath, ":")
+        classpath = string_concat(tmp, dep_cp)
+    }
+
+    pat = path_join(source_dir, "*.java")
+    file_list = build._collect_file_list(pat)
+    if string_length(file_list) == 0 {
+        println("${mod_dir}: no Java source files found")
+        return 0
+    }
+
+    cmd = javac_cmd(classes_dir, classpath, file_list, _defer)
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: javac failed")
+        return exit_code
+    }
+
+    // Write classpath artifact
+    cp_out = classes_dir
+    if string_length(dep_cp) > 0 {
+        tmp2 = string_concat(cp_out, "\n")
+        cp_out = string_concat(tmp2, dep_cp)
+    }
+    build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", cp_out)
+
+    // Collect ldlibdeps and shared_library_deps from all deps
+    deps = map_get(ctx, "deps")
+    dep_count = list_size(deps)
+    ld_out = ""
+    shared_out = ""
+    k = 0
+    while k < dep_count {
+        dp2 = list_get(deps, k)
+        dm2 = build._strip_lang(dp2)
+        dep_ld = build._read_dep_artifact(ctx, dm2, "ldlibdeps")
+        if string_length(dep_ld) > 0 {
+            if string_length(ld_out) > 0 {
+                ld_out = string_concat(string_concat(ld_out, "\n"), dep_ld)
+            } else {
+                ld_out = dep_ld
+            }
+        }
+        dep_sh = build._read_dep_artifact(ctx, dm2, "shared_library_deps_including_transitive")
+        if string_length(dep_sh) > 0 {
+            if string_length(shared_out) > 0 {
+                shared_out = string_concat(string_concat(shared_out, "\n"), dep_sh)
+            } else {
+                shared_out = dep_sh
+            }
+        }
+        k = k + 1
+    }
+    build._write_artifact(ctx, "ldlibdeps", ld_out)
+    build._write_artifact(ctx, "shared_library_deps_including_transitive", shared_out)
+    io_write_file(ts_file, "")
+
+    return 0
+}
+
+defer javac_test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_name = build._get(ctx, "module")
+    mod_dir = build._get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+    build._mkdirs(test_classes)
+    ts_dir = path_join(test_classes, mod_name)
+    build._mkdirs(ts_dir)
+    ts_file = path_join(ts_dir, ".timestamp")
+
+    if build._needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of test code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling test code")
+
+    dep_cp = build._build_dep_classpath(ctx)
+    lib_cp = build._build_lib_classpath(ctx)
+    classpath = test_classes
+    if string_length(dep_cp) > 0 {
+        tmp = string_concat(classpath, ":")
+        classpath = string_concat(tmp, dep_cp)
+    }
+    if string_length(lib_cp) > 0 {
+        tmp2 = string_concat(classpath, ":")
+        classpath = string_concat(tmp2, lib_cp)
+    }
+
+    pat = path_join(source_dir, "*.java")
+    file_list = build._collect_file_list(pat)
+    if string_length(file_list) == 0 {
+        println("${mod_dir}: no test source files found")
+        return 0
+    }
+
+    cmd = javac_cmd(test_classes, classpath, file_list, _defer)
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: javac (test) failed")
+        return exit_code
+    }
+
+    io_write_file(ts_file, "")
+    return 0
+}
+
+defer junit(ctx: ptr) {
+    root = build._get(ctx, "root")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+
+    dep_cp = build._build_dep_classpath(ctx)
+    lib_cp = build._build_lib_classpath(ctx)
+    classpath = test_classes
+    if string_length(dep_cp) > 0 {
+        tmp = string_concat(classpath, ":")
+        classpath = string_concat(tmp, dep_cp)
+    }
+    if string_length(lib_cp) > 0 {
+        tmp2 = string_concat(classpath, ":")
+        classpath = string_concat(tmp2, lib_cp)
+    }
+
+    tc_pat = path_join(test_classes, "**/*Tests.class")
+    test_files = fs_glob(tc_pat)
+    tcount = dir_list_count(test_files)
+    if tcount == 0 {
+        println("${mod_dir}: no test classes found")
+        dir_list_free(test_files)
+        return 0
+    }
+
+    prefix_len = string_length(test_classes) + 1
+    class_names = ""
+    j = 0
+    while j < tcount {
+        tf = dir_list_get(test_files, j)
+        tflen = string_length(tf)
+        class_path = string_substring(tf, prefix_len, tflen - 6)
+        raw = os_exec("echo ${class_path} | sed s,/,.,g")
+        class_name = string_trim(raw)
+        if j == 0 {
+            class_names = class_name
+        } else {
+            sp = string_concat(class_names, " ")
+            class_names = string_concat(sp, class_name)
+        }
+        j = j + 1
+    }
+    dir_list_free(test_files)
+
+    // Build LD_LIBRARY_PATH from deps' ldlibdeps
+    deps = map_get(ctx, "deps")
+    ndeps = list_size(deps)
+    ld_path = ""
+    m = 0
+    while m < ndeps {
+        dp3 = list_get(deps, m)
+        dm3 = build._strip_lang(dp3)
+        dep_ld = build._read_dep_artifact(ctx, dm3, "ldlibdeps")
+        if string_length(dep_ld) > 0 {
+            ld_dirs = string_trim(os_exec("echo '${dep_ld}' | while read -r line; do [ -n \"$line\" ] && dirname \"$line\"; done | sort -u | tr '\n' ':' | sed 's/:$//'"))
+            if string_length(ld_dirs) > 0 {
+                if string_length(ld_path) > 0 {
+                    ld_path = string_concat(string_concat(ld_path, ":"), ld_dirs)
+                } else {
+                    ld_path = ld_dirs
+                }
+            }
+        }
+        m = m + 1
+    }
+
+    println("${mod_dir}: running tests")
+    cmd = junit_cmd(classpath, class_names, ld_path, _defer)
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}
+
+// Build a fat jar from this module's classes + all transitive deps + native libs.
+shade(ctx: ptr, main_class: string, jar_name: string) {
+    root = build._get(ctx, "root")
+    target_dir = build._get(ctx, "target_dir")
+    mod_name = build._get(ctx, "module")
+    mod_dir = build._get(ctx, "module_dir")
+
+    classes_dir = path_join(target_dir, "classes")
+
+    meta_dir = path_join(classes_dir, "META-INF")
+    build._mkdirs(meta_dir)
+    manifest = path_join(meta_dir, "MANIFEST.MF")
+    mf_content = string_concat("Manifest-Version: 1.0\nMain-Class: ", main_class)
+    mf_content = string_concat(mf_content, "\n")
+    io_write_file(manifest, mf_content)
+
+    bin_dir = path_join(target_dir, "bin")
+    build._mkdirs(bin_dir)
+    jar_path = path_join(bin_dir, jar_name)
+
+    cp_file = path_join(target_dir, "jvm_classpath_deps_including_transitive")
+    cp_content = ""
+    if file_exists(cp_file) == 1 {
+        cp_content = io_read_file(cp_file)
+    }
+
+    ld_file = path_join(target_dir, "ldlibdeps")
+    ld_content = ""
+    if file_exists(ld_file) == 1 {
+        ld_content = io_read_file(ld_file)
+    }
+
+    println("${mod_dir}: packaging ${jar_name}")
+
+    jar_cmd = string_concat("jar cfM ", jar_path)
+    jar_cmd = string_concat(jar_cmd, " -C ")
+    jar_cmd = string_concat(jar_cmd, classes_dir)
+    jar_cmd = string_concat(jar_cmd, " .")
+
+    if string_length(cp_content) > 0 {
+        add_cp_cmd = string_concat("echo '", cp_content)
+        add_cp_cmd = string_concat(add_cp_cmd, "' | while IFS= read -r line; do [ -n \"$line\" ] && echo \" -C $line .\"; done")
+        extra_cp = os_exec(add_cp_cmd)
+        extra_cp = string_trim(extra_cp)
+        if string_length(extra_cp) > 0 {
+            jar_cmd = string_concat(jar_cmd, " ")
+            jar_cmd = string_concat(jar_cmd, extra_cp)
+        }
+    }
+
+    if string_length(ld_content) > 0 {
+        add_ld_cmd = string_concat("echo '", ld_content)
+        add_ld_cmd = string_concat(add_ld_cmd, "' | while IFS= read -r line; do [ -n \"$line\" ] && echo \" -C $(dirname $line) $(basename $line)\"; done")
+        extra_ld = os_exec(add_ld_cmd)
+        extra_ld = string_trim(extra_ld)
+        if string_length(extra_ld) > 0 {
+            jar_cmd = string_concat(jar_cmd, " ")
+            jar_cmd = string_concat(jar_cmd, extra_ld)
+        }
+    }
+
+    exit_code = os_system(jar_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: jar packaging failed")
+        return exit_code
+    }
+
+    println("${mod_dir}: built ${jar_path}")
+    println("  run: java -Djava.library.path=. -jar ${jar_path}")
+    return 0
+}

@@ -1,0 +1,152 @@
+// rust — Rust/Cargo SDK for aether.build
+import build
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_system(cmd: string) -> int
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern io_write_file(path: string, content: string) -> int
+
+// --- Rust DSL setters ---
+
+lib_name(_ctx: ptr, name: string) {
+    map_put(_ctx, "lib_name", name)
+}
+
+profile(_ctx: ptr, p: string) {
+    map_put(_ctx, "profile", p)
+}
+
+features(_ctx: ptr, f: string) {
+    map_put(_ctx, "features", f)
+}
+
+jobs(_ctx: ptr, n: string) {
+    map_put(_ctx, "jobs", n)
+}
+
+// --- Command builder ---
+
+cargo_build_cmd(source_dir: string, target_dir: string, opts: ptr) {
+    cmd = "cd ${source_dir} && cargo build"
+
+    has_profile = 0
+    if opts != null {
+        if map_has(opts, "profile") == 1 {
+            val = map_get(opts, "profile")
+            cmd = string_concat(cmd, " --profile ${val}")
+            has_profile = 1
+        }
+    }
+    if has_profile == 0 {
+        cmd = string_concat(cmd, " --release")
+    }
+
+    if opts != null {
+        if map_has(opts, "features") == 1 {
+            val = map_get(opts, "features")
+            cmd = string_concat(cmd, " --features ${val}")
+        }
+        if map_has(opts, "jobs") == 1 {
+            val = map_get(opts, "jobs")
+            cmd = string_concat(cmd, " --jobs ${val}")
+        }
+        if map_has(opts, "extra") == 1 {
+            val = map_get(opts, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    lib_dir = path_join(target_dir, "lib")
+    cmd = string_concat(cmd, " --target-dir=${lib_dir}")
+    return cmd
+}
+
+// --- Internal helpers ---
+
+_write_cargo_config(config_path: string) {
+    line1 = "[source.crates-io]"
+    line2 = "replace-with = 'local-registry'"
+    line3 = "[source.local-registry]"
+    line4 = "local-registry = '../../../libs/rust/registry'"
+    cfg = string_concat(line1, "\n")
+    cfg = string_concat(cfg, line2)
+    cfg = string_concat(cfg, "\n\n")
+    cfg = string_concat(cfg, line3)
+    cfg = string_concat(cfg, "\n")
+    cfg = string_concat(cfg, line4)
+    cfg = string_concat(cfg, "\n")
+    io_write_file(config_path, cfg)
+}
+
+// --- SDK functions ---
+
+defer cargo_build(ctx: ptr) {
+    root = build._get(ctx, "root")
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_name = build._get(ctx, "module")
+    mod_dir = build._get(ctx, "module_dir")
+    cdeps = map_get(ctx, "cargo_deps")
+
+    lib_dir = path_join(target_dir, "lib")
+    build._mkdirs(lib_dir)
+
+    ts_file = path_join(lib_dir, ".timestamp")
+    if build._needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of prod code (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling prod code")
+
+    cdep_count = list_size(cdeps)
+    cdep_content = ""
+    i = 0
+    while i < cdep_count {
+        cd = list_get(cdeps, i)
+        if i == 0 {
+            cdep_content = string_concat(cd, "")
+        } else {
+            nl = string_concat(cdep_content, "\n")
+            cdep_content = string_concat(nl, cd)
+        }
+        i = i + 1
+    }
+    build._write_artifact(ctx, "cargo_deps_including_transitive", cdep_content)
+
+    cargo_dir = path_join(target_dir, ".cargo")
+    build._mkdirs(cargo_dir)
+    cargo_config = path_join(cargo_dir, "config.toml")
+    os_system("mkdir -p ${cargo_dir}")
+    _write_cargo_config(cargo_config)
+
+    cargo_cmd = cargo_build_cmd(source_dir, target_dir, _defer)
+    exit_code = os_system(cargo_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: cargo build failed")
+        return exit_code
+    }
+
+    cb_lib_name = ""
+    if _defer != null {
+        if map_has(_defer, "lib_name") == 1 {
+            cb_lib_name = map_get(_defer, "lib_name")
+        }
+    }
+    if string_length(cb_lib_name) == 0 {
+        println("${mod_dir}: lib_name() is required for cargo_build")
+        return 1
+    }
+    release_dir = path_join(lib_dir, "release")
+    full_so = path_join(release_dir, cb_lib_name)
+    build._write_artifact(ctx, "ldlibdeps", full_so)
+    build._write_artifact(ctx, "shared_library_deps_including_transitive", full_so)
+    io_write_file(ts_file, "")
+    return 0
+}
