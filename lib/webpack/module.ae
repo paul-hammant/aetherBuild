@@ -1,0 +1,51 @@
+// webpack — Webpack bundler SDK for aether.build
+import build
+import pnpm
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern os_system(cmd: string) -> int
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+
+// --- Webpack DSL setters ---
+
+config(_ctx: ptr, path: string) {
+    map_put(_ctx, "webpack_config", path)
+}
+
+// --- SDK functions ---
+
+builder bundle(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+    pnpm.resolve(ctx)
+
+    wp_config = path_join(source_dir, "webpack.aeb.config.js")
+    if _builder != null {
+        if map_has(_builder, "webpack_config") == 1 {
+            cfg = map_get(_builder, "webpack_config")
+            wp_config = path_join(source_dir, cfg)
+        }
+    }
+
+    println("${mod_dir}: bundling (webpack)")
+
+    aeb_dir = path_join(root, ".aeb")
+    webpack_bin = path_join(aeb_dir, "node_modules/.bin/webpack")
+    nm_dir = path_join(aeb_dir, "node_modules")
+    cmd = "NODE_PATH='${nm_dir}' ${webpack_bin} --config '${wp_config}'"
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: webpack failed")
+        return exit_code
+    }
+    println("${mod_dir}: bundle complete")
+    return 0
+}

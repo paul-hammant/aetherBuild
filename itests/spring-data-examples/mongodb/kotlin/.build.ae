@@ -1,5 +1,6 @@
 import build
-import build (dep, load_bom_file)
+import build (dep)
+import maven (load_bom_file)
 import kotlin
 import kotlin (source_layout, jvm_target, compiler_plugin)
 
@@ -13,6 +14,6 @@ main() {
     dep(b, "org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
     kotlin.kotlinc(b) {
         jvm_target("25")
-        source_layout("maven")
+        source_layout("maven idiomatic")
     }
 }

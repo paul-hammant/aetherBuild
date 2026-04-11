@@ -1,7 +1,3 @@
-import build
-import build (bom, repo)
-
-main() {
-    b = build.boms()
-    bom(b, "org.springframework.boot:spring-boot-dependencies:4.0.4")
-}
+// Spring Boot BOM — parsed as text by aeb-resolve.jar
+// Lines with maven_bom("g:a:v") and maven_repo("url") are extracted by the resolver.
+maven_bom("org.springframework.boot:spring-boot-dependencies:4.0.4")

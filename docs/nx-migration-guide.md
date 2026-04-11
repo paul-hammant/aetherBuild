@@ -56,7 +56,7 @@ Each module uses a different compilation tool:
 | Framework | Compiler | aeb builder |
 |-----------|----------|-------------|
 | Plain TypeScript | `tsc` | `ts.tsc_project(b)` |
-| Angular | `ngc` | `ts.ngc_project(b)` |
+| Angular | `ngc` | `angular.ngc_project(b)` |
 | React (TSX) | `tsc` | `ts.tsc_project(b)` |
 | Web Components | `tsc` | `ts.tsc_project(b)` |
 
@@ -159,15 +159,15 @@ For modules with inter-module deps:
 // libs/shared/product/state/.build.ae  (Angular)
 import build
 import build (dep, load_third_party_deps)
-import ts
-import ts (skip_lib_check)
+import angular
+import angular (skip_lib_check)
 
 main() {
     b = build.start()
     load_third_party_deps(b, "../../../../angular.deps.ae")
     dep(b, "libs/shared/product/data")
     dep(b, "libs/shared/product/types")
-    ts.ngc_project(b) {
+    angular.ngc_project(b) {
         skip_lib_check()
     }
 }
@@ -180,15 +180,15 @@ Apps use `tsconfig.app.json` instead of `tsconfig.lib.json`:
 // apps/products/.build.ae
 import build
 import build (dep, load_third_party_deps)
-import ts
-import ts (skip_lib_check, tsconfig)
+import angular
+import angular (skip_lib_check, tsconfig)
 
 main() {
     b = build.start()
     load_third_party_deps(b, "../../angular.deps.ae")
     dep(b, "libs/products/home-page")
     dep(b, "libs/products/product-detail-page")
-    ts.ngc_project(b) {
+    angular.ngc_project(b) {
         tsconfig("tsconfig.app.json")
         skip_lib_check()
     }
@@ -211,13 +211,13 @@ main() {
 // libs/shared/product/state/.tests.ae
 import build
 import build (dep, load_third_party_deps)
-import ts
+import jest
 
 main() {
     b = build.start()
     dep(b, "libs/shared/product/state")
     load_third_party_deps(b, "../../../../angular.deps.ae")
-    ts.jest_project(b)
+    jest.project(b)
 }
 ```
 
@@ -294,13 +294,13 @@ module.exports = {
 // apps/cart/.dist.ae
 import build
 import build (dep, load_third_party_deps)
-import ts
+import webpack
 
 main() {
     b = build.start()
     dep(b, "apps/cart")
     load_third_party_deps(b, "../../react.deps.ae")
-    ts.webpack_bundle(b)
+    webpack.bundle(b)
 }
 ```
 
@@ -329,13 +329,13 @@ Create a minimal `angular.json` at the repo root with the app's build config:
 // apps/products/.dist.ae
 import build
 import build (dep, load_third_party_deps)
-import ts
+import angular
 
 main() {
     b = build.start()
     dep(b, "apps/products")
     load_third_party_deps(b, "../../angular.deps.ae")
-    ts.ng_build(b)
+    angular.ng_build(b)
 }
 ```
 
@@ -377,10 +377,10 @@ aeb --dist apps/cart
 | Builder | Purpose | DSL |
 |---------|---------|-----|
 | `ts.tsc_project(b)` | TypeScript/React compilation | `tsconfig()`, `skip_lib_check()` |
-| `ts.ngc_project(b)` | Angular compilation | `tsconfig()`, `skip_lib_check()` |
-| `ts.jest_project(b)` | Jest test execution | `timeout()` |
-| `ts.webpack_bundle(b)` | React app bundling | `webpack_config()` |
-| `ts.ng_build(b)` | Angular app bundling | (uses angular.json) |
+| `angular.ngc_project(b)` | Angular compilation | `tsconfig()`, `skip_lib_check()` |
+| `jest.project(b)` | Jest test execution | `timeout()` |
+| `webpack.bundle(b)` | React app bundling | `webpack_config()` |
+| `angular.ng_build(b)` | Angular app bundling | (uses angular.json) |
 
 ## What Doesn't Migrate Automatically
 

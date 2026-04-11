@@ -1,0 +1,2 @@
+// jMolecules BOM — parsed as text by aeb-resolve.jar
+maven_bom("org.jmolecules:jmolecules-bom:2023.0.0")

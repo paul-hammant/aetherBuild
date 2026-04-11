@@ -7,7 +7,7 @@ main() {
     b = build.start()
     load_third_party_deps(b, "../../../base.deps.ae")
     dep(b, "libs/shared/jsxify")
-    ts.tsc_project(b) {
+    ts.tsc(b) {
         skip_lib_check()
     }
 }

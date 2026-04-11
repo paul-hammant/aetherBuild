@@ -1,0 +1,100 @@
+// angular — Angular compiler and build SDK for aether.build
+import build
+import pnpm
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_trim(s: string) -> string
+extern io_write_file(path: string, content: string) -> int
+
+// --- Angular DSL setters (reuse ts setters where applicable) ---
+
+tsconfig(_ctx: ptr, path: string) {
+    map_put(_ctx, "tsconfig", path)
+}
+
+skip_lib_check(_ctx: ptr) {
+    map_put(_ctx, "skip_lib_check", "true")
+}
+
+// --- SDK functions ---
+
+// Compile Angular TypeScript using ngc (Angular compiler).
+builder ngc(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    // Resolve npm deps first
+    pnpm.resolve(ctx)
+
+    // Determine tsconfig path
+    tc = path_join(source_dir, "tsconfig.lib.json")
+    if _builder != null {
+        if map_has(_builder, "tsconfig") == 1 {
+            tc_rel = map_get(_builder, "tsconfig")
+            tc = path_join(source_dir, tc_rel)
+        }
+    }
+
+    println("${mod_dir}: compiling (ngc)")
+
+    aeb_dir = path_join(root, ".aeb")
+    ngc_bin = path_join(aeb_dir, "node_modules/.bin/ngc")
+    cmd = "${ngc_bin} -p '${tc}'"
+
+    if _builder != null {
+        if map_has(_builder, "skip_lib_check") == 1 {
+            cmd = string_concat(cmd, " --skipLibCheck")
+        }
+        if map_has(_builder, "extra") == 1 {
+            val = map_get(_builder, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: ngc failed")
+        return exit_code
+    }
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Build Angular app for production using ng CLI.
+builder ng_build(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+    pnpm.resolve(ctx)
+
+    // Extract app name from source_dir (e.g. .../apps/products → products)
+    app_name = string_trim(os_exec("basename '${source_dir}'"))
+
+    println("${mod_dir}: building (ng build)")
+
+    aeb_dir = path_join(root, ".aeb")
+    ng_bin = path_join(aeb_dir, "node_modules/.bin/ng")
+    cmd = "${ng_bin} build ${app_name} --configuration production"
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: ng build failed")
+        return exit_code
+    }
+    println("${mod_dir}: build complete")
+    return 0
+}

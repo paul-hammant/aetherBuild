@@ -16,7 +16,7 @@ ROOT="$(pwd)"
 AEB_LIB=".aeb/lib"
 
 # --- shipped modules (update this list when adding new SDKs) ---
-SHIPPED_MODULES=(build java kotlin gomod rust ts container)
+SHIPPED_MODULES=(build java kotlin go rust ts container maven pnpm jest webpack angular)
 
 # --- argument parsing ---
 TARGET=""
@@ -227,7 +227,55 @@ declare -A ALL_SOURCES   # fname → source .ae path
 declare -A ALL_MODULES   # fname → module_dir
 ALL_C_FILES=()
 
-# Transform a .ae file: rename main() and replace build.start() with build.begin()
+# Collect transitive imports from SDK modules.
+# Given a source .ae file, find all imports, then scan those SDK modules
+# for their own imports, and return any missing ones.
+resolve_transitive_imports() {
+    local src="$1"
+    local -A seen=()
+    local -a queue=()
+
+    # Seed with direct imports from the source file
+    while IFS= read -r mod; do
+        [[ -n "$mod" ]] || continue
+        seen["$mod"]=1
+        queue+=("$mod")
+    done < <(grep -oP '^import \K\w+' "$src" | sort -u)
+
+    # BFS through SDK module imports
+    local i=0
+    while (( i < ${#queue[@]} )); do
+        local cur="${queue[$i]}"
+        i=$(( i + 1 ))
+        local mod_file="$ROOT/$AEB_LIB/$cur/module.ae"
+        [[ -f "$mod_file" ]] || continue
+        while IFS= read -r dep; do
+            [[ -n "$dep" ]] || continue
+            if [[ -z "${seen[$dep]+x}" ]]; then
+                seen["$dep"]=1
+                queue+=("$dep")
+            fi
+        done < <(grep -oP '^import \K\w+' "$mod_file" | sort -u)
+    done
+
+    # Return transitive imports not already fully imported in the source file.
+    # A selective import like "import maven (load_bom_file)" doesn't count —
+    # the compiler needs a full "import maven" to resolve all cross-module calls.
+    local -A full_imports=()
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && full_imports["$line"]=1
+    done < <(grep -oP '^import \K\w+$' "$src")
+
+    for mod in "${!seen[@]}"; do
+        if [[ -z "${full_imports[$mod]+x}" ]]; then
+            echo "$mod"
+        fi
+    done
+    return 0
+}
+
+# Transform a .ae file: rename main(), replace build.start() with build.begin(),
+# and inject transitive imports so the compiler can resolve cross-module calls.
 transform_ae() {
     local src="$1" func_name="$2" module_dir="$3" out="$4"
     local escaped_mod
@@ -235,6 +283,19 @@ transform_ae() {
     sed -e "s/^main() {/${func_name}(s: ptr) {/" \
         -e "s/b = build\.start()/b = build.begin(s, \"${escaped_mod}\")\n    if b == 0 { return 0 }/" \
         "$src" > "$out"
+
+    # Add transitive imports at the top of the file
+    local extra
+    extra=$(resolve_transitive_imports "$src")
+    if [[ -n "$extra" ]]; then
+        local imports=""
+        while IFS= read -r mod; do
+            imports+="import ${mod}"$'\n'
+        done <<< "$extra"
+        # Prepend transitive imports before existing content
+        local tmp="${out}.tmp"
+        printf '%s' "$imports" | cat - "$out" > "$tmp" && mv "$tmp" "$out"
+    fi
 }
 
 echo "aeb: ${#SORTED_BUILD[@]} compile + ${#DIST_MODULES[@]} dist + ${#TEST_MODULES[@]} test"

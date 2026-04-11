@@ -1,5 +1,6 @@
 import build
-import build (dep, load_bom_file)
+import build (dep)
+import maven (load_bom_file)
 import java
 import java (release, source_layout, enable_preview, generated_sources)
 
@@ -18,7 +19,7 @@ main() {
     dep(b, "org.springframework.data:spring-data-rest-hal-explorer")
     java.javac(b) {
         release("25")
-        source_layout("maven")
+        source_layout("maven idiomatic")
         enable_preview()
         generated_sources("target/rest/starbucks/generated-sources")
     }

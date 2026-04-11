@@ -1,0 +1,4 @@
+// Spring Data milestone BOM — parsed as text by aeb-resolve.jar
+maven_bom("org.springframework.data:spring-data-bom:2026.0.0-M2")
+maven_repo("https://repo.spring.io/milestone")
+maven_repo("https://repo.spring.io/snapshot")

@@ -215,8 +215,8 @@ public class MavenResolver {
     }
 
     /**
-     * Parse a .bom.ae file for bom() and repo() declarations.
-     * Extracts quoted strings from lines containing "bom(" or "repo(".
+     * Parse a .bom.ae file for maven_bom() and maven_repo() declarations.
+     * Extracts quoted strings from lines containing "maven_bom(" or "maven_repo(".
      * BOMs are g:a:v coordinates (contain two colons), repos are URLs (contain "://").
      */
     private static void parseBomAeFile(Path file, List<String> boms, List<String> repos)
@@ -229,9 +229,9 @@ public class MavenResolver {
             Matcher m = quoted.matcher(line);
             while (m.find()) {
                 String val = m.group(1);
-                if (line.contains("bom(") && val.chars().filter(c -> c == ':').count() == 2) {
+                if (line.contains("maven_bom(") && val.chars().filter(c -> c == ':').count() == 2) {
                     boms.add(val);
-                } else if (line.contains("repo(") && val.contains("://")) {
+                } else if (line.contains("maven_repo(") && val.contains("://")) {
                     repos.add(val);
                 }
             }

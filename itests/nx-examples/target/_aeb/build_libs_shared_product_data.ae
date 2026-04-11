@@ -8,7 +8,7 @@ build_libs_shared_product_data(s: ptr) {
     if b == 0 { return 0 }
     load_deps_file(b, "../../../../base.deps.ae")
     dep(b, "libs/shared/product/types")
-    ts.tsc_project(b) {
+    ts.tsc(b) {
         skip_lib_check()
     }
 }

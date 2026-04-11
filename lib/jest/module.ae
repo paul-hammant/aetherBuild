@@ -1,0 +1,66 @@
+// jest — Jest test runner SDK for aether.build
+import build
+import pnpm
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern os_system(cmd: string) -> int
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+
+// --- Jest DSL setters ---
+
+timeout(_ctx: ptr, secs: string) {
+    map_put(_ctx, "timeout", secs)
+}
+
+// --- SDK functions ---
+
+// Run Jest tests using the project's jest.config.ts.
+builder test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    // Resolve npm deps first
+    pnpm.resolve(ctx)
+
+    println("${mod_dir}: running tests (jest)")
+
+    aeb_dir = path_join(root, ".aeb")
+    jest_bin = path_join(aeb_dir, "node_modules/.bin/jest")
+
+    // Default timeout
+    timeout_secs = "60"
+    if _builder != null {
+        if map_has(_builder, "timeout") == 1 {
+            timeout_secs = map_get(_builder, "timeout")
+        }
+    }
+
+    jest_config = path_join(source_dir, "jest.config.ts")
+    cmd = "timeout ${timeout_secs} ${jest_bin} --config '${jest_config}' --passWithNoTests"
+
+    if _builder != null {
+        if map_has(_builder, "extra") == 1 {
+            val = map_get(_builder, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    exit_code = os_system(cmd)
+    if exit_code == 124 {
+        println("${mod_dir}: tests TIMEOUT")
+        return exit_code
+    }
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}

@@ -1,8 +1,8 @@
 import build
 // Tests for go_build_cmd() and go_test_cmd()
 
-import gomod
-import gomod (go_build_cmd, go_test_cmd)
+import go
+import go (go_build_cmd, go_test_cmd)
 
 _assert_eq(label: string, actual: string, expected: string) {
     if actual == expected {

@@ -1,5 +1,6 @@
 import build
-import build (dep, load_bom_file)
+import build (dep)
+import maven (load_bom_file)
 import java
 import java (release, source_layout, enable_preview)
 
@@ -13,7 +14,7 @@ main() {
     dep(b, "com.fasterxml.jackson.core:jackson-core")
     java.javac(b) {
         release("25")
-        source_layout("maven")
+        source_layout("maven idiomatic")
         enable_preview()
     }
 }

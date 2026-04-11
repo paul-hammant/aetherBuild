@@ -1,5 +1,6 @@
 import build
-import build (dep, load_bom_file)
+import build (dep)
+import maven (load_bom_file)
 import kotlin
 import kotlin (source_layout, jvm_target)
 import java
@@ -19,7 +20,7 @@ main() {
     dep(b, "commons-io:commons-io:2.18.0")
     kotlin.kotlinc_test(b) {
         jvm_target("25")
-        source_layout("maven")
+        source_layout("maven idiomatic")
     }
     java.junit5(b) {
         test_timeout("120")

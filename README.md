@@ -102,7 +102,7 @@ Initialize a repo to use aetherBuild:
 ```
 
 This creates symlinks in `lib/` for each shipped SDK module (build, java,
-kotlin, gomod, rust, ts) and adds them to `.gitignore`. Safe to run
+kotlin, go, rust, ts, maven, pnpm, jest, webpack, angular) and adds them to `.gitignore`. Safe to run
 repeatedly — existing correct symlinks are left alone.
 
 ## Running
@@ -236,10 +236,22 @@ always run (only compilation is skipped).
 
 ```
 aetherBuild/
-├── aeb              # runner script (scan, topo-sort, generate, compile, run)
-├── lib/build/module.ae   # SDK: all language compilers, test runners, packaging
+├── aeb                        # runner script (scan, topo-sort, generate, compile, run)
+├── lib/
+│   ├── build/module.ae        # core: session, deps, context, shared helpers
+│   ├── java/module.ae         # language: javac, junit, junit5, shade
+│   ├── kotlin/module.ae       # language: kotlinc
+│   ├── go/module.ae           # language: go build, go test
+│   ├── rust/module.ae         # language: cargo build
+│   ├── ts/module.ae           # language: tsc, mocha
+│   ├── maven/module.ae        # package mgr: BOM, dep resolution, classpath
+│   ├── pnpm/module.ae         # package mgr: npm dep resolution via pnpm
+│   ├── jest/module.ae         # test runner: Jest
+│   ├── webpack/module.ae      # bundler: Webpack
+│   ├── angular/module.ae      # framework: ngc, ng build
+│   └── container/module.ae    # infra: OCI images, LXC containers
 ├── README.md
-└── TODO.md               # roadmap: config DSL, parallelism, sandboxing
+└── TODO.md
 ```
 
 The consuming monorepo needs SDK modules in `lib/` to resolve imports.

@@ -10,7 +10,7 @@ build_libs_cart_cart_H_page(s: ptr) {
     dep(b, "libs/shared/cart/state")
     dep(b, "libs/shared/product/state")
     dep(b, "libs/shared/product/ui")
-    ts.tsc_project(b) {
+    ts.tsc(b) {
         skip_lib_check()
     }
 }

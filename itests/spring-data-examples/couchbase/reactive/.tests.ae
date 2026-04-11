@@ -1,5 +1,6 @@
 import build
-import build (dep, load_bom_file)
+import build (dep)
+import maven (load_bom_file)
 import java
 import java (release, source_layout, enable_preview, test_timeout)
 
@@ -13,7 +14,7 @@ main() {
     dep(b, "io.projectreactor:reactor-test")
     java.javac_test(b) {
         release("25")
-        source_layout("maven")
+        source_layout("maven idiomatic")
         enable_preview()
     }
     java.junit5(b) {

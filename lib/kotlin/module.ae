@@ -1,5 +1,6 @@
 // kotlin — Kotlin SDK for aether.build
 import build
+import maven
 
 extern map_new() -> ptr
 extern map_put(m: ptr, key: string, value: ptr)
@@ -117,7 +118,7 @@ builder kotlinc(ctx: ptr) {
     stdlib_jar = path_join(kotlin_home, "lib/kotlin-stdlib.jar")
 
     dep_cp = build._build_dep_classpath(ctx)
-    maven_cp = build._build_maven_classpath(ctx)
+    maven_cp = maven.classpath(ctx)
     classpath = string_concat(classes_dir, ":")
     classpath = string_concat(classpath, stdlib_jar)
     if string_length(dep_cp) > 0 {
@@ -131,7 +132,7 @@ builder kotlinc(ctx: ptr) {
     argfile = path_join(target_dir, "kotlinc_sources.txt")
     if map_has(_builder, "source_layout") == 1 {
         layout = map_get(_builder, "source_layout")
-        if layout == "maven" {
+        if layout == "maven idiomatic" {
             src_root = path_join(source_dir, "src/main/kotlin")
             os_system("find '${src_root}' -name '*.kt' > '${argfile}' 2>/dev/null || true")
         }

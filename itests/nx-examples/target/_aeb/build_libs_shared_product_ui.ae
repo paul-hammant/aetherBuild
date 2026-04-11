@@ -8,7 +8,7 @@ build_libs_shared_product_ui(s: ptr) {
     if b == 0 { return 0 }
     load_deps_file(b, "../../../../base.deps.ae")
     dep(b, "libs/shared/jsxify")
-    ts.tsc_project(b) {
+    ts.tsc(b) {
         skip_lib_check()
     }
 }

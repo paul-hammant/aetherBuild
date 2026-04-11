@@ -100,16 +100,16 @@ If your project uses a parent POM that manages dependency versions (like `spring
 
 ```aether
 // spring-boot.bom.ae
-import build
-import build (bom, repo)
+import maven
+import maven (bom, repo)
 
 main() {
-    b = build.boms()
+    b = maven.context()
     bom(b, "org.springframework.boot:spring-boot-dependencies:4.0.4")
 }
 ```
 
-This file is referenced by `load_bom_file()` in each module's build file. Different subtrees can use different BOM files.
+This file is referenced by `maven.load_bom_file()` in each module's build file. Different subtrees can use different BOM files.
 
 If your project uses snapshot or milestone repositories, add them:
 
@@ -175,8 +175,8 @@ dep(b, "mongodb/util")
 **BOM overrides** — when a module needs a different BOM version:
 ```aether
 load_bom_file(b, "../../spring-boot.bom.ae")
-build.bom(b, "org.springframework.data:spring-data-bom:2026.0.0-M2")
-build.repo(b, "https://repo.spring.io/milestone")
+maven.bom(b, "org.springframework.data:spring-data-bom:2026.0.0-M2")
+maven.repo(b, "https://repo.spring.io/milestone")
 ```
 
 **QueryDSL / annotation processing** — add the APT dep and generated sources dir:

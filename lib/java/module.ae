@@ -1,5 +1,6 @@
 // java — Java SDK for aether.build
 import build
+import maven
 
 extern map_new() -> ptr
 extern map_put(m: ptr, key: string, value: ptr)
@@ -235,7 +236,7 @@ builder javac(ctx: ptr) {
 
     // Build classpath: dep modules + maven deps
     dep_cp = build._build_dep_classpath(ctx)
-    maven_cp = build._build_maven_classpath(ctx)
+    maven_cp = maven.classpath(ctx)
     classpath = classes_dir
     if string_length(dep_cp) > 0 {
         tmp = string_concat(classpath, ":")
@@ -256,7 +257,7 @@ builder javac(ctx: ptr) {
     argfile = path_join(target_dir, "javac_sources.txt")
     if map_has(_builder, "source_layout") == 1 {
         layout = map_get(_builder, "source_layout")
-        if layout == "maven" {
+        if layout == "maven idiomatic" {
             src_root = path_join(source_dir, "src/main/java")
             os_system("find '${src_root}' -name '*.java' > '${argfile}' 2>/dev/null || true")
         }
@@ -348,7 +349,7 @@ builder javac_test(ctx: ptr) {
 
     dep_cp = build._build_dep_classpath(ctx)
     lib_cp = build._build_lib_classpath(ctx)
-    maven_cp = build._build_maven_classpath(ctx)
+    maven_cp = maven.classpath(ctx)
     classpath = test_classes
     if string_length(dep_cp) > 0 {
         tmp = string_concat(classpath, ":")
@@ -367,7 +368,7 @@ builder javac_test(ctx: ptr) {
     argfile = path_join(target_dir, "javac_test_sources.txt")
     if map_has(_builder, "source_layout") == 1 {
         layout = map_get(_builder, "source_layout")
-        if layout == "maven" {
+        if layout == "maven idiomatic" {
             src_root = path_join(source_dir, "src/test/java")
             os_system("find '${src_root}' -name '*.java' > '${argfile}' 2>/dev/null || true")
         }
@@ -546,7 +547,7 @@ builder junit5(ctx: ptr) {
 
     dep_cp = build._build_dep_classpath(ctx)
     lib_cp = build._build_lib_classpath(ctx)
-    maven_cp = build._build_maven_classpath(ctx)
+    maven_cp = maven.classpath(ctx)
     classpath = test_classes
     if string_length(dep_cp) > 0 {
         tmp = string_concat(classpath, ":")

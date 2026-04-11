@@ -1,4 +1,4 @@
-// gomod — Go SDK for aether.build
+// go — Go SDK for aether.build
 import build
 
 extern map_put(m: ptr, key: string, value: ptr)

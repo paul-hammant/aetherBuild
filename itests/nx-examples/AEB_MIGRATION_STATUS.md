@@ -4,7 +4,7 @@ After dropping nx as orchestrator, the dev team still needs:
 
 ## Still invoked by aeb daily
 
-- **TypeScript** (`tsc`) — `ts.tsc_project(b)` in `.build.ae` runs `tsc --project <tsconfig>` for each library and the React app. Resolves npm deps first via `build._resolve_npm_deps()`, then invokes `node_modules/.bin/tsc`.
+- **TypeScript** (`tsc`) — `ts.tsc_project(b)` in `.build.ae` runs `tsc --project <tsconfig>` for each library and the React app. Resolves npm deps first via `pnpm.resolve()`, then invokes `node_modules/.bin/tsc`.
 
 - **Angular compiler** (`ngc`) — `ts.ngc_project(b)` in `apps/products/.build.ae` runs `ngc --project <tsconfig>` instead of `tsc`. Same pattern as `tsc_project` but uses the Angular compiler binary for template compilation.
 

@@ -1,0 +1,17 @@
+import build
+import build (dep, load_third_party_deps)
+import ts
+import ts (skip_lib_check, tsconfig)
+
+build_itests_nx_H_examples_apps_cart(s: ptr) {
+    b = build.begin(s, "itests/nx-examples/apps/cart")
+    if b == 0 { return 0 }
+    load_third_party_deps(b, "../../react.deps.ae")
+    dep(b, "libs/cart/cart-page")
+    dep(b, "libs/shared/header")
+    dep(b, "libs/shared/styles")
+    ts.tsc_project(b) {
+        tsconfig("tsconfig.app.json")
+        skip_lib_check()
+    }
+}

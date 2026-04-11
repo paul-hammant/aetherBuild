@@ -1,10 +1,10 @@
 import build
 import build (dep, load_third_party_deps)
-import ts
+import jest
 
 main() {
     b = build.start()
     dep(b, "libs/shared/product/ui")
     load_third_party_deps(b, "../../../../base.deps.ae")
-    ts.jest_project(b)
+    jest.test(b)
 }
