@@ -1,8 +1,29 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # aeb — Aether Build runner
 # Scans .build.ae and .tests.ae files, extracts deps, generates a single
 # linked program, runs it. One process, one map, no subprocess coordination.
+#
+# Requires bash 4+ (uses associative arrays: declare -A).
+# macOS ships bash 3.2 by default; install a newer bash with:
+#   brew install bash
+# Then run aeb with the homebrew bash explicitly, or put it first on PATH:
+#   /opt/homebrew/bin/bash ./aeb
 set -eo pipefail
+
+# Re-exec under bash 4+ if the current shell is too old (macOS default is 3.2).
+if [[ -z "${AEB_BASH_OK:-}" ]]; then
+    if [[ -z "${BASH_VERSION:-}" ]] || [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+        for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash /opt/local/bin/bash; do
+            if [[ -x "$candidate" ]]; then
+                export AEB_BASH_OK=1
+                exec "$candidate" "$0" "$@"
+            fi
+        done
+        echo "aeb: requires bash 4+ (associative arrays). Install with: brew install bash" >&2
+        echo "aeb: detected bash version: ${BASH_VERSION:-unknown}" >&2
+        exit 1
+    fi
+fi
 
 AETHER="${AETHER:-ae}"
 AEB_HOME="$(cd "$(dirname "$0")" && pwd)"
@@ -101,7 +122,7 @@ for build_file in $(find . -name '.build.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
     dir=$(dirname "$build_file")
     module_dir="${dir#./}"
     BUILD_MODULES+=("$module_dir")
-    BUILD_DEPS["$module_dir"]="$(grep -oP '(?<=dep\(b, ")[^"]+' "$build_file" 2>/dev/null || true)"
+    BUILD_DEPS["$module_dir"]="$(sed -nE 's/.*dep\(b, "([^"]+)".*/\1/p' "$build_file" 2>/dev/null || true)"
     BUILD_FILES["$module_dir"]=1
 done
 
@@ -116,7 +137,7 @@ for test_file in $(find . -name '.tests.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
     dir=$(dirname "$test_file")
     module_dir="${dir#./}"
     TEST_MODULES+=("$module_dir")
-    TEST_DEPS["$module_dir"]="$(grep -oP '(?<=dep\(b, ")[^"]+' "$test_file" 2>/dev/null || true)"
+    TEST_DEPS["$module_dir"]="$(sed -nE 's/.*dep\(b, "([^"]+)".*/\1/p' "$test_file" 2>/dev/null || true)"
     TEST_FILES["$module_dir"]=1
 done
 
@@ -250,7 +271,7 @@ resolve_transitive_imports() {
         [[ -n "$mod" ]] || continue
         seen["$mod"]=1
         queue+=("$mod")
-    done < <(grep -oP '^import \K\w+' "$src" | sort -u)
+    done < <(sed -nE 's/^import ([A-Za-z_][A-Za-z0-9_]*).*/\1/p' "$src" | sort -u)
 
     # BFS through SDK module imports
     local i=0
@@ -265,7 +286,7 @@ resolve_transitive_imports() {
                 seen["$dep"]=1
                 queue+=("$dep")
             fi
-        done < <(grep -oP '^import \K\w+' "$mod_file" | sort -u)
+        done < <(sed -nE 's/^import ([A-Za-z_][A-Za-z0-9_]*).*/\1/p' "$mod_file" | sort -u)
     done
 
     # Return transitive imports not already fully imported in the source file.
@@ -274,7 +295,7 @@ resolve_transitive_imports() {
     local -A full_imports=()
     while IFS= read -r line; do
         [[ -n "$line" ]] && full_imports["$line"]=1
-    done < <(grep -oP '^import \K\w+$' "$src")
+    done < <(sed -nE 's/^import ([A-Za-z_][A-Za-z0-9_]*)$/\1/p' "$src")
 
     for mod in "${!seen[@]}"; do
         if [[ -z "${full_imports[$mod]+x}" ]]; then
@@ -409,12 +430,19 @@ AETHER_DIR="$(dirname "$(command -v "$AETHER")")"
 AETHER_LIB="$AETHER_DIR/libaether.a"
 
 # Link everything: orchestrator + all module .c files + runtime
+# --allow-multiple-definition is GNU ld only; macOS uses -Wl,-multiply_defined,suppress
+# (deprecated) — newer Apple ld handles duplicate symbols by default for weak syms.
+LINK_FLAGS=()
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    LINK_FLAGS+=(-Wl,--allow-multiple-definition)
+fi
+
 if [[ -f "$AETHER_LIB" ]]; then
     # Precompiled runtime available
     gcc -O2 -pipe -w "$ORCH_C" "${ALL_C_FILES[@]}" \
         -L"$AETHER_DIR" -laether \
         -o "$BUILD_BIN" -pthread -lm \
-        -Wl,--allow-multiple-definition \
+        "${LINK_FLAGS[@]}" \
         2>&1 || true
 else
     # Fall back to compiling runtime from source
@@ -423,7 +451,7 @@ else
         "$AETHER_ROOT"/runtime/*.c \
         -I"$AETHER_ROOT/runtime" \
         -o "$BUILD_BIN" -pthread -lm \
-        -Wl,--allow-multiple-definition \
+        "${LINK_FLAGS[@]}" \
         2>&1 || true
 fi
 
