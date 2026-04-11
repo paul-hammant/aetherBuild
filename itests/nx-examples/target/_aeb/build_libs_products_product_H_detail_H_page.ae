@@ -1,0 +1,15 @@
+import build
+import build (dep, load_deps_file)
+import ts
+import ts (skip_lib_check)
+
+build_libs_products_product_H_detail_H_page(s: ptr) {
+    b = build.begin(s, "libs/products/product-detail-page")
+    if b == 0 { return 0 }
+    load_deps_file(b, "../../../angular.deps.ae")
+    dep(b, "libs/shared/product/state")
+    dep(b, "libs/shared/product/ui")
+    ts.ngc_project(b) {
+        skip_lib_check()
+    }
+}

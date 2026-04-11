@@ -1,0 +1,18 @@
+import build
+import build (dep, load_bom_file)
+import kotlin
+import kotlin (source_layout, jvm_target, compiler_plugin)
+
+main() {
+    b = build.start()
+    load_bom_file(b, "../../spring-boot.bom.ae")
+    dep(b, "org.springframework.boot:spring-boot-starter-data-mongodb-reactive")
+    dep(b, "org.jetbrains.kotlin:kotlin-stdlib")
+    dep(b, "org.jetbrains.kotlin:kotlin-reflect")
+    dep(b, "org.jetbrains.kotlinx:kotlinx-coroutines-core")
+    dep(b, "org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
+    kotlin.kotlinc(b) {
+        jvm_target("25")
+        source_layout("maven")
+    }
+}

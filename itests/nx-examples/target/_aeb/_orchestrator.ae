@@ -1,0 +1,80 @@
+extern build_session(root: string) -> ptr
+extern build_done(s: ptr, module_dir: string)
+extern aether_args_get(index: int) -> string
+
+extern build_libs_products_product_H_detail_H_page(s: ptr) -> int
+extern build_libs_shared_header(s: ptr) -> int
+extern test_libs_shared_product_ui(s: ptr) -> int
+extern test_apps_products(s: ptr) -> int
+extern build_libs_shared_product_ui(s: ptr) -> int
+extern build_libs_shared_product_types(s: ptr) -> int
+extern test_libs_shared_cart_state(s: ptr) -> int
+extern build_libs_shared_cart_state(s: ptr) -> int
+extern build_libs_shared_product_state(s: ptr) -> int
+extern test_libs_shared_header(s: ptr) -> int
+extern test_libs_products_home_H_page(s: ptr) -> int
+extern build_apps_cart(s: ptr) -> int
+extern build_libs_cart_cart_H_page(s: ptr) -> int
+extern build_libs_shared_e2e_H_utils(s: ptr) -> int
+extern build_libs_shared_product_data(s: ptr) -> int
+extern build_apps_products(s: ptr) -> int
+extern test_libs_products_product_H_detail_H_page(s: ptr) -> int
+extern test_libs_cart_cart_H_page(s: ptr) -> int
+extern test_apps_cart(s: ptr) -> int
+extern build_libs_shared_jsxify(s: ptr) -> int
+extern build_libs_products_home_H_page(s: ptr) -> int
+extern test_libs_shared_product_state(s: ptr) -> int
+extern dist_apps_products(s: ptr) -> int
+extern dist_apps_cart(s: ptr) -> int
+
+main() {
+    s = build_session(aether_args_get(1))
+    build_libs_shared_product_types(s)
+    build_done(s, "libs/shared/product/types")
+    build_libs_shared_product_data(s)
+    build_done(s, "libs/shared/product/data")
+    build_libs_shared_product_state(s)
+    build_done(s, "libs/shared/product/state")
+    build_libs_shared_cart_state(s)
+    build_done(s, "libs/shared/cart/state")
+    build_libs_shared_jsxify(s)
+    build_done(s, "libs/shared/jsxify")
+    build_libs_shared_product_ui(s)
+    build_done(s, "libs/shared/product/ui")
+    build_libs_cart_cart_H_page(s)
+    build_done(s, "libs/cart/cart-page")
+    build_libs_shared_header(s)
+    build_done(s, "libs/shared/header")
+    build_apps_cart(s)
+    build_done(s, "apps/cart")
+    build_libs_products_home_H_page(s)
+    build_done(s, "libs/products/home-page")
+    build_libs_products_product_H_detail_H_page(s)
+    build_done(s, "libs/products/product-detail-page")
+    build_apps_products(s)
+    build_done(s, "apps/products")
+    build_libs_shared_e2e_H_utils(s)
+    build_done(s, "libs/shared/e2e-utils")
+    dist_apps_cart(s)
+    build_done(s, "dist:apps/cart")
+    dist_apps_products(s)
+    build_done(s, "dist:apps/products")
+    test_apps_cart(s)
+    build_done(s, "test:apps/cart")
+    test_apps_products(s)
+    build_done(s, "test:apps/products")
+    test_libs_cart_cart_H_page(s)
+    build_done(s, "test:libs/cart/cart-page")
+    test_libs_products_home_H_page(s)
+    build_done(s, "test:libs/products/home-page")
+    test_libs_products_product_H_detail_H_page(s)
+    build_done(s, "test:libs/products/product-detail-page")
+    test_libs_shared_cart_state(s)
+    build_done(s, "test:libs/shared/cart/state")
+    test_libs_shared_header(s)
+    build_done(s, "test:libs/shared/header")
+    test_libs_shared_product_state(s)
+    build_done(s, "test:libs/shared/product/state")
+    test_libs_shared_product_ui(s)
+    build_done(s, "test:libs/shared/product/ui")
+}

@@ -1,0 +1,15 @@
+import build
+import build (dep, load_third_party_deps)
+import ts
+import ts (skip_lib_check)
+
+main() {
+    b = build.start()
+    load_third_party_deps(b, "../../../react.deps.ae")
+    dep(b, "libs/shared/cart/state")
+    dep(b, "libs/shared/product/state")
+    dep(b, "libs/shared/product/ui")
+    ts.tsc_project(b) {
+        skip_lib_check()
+    }
+}

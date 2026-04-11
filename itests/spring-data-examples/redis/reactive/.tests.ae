@@ -1,0 +1,23 @@
+import build
+import build (dep, load_bom_file)
+import java
+import java (release, source_layout, enable_preview, test_timeout)
+
+main() {
+    b = build.start()
+    dep(b, "redis/reactive")
+    load_bom_file(b, "../../spring-boot.bom.ae")
+    dep(b, "org.springframework.boot:spring-boot-starter-test")
+    dep(b, "org.springframework.boot:spring-boot-data-redis-test")
+    dep(b, "org.junit.platform:junit-platform-console")
+    dep(b, "io.projectreactor:reactor-test")
+    java.javac_test(b) {
+        release("25")
+        source_layout("maven")
+        enable_preview()
+    }
+    java.junit5(b) {
+        test_timeout("30")
+        enable_preview()
+    }
+}

@@ -141,13 +141,13 @@ Angular 21+ uses Ivy natively — no `ngcc` step needed. For Angular 11-16, run 
 ```aether
 // libs/shared/product/types/.build.ae
 import build
-import build (dep, load_deps_file)
+import build (dep, load_third_party_deps)
 import ts
 import ts (skip_lib_check)
 
 main() {
     b = build.start()
-    load_deps_file(b, "../../../../base.deps.ae")
+    load_third_party_deps(b, "../../../../base.deps.ae")
     ts.tsc_project(b) {
         skip_lib_check()
     }
@@ -158,13 +158,13 @@ For modules with inter-module deps:
 ```aether
 // libs/shared/product/state/.build.ae  (Angular)
 import build
-import build (dep, load_deps_file)
+import build (dep, load_third_party_deps)
 import ts
 import ts (skip_lib_check)
 
 main() {
     b = build.start()
-    load_deps_file(b, "../../../../angular.deps.ae")
+    load_third_party_deps(b, "../../../../angular.deps.ae")
     dep(b, "libs/shared/product/data")
     dep(b, "libs/shared/product/types")
     ts.ngc_project(b) {
@@ -179,13 +179,13 @@ Apps use `tsconfig.app.json` instead of `tsconfig.lib.json`:
 ```aether
 // apps/products/.build.ae
 import build
-import build (dep, load_deps_file)
+import build (dep, load_third_party_deps)
 import ts
 import ts (skip_lib_check, tsconfig)
 
 main() {
     b = build.start()
-    load_deps_file(b, "../../angular.deps.ae")
+    load_third_party_deps(b, "../../angular.deps.ae")
     dep(b, "libs/products/home-page")
     dep(b, "libs/products/product-detail-page")
     ts.ngc_project(b) {
@@ -210,13 +210,13 @@ main() {
 ```aether
 // libs/shared/product/state/.tests.ae
 import build
-import build (dep, load_deps_file)
+import build (dep, load_third_party_deps)
 import ts
 
 main() {
     b = build.start()
     dep(b, "libs/shared/product/state")
-    load_deps_file(b, "../../../../angular.deps.ae")
+    load_third_party_deps(b, "../../../../angular.deps.ae")
     ts.jest_project(b)
 }
 ```
@@ -293,13 +293,13 @@ module.exports = {
 ```aether
 // apps/cart/.dist.ae
 import build
-import build (dep, load_deps_file)
+import build (dep, load_third_party_deps)
 import ts
 
 main() {
     b = build.start()
     dep(b, "apps/cart")
-    load_deps_file(b, "../../react.deps.ae")
+    load_third_party_deps(b, "../../react.deps.ae")
     ts.webpack_bundle(b)
 }
 ```
@@ -328,13 +328,13 @@ Create a minimal `angular.json` at the repo root with the app's build config:
 ```aether
 // apps/products/.dist.ae
 import build
-import build (dep, load_deps_file)
+import build (dep, load_third_party_deps)
 import ts
 
 main() {
     b = build.start()
     dep(b, "apps/products")
-    load_deps_file(b, "../../angular.deps.ae")
+    load_third_party_deps(b, "../../angular.deps.ae")
     ts.ng_build(b)
 }
 ```

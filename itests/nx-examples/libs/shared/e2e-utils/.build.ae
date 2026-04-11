@@ -1,0 +1,12 @@
+import build
+import build (dep, load_third_party_deps)
+import ts
+import ts (skip_lib_check)
+
+main() {
+    b = build.start()
+    load_third_party_deps(b, "../../../base.deps.ae")
+    ts.tsc_project(b) {
+        skip_lib_check()
+    }
+}

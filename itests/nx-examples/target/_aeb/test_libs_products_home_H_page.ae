@@ -1,0 +1,11 @@
+import build
+import build (dep, load_deps_file)
+import ts
+
+test_libs_products_home_H_page(s: ptr) {
+    b = build.begin(s, "test:libs/products/home-page")
+    if b == 0 { return 0 }
+    dep(b, "libs/products/home-page")
+    load_deps_file(b, "../../../angular.deps.ae")
+    ts.jest_project(b)
+}

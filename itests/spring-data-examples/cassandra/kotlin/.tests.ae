@@ -1,0 +1,28 @@
+import build
+import build (dep, load_bom_file)
+import kotlin
+import kotlin (source_layout, jvm_target)
+import java
+import java (release, source_layout, enable_preview, test_timeout)
+
+main() {
+    b = build.start()
+    dep(b, "cassandra/kotlin")
+    dep(b, "cassandra/util")
+    load_bom_file(b, "../../spring-boot.bom.ae")
+    dep(b, "org.springframework.boot:spring-boot-starter-test")
+    dep(b, "org.springframework.boot:spring-boot-data-cassandra-test")
+    dep(b, "org.junit.platform:junit-platform-console")
+    dep(b, "org.testcontainers:testcontainers-cassandra")
+    dep(b, "org.testcontainers:testcontainers-junit-jupiter")
+    dep(b, "org.apache.commons:commons-lang3")
+    dep(b, "commons-io:commons-io:2.18.0")
+    kotlin.kotlinc_test(b) {
+        jvm_target("25")
+        source_layout("maven")
+    }
+    java.junit5(b) {
+        test_timeout("120")
+        enable_preview()
+    }
+}

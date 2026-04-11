@@ -1,0 +1,10 @@
+import build
+import build (dep, load_third_party_deps)
+import ts
+
+main() {
+    b = build.start()
+    dep(b, "libs/shared/header")
+    load_third_party_deps(b, "../../../base.deps.ae")
+    ts.jest_project(b)
+}

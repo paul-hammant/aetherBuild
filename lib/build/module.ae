@@ -566,9 +566,9 @@ _resolve_npm_deps(ctx: ptr) {
     return nm_dir
 }
 
-// Load a shared deps file (.deps.ae) — same mechanism as load_bom_file
-// but also extracts dep() lines for npm packages.
-load_deps_file(ctx: ptr, rel_path: string) {
+// Load a shared third-party deps file (.deps.ae) — same mechanism as load_bom_file
+// but also extracts dep() lines for npm packages. Not for in-repo module deps.
+load_third_party_deps(ctx: ptr, rel_path: string) {
     source_dir = _get(ctx, "source_dir")
     full_path = path_join(source_dir, rel_path)
     if file_exists(full_path) == 0 {

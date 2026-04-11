@@ -285,4 +285,8 @@ deps are missing go get them and place them in there
 
 2. maven should have its own aeb module - those should not be comingled with java module
 
- 
+3. Surefire equivalent in aeb grammar — `build.junit(b)` already handles
+   the core case (find test classes, fork JVM, run with JUnit). Missing
+   pieces vs Surefire: test filtering/includes/excludes, parallel forks,
+   XML report output. Add incrementally to the Java SDK as needed.
+

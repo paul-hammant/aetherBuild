@@ -1,0 +1,10 @@
+import build
+import build (dep, load_third_party_deps)
+import ts
+
+main() {
+    b = build.start()
+    dep(b, "libs/shared/cart/state")
+    load_third_party_deps(b, "../../../../angular.deps.ae")
+    ts.jest_project(b)
+}

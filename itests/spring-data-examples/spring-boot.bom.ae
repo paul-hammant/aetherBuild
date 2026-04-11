@@ -1,0 +1,7 @@
+import build
+import build (bom, repo)
+
+main() {
+    b = build.boms()
+    bom(b, "org.springframework.boot:spring-boot-dependencies:4.0.4")
+}

@@ -1,0 +1,13 @@
+import build
+import build (dep, load_third_party_deps)
+import ts
+import ts (skip_lib_check)
+
+main() {
+    b = build.start()
+    load_third_party_deps(b, "../../../base.deps.ae")
+    dep(b, "libs/shared/jsxify")
+    ts.tsc_project(b) {
+        skip_lib_check()
+    }
+}

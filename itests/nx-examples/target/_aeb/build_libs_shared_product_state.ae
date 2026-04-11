@@ -1,0 +1,15 @@
+import build
+import build (dep, load_deps_file)
+import ts
+import ts (skip_lib_check)
+
+build_libs_shared_product_state(s: ptr) {
+    b = build.begin(s, "libs/shared/product/state")
+    if b == 0 { return 0 }
+    load_deps_file(b, "../../../../angular.deps.ae")
+    dep(b, "libs/shared/product/data")
+    dep(b, "libs/shared/product/types")
+    ts.ngc_project(b) {
+        skip_lib_check()
+    }
+}

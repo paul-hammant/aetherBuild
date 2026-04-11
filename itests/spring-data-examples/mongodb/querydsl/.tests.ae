@@ -1,0 +1,27 @@
+import build
+import build (dep, load_bom_file)
+import java
+import java (release, source_layout, enable_preview, test_timeout)
+
+main() {
+    b = build.start()
+    dep(b, "mongodb/querydsl")
+    dep(b, "mongodb/util")
+    load_bom_file(b, "../../spring-boot.bom.ae")
+    dep(b, "org.springframework.boot:spring-boot-starter-test")
+    dep(b, "org.springframework.boot:spring-boot-data-mongodb-test")
+    dep(b, "org.junit.platform:junit-platform-console")
+    dep(b, "org.testcontainers:testcontainers-mongodb")
+    dep(b, "org.testcontainers:testcontainers-junit-jupiter")
+    dep(b, "org.apache.commons:commons-lang3")
+    dep(b, "commons-io:commons-io:2.18.0")
+    java.javac_test(b) {
+        release("25")
+        source_layout("maven")
+        enable_preview()
+    }
+    java.junit5(b) {
+        test_timeout("120")
+        enable_preview()
+    }
+}

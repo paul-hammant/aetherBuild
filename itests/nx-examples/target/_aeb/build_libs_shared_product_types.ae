@@ -1,0 +1,13 @@
+import build
+import build (dep, load_deps_file)
+import ts
+import ts (skip_lib_check)
+
+build_libs_shared_product_types(s: ptr) {
+    b = build.begin(s, "libs/shared/product/types")
+    if b == 0 { return 0 }
+    load_deps_file(b, "../../../../base.deps.ae")
+    ts.tsc_project(b) {
+        skip_lib_check()
+    }
+}

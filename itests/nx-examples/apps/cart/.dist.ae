@@ -1,0 +1,10 @@
+import build
+import build (dep, load_third_party_deps)
+import ts
+
+main() {
+    b = build.start()
+    dep(b, "apps/cart")
+    load_third_party_deps(b, "../../react.deps.ae")
+    ts.webpack_bundle(b)
+}

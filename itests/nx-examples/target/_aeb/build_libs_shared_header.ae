@@ -1,0 +1,14 @@
+import build
+import build (dep, load_deps_file)
+import ts
+import ts (skip_lib_check)
+
+build_libs_shared_header(s: ptr) {
+    b = build.begin(s, "libs/shared/header")
+    if b == 0 { return 0 }
+    load_deps_file(b, "../../../base.deps.ae")
+    dep(b, "libs/shared/jsxify")
+    ts.tsc_project(b) {
+        skip_lib_check()
+    }
+}

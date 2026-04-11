@@ -1,0 +1,16 @@
+import build
+import build (dep, load_third_party_deps)
+import ts
+import ts (skip_lib_check, tsconfig)
+
+main() {
+    b = build.start()
+    load_third_party_deps(b, "../../react.deps.ae")
+    dep(b, "libs/cart/cart-page")
+    dep(b, "libs/shared/header")
+    dep(b, "libs/shared/styles")
+    ts.tsc_project(b) {
+        tsconfig("tsconfig.app.json")
+        skip_lib_check()
+    }
+}

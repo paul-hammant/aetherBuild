@@ -1,0 +1,16 @@
+import build
+import build (dep, load_bom_file)
+import java
+import java (release, source_layout, enable_preview)
+
+main() {
+    b = build.start()
+    load_bom_file(b, "../../spring-boot.bom.ae")
+    dep(b, "org.springframework.boot:spring-boot-starter-data-redis")
+    dep(b, "org.projectlombok:lombok")
+    java.javac(b) {
+        release("25")
+        source_layout("maven")
+        enable_preview()
+    }
+}

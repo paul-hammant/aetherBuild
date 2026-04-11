@@ -1,0 +1,16 @@
+import build
+import build (dep, load_deps_file)
+import ts
+import ts (skip_lib_check)
+
+build_libs_cart_cart_H_page(s: ptr) {
+    b = build.begin(s, "libs/cart/cart-page")
+    if b == 0 { return 0 }
+    load_deps_file(b, "../../../react.deps.ae")
+    dep(b, "libs/shared/cart/state")
+    dep(b, "libs/shared/product/state")
+    dep(b, "libs/shared/product/ui")
+    ts.tsc_project(b) {
+        skip_lib_check()
+    }
+}

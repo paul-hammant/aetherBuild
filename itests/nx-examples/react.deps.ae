@@ -1,0 +1,16 @@
+import build
+import build (dep)
+
+main() {
+    b = build.deps()
+    dep(b, "npm:typescript:5.9.2")
+    dep(b, "npm:tslib:2.8.1")
+    dep(b, "npm:rxjs:7.8.2")
+    dep(b, "npm:react:18.3.1")
+    dep(b, "npm:react-dom:18.3.1")
+    dep(b, "npm:react-router-dom:6.11.2")
+    dep(b, "npm:@emotion/react:11.14.0")
+    dep(b, "npm:@emotion/styled:11.14.0")
+    dep(b, "npm:@types/react:18.3.1")
+    dep(b, "npm:@types/react-dom:18.3.0")
+}
