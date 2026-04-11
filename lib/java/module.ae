@@ -69,6 +69,22 @@ module_path(_ctx: ptr, path: string) {
     map_put(_ctx, "module_path", path)
 }
 
+source_layout(_ctx: ptr, layout: string) {
+    map_put(_ctx, "source_layout", layout)
+}
+
+processor_path(_ctx: ptr, path: string) {
+    map_put(_ctx, "processor_path", path)
+}
+
+test_timeout(_ctx: ptr, seconds: string) {
+    map_put(_ctx, "test_timeout", seconds)
+}
+
+generated_sources(_ctx: ptr, dir: string) {
+    map_put(_ctx, "generated_sources", dir)
+}
+
 jvm_args(_ctx: ptr, arg: string) {
     if map_has(_ctx, "jvm_args") == 1 {
         prev = map_get(_ctx, "jvm_args")
@@ -157,6 +173,16 @@ javac_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr) 
             cmd = string_concat(cmd, " -processor ${val}")
         }
 
+        if map_has(opts, "processor_path") == 1 {
+            val = map_get(opts, "processor_path")
+            cmd = string_concat(cmd, " -processorpath ${val}")
+        }
+
+        if map_has(opts, "generated_sources") == 1 {
+            val = map_get(opts, "generated_sources")
+            cmd = string_concat(cmd, " -s ${val}")
+        }
+
         if map_has(opts, "extra") == 1 {
             val = map_get(opts, "extra")
             cmd = string_concat(cmd, " ${val}")
@@ -205,39 +231,70 @@ builder javac(ctx: ptr) {
     build._mkdirs(ts_dir)
     ts_file = path_join(ts_dir, ".timestamp")
 
-    if build._needs_rebuild(source_dir, ts_file) == 0 {
-        println("${mod_dir}: skipping compilation of prod code (not changed)")
-        return 0
-    }
-
     println("${mod_dir}: compiling prod code")
 
+    // Build classpath: dep modules + maven deps
     dep_cp = build._build_dep_classpath(ctx)
+    maven_cp = build._build_maven_classpath(ctx)
     classpath = classes_dir
     if string_length(dep_cp) > 0 {
         tmp = string_concat(classpath, ":")
         classpath = string_concat(tmp, dep_cp)
     }
+    if string_length(maven_cp) > 0 {
+        tmp_m = string_concat(classpath, ":")
+        classpath = string_concat(tmp_m, maven_cp)
+    }
 
-    pat = path_join(source_dir, "*.java")
-    file_list = build._collect_file_list(pat)
-    if string_length(file_list) == 0 {
+    // Create generated sources dir if requested (for annotation processors like QueryDSL)
+    if map_has(_builder, "generated_sources") == 1 {
+        gen_dir = map_get(_builder, "generated_sources")
+        build._mkdirs(gen_dir)
+    }
+
+    // Write source file list to an argfile (avoids command-line length limits)
+    argfile = path_join(target_dir, "javac_sources.txt")
+    if map_has(_builder, "source_layout") == 1 {
+        layout = map_get(_builder, "source_layout")
+        if layout == "maven" {
+            src_root = path_join(source_dir, "src/main/java")
+            os_system("find '${src_root}' -name '*.java' > '${argfile}' 2>/dev/null || true")
+        }
+    } else {
+        os_system("find '${source_dir}' -maxdepth 1 -name '*.java' > '${argfile}' 2>/dev/null || true")
+    }
+
+    argfile_content = string_trim(io_read_file(argfile))
+    if string_length(argfile_content) == 0 {
         println("${mod_dir}: no Java source files found")
         return 0
     }
 
-    cmd = javac_cmd(classes_dir, classpath, file_list, _builder)
+    file_ref = string_concat("@", argfile)
+
+    // Auto-set processorpath to maven classpath for annotation processor discovery
+    if string_length(maven_cp) > 0 {
+        if map_has(_builder, "processor_path") == 0 {
+            map_put(_builder, "processor_path", maven_cp)
+        }
+    }
+
+    cmd = javac_cmd(classes_dir, classpath, file_ref, _builder)
     exit_code = os_system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: javac failed")
         return exit_code
     }
 
-    // Write classpath artifact
+    // Write classpath artifact (classes dir + dep classpath + maven classpath)
     cp_out = classes_dir
     if string_length(dep_cp) > 0 {
         tmp2 = string_concat(cp_out, "\n")
         cp_out = string_concat(tmp2, dep_cp)
+    }
+    if string_length(maven_cp) > 0 {
+        tmp3 = string_concat(cp_out, "\n")
+        cp_out = string_concat(tmp3, maven_cp)
     }
     build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", cp_out)
 
@@ -287,15 +344,11 @@ builder javac_test(ctx: ptr) {
     build._mkdirs(ts_dir)
     ts_file = path_join(ts_dir, ".timestamp")
 
-    if build._needs_rebuild(source_dir, ts_file) == 0 {
-        println("${mod_dir}: skipping compilation of test code (not changed)")
-        return 0
-    }
-
     println("${mod_dir}: compiling test code")
 
     dep_cp = build._build_dep_classpath(ctx)
     lib_cp = build._build_lib_classpath(ctx)
+    maven_cp = build._build_maven_classpath(ctx)
     classpath = test_classes
     if string_length(dep_cp) > 0 {
         tmp = string_concat(classpath, ":")
@@ -305,15 +358,39 @@ builder javac_test(ctx: ptr) {
         tmp2 = string_concat(classpath, ":")
         classpath = string_concat(tmp2, lib_cp)
     }
+    if string_length(maven_cp) > 0 {
+        tmp3 = string_concat(classpath, ":")
+        classpath = string_concat(tmp3, maven_cp)
+    }
 
-    pat = path_join(source_dir, "*.java")
-    file_list = build._collect_file_list(pat)
-    if string_length(file_list) == 0 {
+    // Write source file list to an argfile (avoids command-line length limits)
+    argfile = path_join(target_dir, "javac_test_sources.txt")
+    if map_has(_builder, "source_layout") == 1 {
+        layout = map_get(_builder, "source_layout")
+        if layout == "maven" {
+            src_root = path_join(source_dir, "src/test/java")
+            os_system("find '${src_root}' -name '*.java' > '${argfile}' 2>/dev/null || true")
+        }
+    } else {
+        os_system("find '${source_dir}' -maxdepth 1 -name '*.java' > '${argfile}' 2>/dev/null || true")
+    }
+
+    argfile_content = string_trim(io_read_file(argfile))
+    if string_length(argfile_content) == 0 {
         println("${mod_dir}: no test source files found")
         return 0
     }
 
-    cmd = javac_cmd(test_classes, classpath, file_list, _builder)
+    file_ref = string_concat("@", argfile)
+
+    // Auto-set processorpath for annotation processor discovery
+    if string_length(maven_cp) > 0 {
+        if map_has(_builder, "processor_path") == 0 {
+            map_put(_builder, "processor_path", maven_cp)
+        }
+    }
+
+    cmd = javac_cmd(test_classes, classpath, file_ref, _builder)
     exit_code = os_system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: javac (test) failed")
@@ -343,8 +420,19 @@ builder junit(ctx: ptr) {
         classpath = string_concat(tmp2, lib_cp)
     }
 
-    tc_pat = path_join(test_classes, "**/*Tests.class")
+    tc_pat = path_join(test_classes, "**/*Test.class")
     test_files = fs_glob(tc_pat)
+    // Also match *Tests.class (plural)
+    tc_pat2 = path_join(test_classes, "**/*Tests.class")
+    test_files2 = fs_glob(tc_pat2)
+    tf2_count = dir_list_count(test_files2)
+    // If the first glob found nothing, use the second
+    if dir_list_count(test_files) == 0 {
+        dir_list_free(test_files)
+        test_files = test_files2
+    } else {
+        dir_list_free(test_files2)
+    }
     tcount = dir_list_count(test_files)
     if tcount == 0 {
         println("${mod_dir}: no test classes found")
@@ -396,6 +484,112 @@ builder junit(ctx: ptr) {
     println("${mod_dir}: running tests")
     cmd = junit_cmd(classpath, class_names, ld_path, _builder)
     exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}
+
+// --- JUnit 5 (Jupiter) ---
+
+junit5_cmd(classpath: string, test_classes_dir: string, ld_path: string, opts: ptr) {
+    // Wrap with timeout to prevent hanging on missing external services
+    timeout_secs = "60"
+    if opts != null {
+        if map_has(opts, "test_timeout") == 1 {
+            timeout_secs = map_get(opts, "test_timeout")
+        }
+    }
+    cmd = "timeout ${timeout_secs}"
+
+    // Detect podman socket for TestContainers support
+    if string_length(ld_path) > 0 {
+        cmd = string_concat(cmd, " env LD_LIBRARY_PATH=${ld_path} java")
+        cmd = string_concat(cmd, " -Djava.library.path=${ld_path}")
+    } else {
+        cmd = string_concat(cmd, " java")
+    }
+    cmd = string_concat(cmd, " -Dtestcontainers.ryuk.disabled=true")
+
+    if opts != null {
+        if map_has(opts, "jvm_args") == 1 {
+            val = map_get(opts, "jvm_args")
+            cmd = string_concat(cmd, " ${val}")
+        }
+        if map_has(opts, "extra") == 1 {
+            val = map_get(opts, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    if opts != null {
+        if map_has(opts, "enable_preview") == 1 {
+            cmd = string_concat(cmd, " --enable-preview")
+        }
+    }
+
+    cmd = string_concat(cmd, " -cp ${classpath}")
+    cmd = string_concat(cmd, " org.junit.platform.console.ConsoleLauncher")
+    cmd = string_concat(cmd, " execute")
+    cmd = string_concat(cmd, " --scan-classpath=${test_classes_dir}")
+    cmd = string_concat(cmd, " --fail-if-no-tests")
+    return cmd
+}
+
+builder junit5(ctx: ptr) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+
+    dep_cp = build._build_dep_classpath(ctx)
+    lib_cp = build._build_lib_classpath(ctx)
+    maven_cp = build._build_maven_classpath(ctx)
+    classpath = test_classes
+    if string_length(dep_cp) > 0 {
+        tmp = string_concat(classpath, ":")
+        classpath = string_concat(tmp, dep_cp)
+    }
+    if string_length(lib_cp) > 0 {
+        tmp2 = string_concat(classpath, ":")
+        classpath = string_concat(tmp2, lib_cp)
+    }
+    if string_length(maven_cp) > 0 {
+        tmp3 = string_concat(classpath, ":")
+        classpath = string_concat(tmp3, maven_cp)
+    }
+
+    // Build LD_LIBRARY_PATH from deps' ldlibdeps
+    deps = map_get(ctx, "deps")
+    ndeps = list_size(deps)
+    ld_path = ""
+    m = 0
+    while m < ndeps {
+        dp3 = list_get(deps, m)
+        dm3 = build._strip_lang(dp3)
+        dep_ld = build._read_dep_artifact(ctx, dm3, "ldlibdeps")
+        if string_length(dep_ld) > 0 {
+            ld_dirs = string_trim(os_exec("echo '${dep_ld}' | while read -r line; do [ -n \"$line\" ] && dirname \"$line\"; done | sort -u | tr '\n' ':' | sed 's/:$//'"))
+            if string_length(ld_dirs) > 0 {
+                if string_length(ld_path) > 0 {
+                    ld_path = string_concat(string_concat(ld_path, ":"), ld_dirs)
+                } else {
+                    ld_path = ld_dirs
+                }
+            }
+        }
+        m = m + 1
+    }
+
+    println("${mod_dir}: running tests (JUnit 5)")
+    cmd = junit5_cmd(classpath, test_classes, ld_path, _builder)
+    exit_code = os_system(cmd)
+    if exit_code == 124 {
+        println("${mod_dir}: tests TIMEOUT (killed after timeout)")
+        return exit_code
+    }
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")
         return exit_code

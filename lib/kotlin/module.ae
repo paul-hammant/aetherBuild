@@ -9,9 +9,13 @@ extern list_get(l: ptr, index: int) -> ptr
 extern list_size(l: ptr) -> int
 extern os_getenv(name: string) -> string
 extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern file_exists(path: string) -> int
 extern path_join(a: string, b: string) -> string
 extern string_concat(a: string, b: string) -> string
 extern string_length(s: string) -> int
+extern string_trim(s: string) -> string
+extern io_read_file(path: string) -> string
 extern io_write_file(path: string, content: string) -> int
 
 // --- Kotlin DSL setters ---
@@ -26,6 +30,21 @@ api_version(_ctx: ptr, ver: string) {
 
 language_version(_ctx: ptr, ver: string) {
     map_put(_ctx, "language_version", ver)
+}
+
+source_layout(_ctx: ptr, layout: string) {
+    map_put(_ctx, "source_layout", layout)
+}
+
+compiler_plugin(_ctx: ptr, path: string) {
+    if map_has(_ctx, "compiler_plugin") == 1 {
+        prev = map_get(_ctx, "compiler_plugin")
+        combined = string_concat(prev, ",")
+        combined = string_concat(combined, path)
+        map_put(_ctx, "compiler_plugin", combined)
+    } else {
+        map_put(_ctx, "compiler_plugin", path)
+    }
 }
 
 // --- Command builder ---
@@ -54,6 +73,10 @@ kotlinc_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr
         }
         if map_has(opts, "verbose") == 1 {
             cmd = string_concat(cmd, " -verbose")
+        }
+        if map_has(opts, "compiler_plugin") == 1 {
+            val = map_get(opts, "compiler_plugin")
+            cmd = string_concat(cmd, " -Xplugin=${val}")
         }
         if map_has(opts, "extra") == 1 {
             val = map_get(opts, "extra")
@@ -89,25 +112,41 @@ builder kotlinc(ctx: ptr) {
 
     kotlin_home = os_getenv("KOTLIN_HOME")
     if kotlin_home == 0 {
-        kotlin_home = "/usr/share/kotlin/kotlinc"
+        kotlin_home = "/snap/kotlin/current/bin/.."
     }
     stdlib_jar = path_join(kotlin_home, "lib/kotlin-stdlib.jar")
 
     dep_cp = build._build_dep_classpath(ctx)
+    maven_cp = build._build_maven_classpath(ctx)
     classpath = string_concat(classes_dir, ":")
     classpath = string_concat(classpath, stdlib_jar)
     if string_length(dep_cp) > 0 {
         classpath = string_concat(string_concat(classpath, ":"), dep_cp)
     }
+    if string_length(maven_cp) > 0 {
+        classpath = string_concat(string_concat(classpath, ":"), maven_cp)
+    }
 
-    kt_pat = path_join(source_dir, "*.kt")
-    file_list = build._collect_file_list(kt_pat)
-    if string_length(file_list) == 0 {
+    // Write source file list to argfile
+    argfile = path_join(target_dir, "kotlinc_sources.txt")
+    if map_has(_builder, "source_layout") == 1 {
+        layout = map_get(_builder, "source_layout")
+        if layout == "maven" {
+            src_root = path_join(source_dir, "src/main/kotlin")
+            os_system("find '${src_root}' -name '*.kt' > '${argfile}' 2>/dev/null || true")
+        }
+    } else {
+        os_system("find '${source_dir}' -maxdepth 1 -name '*.kt' > '${argfile}' 2>/dev/null || true")
+    }
+
+    argfile_content = string_trim(io_read_file(argfile))
+    if string_length(argfile_content) == 0 {
         println("${mod_dir}: no Kotlin source files found")
         return 0
     }
+    file_ref = string_concat("@", argfile)
 
-    kc_cmd = kotlinc_cmd(classes_dir, classpath, file_list, _builder)
+    kc_cmd = kotlinc_cmd(classes_dir, classpath, file_ref, _builder)
     exit_code = os_system(kc_cmd)
     if exit_code != 0 {
         println("${mod_dir}: kotlinc failed")
@@ -118,6 +157,9 @@ builder kotlinc(ctx: ptr) {
     cp_out = string_concat(cp_out, stdlib_jar)
     if string_length(dep_cp) > 0 {
         cp_out = string_concat(string_concat(cp_out, "\n"), dep_cp)
+    }
+    if string_length(maven_cp) > 0 {
+        cp_out = string_concat(string_concat(cp_out, "\n"), maven_cp)
     }
     build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", cp_out)
 

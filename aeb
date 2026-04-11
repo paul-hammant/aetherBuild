@@ -6,6 +6,12 @@ set -eo pipefail
 
 AETHER="${AETHER:-ae}"
 AEB_HOME="$(cd "$(dirname "$0")" && pwd)"
+export AEB_HOME
+
+# Auto-detect podman socket for TestContainers
+if [[ -z "${DOCKER_HOST:-}" ]] && [[ -S "/run/user/$(id -u)/podman/podman.sock" ]]; then
+    export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+fi
 ROOT="$(pwd)"
 AEB_LIB=".aeb/lib"
 
@@ -68,7 +74,7 @@ done
 # --- Encode module path to C-safe function name ---
 # / → _    _ → __
 encode_name() {
-    echo "$1" | sed 's/__/\x00/g; s|/|_|g; s/\x00/__/g'
+    echo "$1" | sed 's/__/\x00/g; s|/|_|g; s/-/_H_/g; s/\x00/__/g'
 }
 
 # --- Scan for .build.ae and .tests.ae files ---
@@ -165,7 +171,19 @@ if [[ -n "$TARGET" ]]; then
         exit 1
     fi
 
-    if [[ $IS_TEST -eq 1 ]]; then
+    if [[ $FORCE_DIST -eq 1 && $IS_DIST -eq 1 ]]; then
+        # Explicit --dist: build + package (takes priority)
+        collect_build_deps "$TARGET"
+        FILTERED_BUILD=()
+        for mod in "${SORTED_BUILD[@]}"; do
+            if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then
+                FILTERED_BUILD+=("$mod")
+            fi
+        done
+        SORTED_BUILD=("${FILTERED_BUILD[@]}")
+        DIST_MODULES=("$TARGET")
+        TEST_MODULES=()
+    elif [[ $IS_TEST -eq 1 ]]; then
         # Test target: build its deps, then run the test
         for dep in ${TEST_DEPS[$TARGET]}; do
             if [[ -n "${BUILD_FILES[$dep]+x}" ]]; then
@@ -181,18 +199,6 @@ if [[ -n "$TARGET" ]]; then
         SORTED_BUILD=("${FILTERED_BUILD[@]}")
         TEST_MODULES=("$TARGET")
         DIST_MODULES=()
-    elif [[ $FORCE_DIST -eq 1 && $IS_DIST -eq 1 ]]; then
-        # Explicit --dist: build + package
-        collect_build_deps "$TARGET"
-        FILTERED_BUILD=()
-        for mod in "${SORTED_BUILD[@]}"; do
-            if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then
-                FILTERED_BUILD+=("$mod")
-            fi
-        done
-        SORTED_BUILD=("${FILTERED_BUILD[@]}")
-        DIST_MODULES=("$TARGET")
-        TEST_MODULES=()
     else
         # Build target + deps
         collect_build_deps "$TARGET"
@@ -256,7 +262,7 @@ for mod in "${TEST_MODULES[@]}"; do
     c_out="$BUILD_DIR/${fname}.c"
 
     echo "  test:    $mod"
-    transform_ae "$src" "$fname" "$mod" "$ae_tmp"
+    transform_ae "$src" "$fname" "test:$mod" "$ae_tmp"
     "$AETHERC" --lib "$ROOT/$AEB_LIB" "$ae_tmp" "$c_out" 2>/dev/null
 
     ALL_C_FILES+=("$c_out")
@@ -314,7 +320,7 @@ ORCH_FILE="$BUILD_DIR/_orchestrator.ae"
     for mod in "${TEST_MODULES[@]}"; do
         fname="test_$(encode_name "$mod")"
         echo "    ${fname}(s)"
-        echo "    build_done(s, \"${mod}\")"
+        echo "    build_done(s, \"test:${mod}\")"
     done
 
     echo "}"

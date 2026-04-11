@@ -54,6 +54,7 @@ session(root_path: string) {
 }
 
 // Begin a module build. Returns module context, or 0 if already done.
+// module_dir can be "test:path" for co-located test modules.
 begin(s: ptr, module_dir: string) {
     visited = map_get(s, "visited")
     if map_has(visited, module_dir) == 1 {
@@ -65,16 +66,30 @@ begin(s: ptr, module_dir: string) {
     map_put(ctx, "root", root)
     map_put(ctx, "module_dir", module_dir)
 
-    mod_name = module_dir
+    // Handle "test:" prefix for co-located tests
+    fs_dir = module_dir
+    is_colocated_test = 0
+    test_prefix = string_index_of(module_dir, "test:")
+    if test_prefix == 0 {
+        fs_dir = string_substring(module_dir, 5, string_length(module_dir))
+        is_colocated_test = 1
+    }
+    // Handle "dist:" prefix for packaging targets
+    dist_prefix = string_index_of(module_dir, "dist:")
+    if dist_prefix == 0 {
+        fs_dir = string_substring(module_dir, 5, string_length(module_dir))
+    }
+
+    mod_name = fs_dir
     lang_prefix = ""
-    slash = string_index_of(module_dir, "/")
+    slash = string_index_of(fs_dir, "/")
     if slash >= 0 {
-        lang_prefix = string_substring(module_dir, 0, slash)
-        mod_name = string_substring(module_dir, slash + 1, string_length(module_dir))
+        lang_prefix = string_substring(fs_dir, 0, slash)
+        mod_name = string_substring(fs_dir, slash + 1, string_length(fs_dir))
     }
     map_put(ctx, "module", mod_name)
 
-    source_dir = path_join(root, module_dir)
+    source_dir = path_join(root, fs_dir)
     map_put(ctx, "source_dir", source_dir)
 
     target_base = path_join(root, "target")
@@ -82,13 +97,21 @@ begin(s: ptr, module_dir: string) {
     if is_test == 1 {
         target_base = path_join(target_base, "tests")
     }
-    tgt_dir = path_join(target_base, mod_name)
+    if is_colocated_test == 1 {
+        target_base = path_join(target_base, "tests")
+    }
+    // Use full module path for target dir to avoid collisions
+    // (e.g. mongodb/util vs cassandra/util)
+    tgt_dir = path_join(target_base, fs_dir)
     map_put(ctx, "target_dir", tgt_dir)
 
     map_put(ctx, "deps", list_new())
     map_put(ctx, "libs", list_new())
     map_put(ctx, "cargo_deps", list_new())
     map_put(ctx, "npm_deps", list_new())
+    map_put(ctx, "maven_deps", list_new())
+    map_put(ctx, "boms", list_new())
+    map_put(ctx, "repos", list_new())
 
     return ctx
 }
@@ -120,27 +143,65 @@ start() {
     map_put(ctx, "source_dir", source_dir)
 
     target_base = path_join(root, "target")
-    tgt_dir = path_join(target_base, mod_name)
+    tgt_dir = path_join(target_base, module_dir)
     map_put(ctx, "target_dir", tgt_dir)
 
     map_put(ctx, "deps", list_new())
     map_put(ctx, "libs", list_new())
     map_put(ctx, "cargo_deps", list_new())
     map_put(ctx, "npm_deps", list_new())
+    map_put(ctx, "maven_deps", list_new())
+    map_put(ctx, "boms", list_new())
+    map_put(ctx, "repos", list_new())
 
     return ctx
 }
 
 // --- Dependency declarations (one per line, greppable) ---
+//
+// Module deps:   dep(b, "java/components/vowelbase")
+// Maven deps:    dep(b, "org.springframework.boot:spring-boot-starter:3.4.4")
+//                dep(b, "org.springframework.data:spring-data-keyvalue")  // version from BOM
+// npm deps:      dep(b, "npm:@angular/core:11.2.4")
+//
+// Maven coordinates contain colons; module paths use slashes.
+// npm deps start with "npm:".
 
 dep(ctx: ptr, path: string) {
-    deps = map_get(ctx, "deps")
-    list_add(deps, path)
+    // Check for npm: prefix first
+    npm_prefix = string_index_of(path, "npm:")
+    if npm_prefix == 0 {
+        npm_deps = map_get(ctx, "npm_deps")
+        // Strip "npm:" prefix, store as "pkg:version"
+        pkg_spec = string_substring(path, 4, string_length(path))
+        list_add(npm_deps, pkg_spec)
+        return 0
+    }
+    colon = string_index_of(path, ":")
+    if colon >= 0 {
+        maven_deps = map_get(ctx, "maven_deps")
+        list_add(maven_deps, path)
+    } else {
+        deps = map_get(ctx, "deps")
+        list_add(deps, path)
+    }
 }
 
 lib(ctx: ptr, path: string) {
     libs = map_get(ctx, "libs")
     list_add(libs, path)
+}
+
+// --- BOM and repo declarations (greppable, one per line) ---
+
+bom(ctx: ptr, coord: string) {
+    boms = map_get(ctx, "boms")
+    list_add(boms, coord)
+}
+
+repo(ctx: ptr, url: string) {
+    repos = map_get(ctx, "repos")
+    list_add(repos, url)
 }
 
 cargo_dep(ctx: ptr, path: string) {
@@ -164,10 +225,8 @@ _get(ctx: ptr, key: string) {
 }
 
 _strip_lang(dep_path: string) {
-    slash = string_index_of(dep_path, "/")
-    if slash >= 0 {
-        return string_substring(dep_path, slash + 1, string_length(dep_path))
-    }
+    // Return the full dep path — target dirs use the full module path
+    // to avoid collisions (e.g. mongodb/util vs cassandra/util).
     return dep_path
 }
 
@@ -296,4 +355,247 @@ nowarn(_ctx: ptr) {
 
 verbose(_ctx: ptr) {
     map_put(_ctx, "verbose", "true")
+}
+
+// --- BOM file loading ---
+//
+// Reads a .bom.ae file and applies bom() and repo() declarations to the context.
+// The file is valid Aether code but parsed as text (greppable contract).
+// Path is relative to the module's source directory.
+
+load_bom_file(ctx: ptr, rel_path: string) {
+    source_dir = _get(ctx, "source_dir")
+    full_path = path_join(source_dir, rel_path)
+    if file_exists(full_path) == 0 {
+        println("warning: BOM file not found: ${full_path}")
+        return 0
+    }
+
+    // Store the resolved path so _resolve_maven_deps can pass --bom-file
+    // to the Java resolver, which parses the .bom.ae natively.
+    map_put(ctx, "_bom_file", full_path)
+    return 1
+}
+
+// --- Maven dependency resolution ---
+//
+// Shells out to aeb-resolve.jar (Java-based Maven Resolver).
+// Collects all maven_deps from context, passes BOMs and repos,
+// caches resolved classpath as an artifact.
+
+_resolve_maven_deps(ctx: ptr) {
+    // Return cached result if already resolved
+    if map_has(ctx, "_maven_resolved") == 1 {
+        return map_get(ctx, "_maven_resolved")
+    }
+
+    maven_deps = map_get(ctx, "maven_deps")
+    dep_count = list_size(maven_deps)
+    if dep_count == 0 {
+        map_put(ctx, "_maven_resolved", "")
+        return ""
+    }
+
+    target_dir = _get(ctx, "target_dir")
+    _mkdirs(target_dir)
+
+    // Build the resolver command
+    aeb_home = os_getenv("AEB_HOME")
+    resolver_jar = path_join(aeb_home, "tools/aeb-resolve.jar")
+    cmd = "java -jar ${resolver_jar} --output classpath"
+
+    // Add BOM file if set (preferred — the Java resolver parses .bom.ae natively)
+    if map_has(ctx, "_bom_file") == 1 {
+        bom_file = map_get(ctx, "_bom_file")
+        cmd = string_concat(cmd, " --bom-file ${bom_file}")
+    }
+
+    // Add explicit BOMs
+    boms = map_get(ctx, "boms")
+    bom_count = list_size(boms)
+    bi = 0
+    while bi < bom_count {
+        b_coord = list_get(boms, bi)
+        cmd = string_concat(cmd, " --bom ${b_coord}")
+        bi = bi + 1
+    }
+
+    // Add repos
+    repos = map_get(ctx, "repos")
+    repo_count = list_size(repos)
+    ri = 0
+    while ri < repo_count {
+        r_url = list_get(repos, ri)
+        cmd = string_concat(cmd, " --repo ${r_url}")
+        ri = ri + 1
+    }
+
+    // Add deps
+    di = 0
+    while di < dep_count {
+        d_coord = list_get(maven_deps, di)
+        cmd = string_concat(cmd, " ${d_coord}")
+        di = di + 1
+    }
+
+    // SLF4J warnings go to stderr, os_exec captures stdout only
+
+    mod_dir = _get(ctx, "module_dir")
+    println("${mod_dir}: resolving maven dependencies")
+    result = string_trim(os_exec(cmd))
+    if string_length(result) == 0 {
+        println("${mod_dir}: warning: no maven jars resolved")
+    }
+
+    // Cache and write artifact for downstream modules
+    map_put(ctx, "_maven_resolved", result)
+    _write_artifact(ctx, "maven_classpath", result)
+    return result
+}
+
+_build_maven_classpath(ctx: ptr) {
+    // Return cached result if already built
+    if map_has(ctx, "_maven_cp_built") == 1 {
+        return map_get(ctx, "_maven_cp_built")
+    }
+
+    // First, resolve own maven deps
+    own_cp = _resolve_maven_deps(ctx)
+
+    // Then collect maven classpaths from module deps
+    deps = map_get(ctx, "deps")
+    count = list_size(deps)
+    i = 0
+    while i < count {
+        dp = list_get(deps, i)
+        dm = _strip_lang(dp)
+        dep_mvn = _read_dep_artifact(ctx, dm, "maven_classpath")
+        if string_length(dep_mvn) > 0 {
+            if string_length(own_cp) > 0 {
+                tmp = string_concat(own_cp, ":")
+                own_cp = string_concat(tmp, dep_mvn)
+            } else {
+                own_cp = dep_mvn
+            }
+        }
+        i = i + 1
+    }
+    map_put(ctx, "_maven_cp_built", own_cp)
+    return own_cp
+}
+
+// --- npm dependency resolution ---
+//
+// Uses pnpm to download packages to its content-addressed store and
+// creates a node_modules layout in .aeb/node_modules/.
+// All npm deps (npm:pkg:version) are collected and resolved in one call.
+
+_resolve_npm_deps(ctx: ptr) {
+    if map_has(ctx, "_npm_resolved") == 1 {
+        return map_get(ctx, "_npm_resolved")
+    }
+
+    npm_deps = map_get(ctx, "npm_deps")
+    dep_count = list_size(npm_deps)
+    if dep_count == 0 {
+        map_put(ctx, "_npm_resolved", "")
+        return ""
+    }
+
+    root = _get(ctx, "root")
+    aeb_dir = path_join(root, ".aeb")
+    nm_dir = path_join(aeb_dir, "node_modules")
+    mod_dir = _get(ctx, "module_dir")
+
+    // Check if node_modules already exists and has content
+    if file_exists(nm_dir) == 1 {
+        map_put(ctx, "_npm_resolved", nm_dir)
+        return nm_dir
+    }
+
+    println("${mod_dir}: resolving npm dependencies via pnpm")
+
+    // Ensure .aeb has a package.json and hoisted layout config
+    aeb_pkg = path_join(aeb_dir, "package.json")
+    if file_exists(aeb_pkg) == 0 {
+        io_write_file(aeb_pkg, "{}")
+    }
+    aeb_npmrc = path_join(aeb_dir, ".npmrc")
+    if file_exists(aeb_npmrc) == 0 {
+        io_write_file(aeb_npmrc, "node-linker=hoisted")
+    }
+
+    // Build pnpm add command with all deps
+    // COREPACK_ENABLE_STRICT=0 allows pnpm to work even when
+    // a parent package.json declares a different package manager
+    cmd = "COREPACK_ENABLE_STRICT=0 pnpm add --prefix '${aeb_dir}'"
+    di = 0
+    while di < dep_count {
+        pkg = list_get(npm_deps, di)
+        // pkg is "name:version" — convert to "name@version" for pnpm
+        // Handle scoped packages: @angular/core:11.2.4 → @angular/core@11.2.4
+        // Find last colon (the version separator)
+        pkg_len = string_length(pkg)
+        last_colon = -1
+        ci = 0
+        while ci < pkg_len {
+            ch = string_substring(pkg, ci, ci + 1)
+            if ch == ":" {
+                last_colon = ci
+            }
+            ci = ci + 1
+        }
+        pnpm_spec = pkg
+        if last_colon > 0 {
+            pkg_name = string_substring(pkg, 0, last_colon)
+            pkg_ver = string_substring(pkg, last_colon + 1, pkg_len)
+            pnpm_spec = string_concat(pkg_name, "@")
+            pnpm_spec = string_concat(pnpm_spec, pkg_ver)
+        }
+        cmd = string_concat(cmd, " '${pnpm_spec}'")
+        di = di + 1
+    }
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: warning: pnpm add failed")
+    }
+
+    map_put(ctx, "_npm_resolved", nm_dir)
+    _write_artifact(ctx, "npm_node_modules", nm_dir)
+    return nm_dir
+}
+
+// Load a shared deps file (.deps.ae) — same mechanism as load_bom_file
+// but also extracts dep() lines for npm packages.
+load_deps_file(ctx: ptr, rel_path: string) {
+    source_dir = _get(ctx, "source_dir")
+    full_path = path_join(source_dir, rel_path)
+    if file_exists(full_path) == 0 {
+        println("warning: deps file not found: ${full_path}")
+        return 0
+    }
+
+    // Use the same parser as load_bom_file for bom/repo lines
+    map_put(ctx, "_bom_file", full_path)
+
+    // Also extract dep() lines with npm: prefix
+    // Inline parsing: grep for dep(..., "npm:...") and extract the npm spec
+    parsed = string_trim(os_exec("grep 'dep.*npm:' '${full_path}' | grep -o '\"npm:[^\"]*\"' | tr -d '\"' | sed 's/^npm://'"))
+    if string_length(parsed) == 0 {
+        return 1
+    }
+
+    npm_deps_list = map_get(ctx, "npm_deps")
+    line_idx = 1
+    while line_idx <= 500 {
+        line = string_trim(os_exec("echo '${parsed}' | sed -n '${line_idx}p'"))
+        if string_length(line) == 0 {
+            line_idx = 501
+        } else {
+            list_add(npm_deps_list, line)
+            line_idx = line_idx + 1
+        }
+    }
+    return 1
 }

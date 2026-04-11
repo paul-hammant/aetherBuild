@@ -256,3 +256,229 @@ builder mocha(ctx: ptr, test_file: string) {
     println("${mod_dir}: tests PASSED")
     return 0
 }
+
+// --- Project-based compilation (uses existing tsconfig) ---
+
+// DSL setters for project-based compilation
+tsconfig(_ctx: ptr, path: string) {
+    map_put(_ctx, "tsconfig", path)
+}
+
+skip_lib_check(_ctx: ptr) {
+    map_put(_ctx, "skip_lib_check", "true")
+}
+
+// Compile TypeScript using a project's tsconfig.lib.json.
+// Uses tsc from .aeb/node_modules/.bin/tsc.
+// The tsconfig chain handles path aliases and module resolution.
+builder tsc_project(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    // Resolve npm deps first (ensures .aeb/node_modules exists)
+    build._resolve_npm_deps(ctx)
+
+    // Determine tsconfig path
+    tc = path_join(source_dir, "tsconfig.lib.json")
+    if _builder != null {
+        if map_has(_builder, "tsconfig") == 1 {
+            tc_rel = map_get(_builder, "tsconfig")
+            tc = path_join(source_dir, tc_rel)
+        }
+    }
+
+    println("${mod_dir}: compiling (tsc)")
+
+    aeb_dir = path_join(root, ".aeb")
+    tsc_bin = path_join(aeb_dir, "node_modules/.bin/tsc")
+    cmd = "${tsc_bin} -p '${tc}'"
+
+    if _builder != null {
+        if map_has(_builder, "skip_lib_check") == 1 {
+            cmd = string_concat(cmd, " --skipLibCheck")
+        }
+        if map_has(_builder, "out_dir") == 1 {
+            val = map_get(_builder, "out_dir")
+            cmd = string_concat(cmd, " --outDir '${val}'")
+        }
+        if map_has(_builder, "extra") == 1 {
+            val = map_get(_builder, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tsc failed")
+        return exit_code
+    }
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Compile Angular TypeScript using ngc (Angular compiler).
+// Same as tsc_project but uses ngc binary.
+builder ngc_project(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    // Resolve npm deps first
+    build._resolve_npm_deps(ctx)
+
+    // Determine tsconfig path
+    tc = path_join(source_dir, "tsconfig.lib.json")
+    if _builder != null {
+        if map_has(_builder, "tsconfig") == 1 {
+            tc_rel = map_get(_builder, "tsconfig")
+            tc = path_join(source_dir, tc_rel)
+        }
+    }
+
+    println("${mod_dir}: compiling (ngc)")
+
+    aeb_dir = path_join(root, ".aeb")
+    ngc_bin = path_join(aeb_dir, "node_modules/.bin/ngc")
+    cmd = "${ngc_bin} -p '${tc}'"
+
+    if _builder != null {
+        if map_has(_builder, "skip_lib_check") == 1 {
+            cmd = string_concat(cmd, " --skipLibCheck")
+        }
+        if map_has(_builder, "extra") == 1 {
+            val = map_get(_builder, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: ngc failed")
+        return exit_code
+    }
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Run Jest tests using the project's jest.config.ts.
+builder jest_project(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    // Resolve npm deps first
+    build._resolve_npm_deps(ctx)
+
+    println("${mod_dir}: running tests (jest)")
+
+    aeb_dir = path_join(root, ".aeb")
+    jest_bin = path_join(aeb_dir, "node_modules/.bin/jest")
+
+    // Default timeout
+    timeout_secs = "60"
+    if _builder != null {
+        if map_has(_builder, "timeout") == 1 {
+            timeout_secs = map_get(_builder, "timeout")
+        }
+    }
+
+    jest_config = path_join(source_dir, "jest.config.ts")
+    cmd = "timeout ${timeout_secs} ${jest_bin} --config '${jest_config}' --passWithNoTests"
+
+    if _builder != null {
+        if map_has(_builder, "extra") == 1 {
+            val = map_get(_builder, "extra")
+            cmd = string_concat(cmd, " ${val}")
+        }
+    }
+
+    exit_code = os_system(cmd)
+    if exit_code == 124 {
+        println("${mod_dir}: tests TIMEOUT")
+        return exit_code
+    }
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}
+
+// --- App bundling ---
+
+webpack_config(_ctx: ptr, path: string) {
+    map_put(_ctx, "webpack_config", path)
+}
+
+builder webpack_bundle(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+    build._resolve_npm_deps(ctx)
+
+    wp_config = path_join(source_dir, "webpack.aeb.config.js")
+    if _builder != null {
+        if map_has(_builder, "webpack_config") == 1 {
+            cfg = map_get(_builder, "webpack_config")
+            wp_config = path_join(source_dir, cfg)
+        }
+    }
+
+    println("${mod_dir}: bundling (webpack)")
+
+    aeb_dir = path_join(root, ".aeb")
+    webpack_bin = path_join(aeb_dir, "node_modules/.bin/webpack")
+    nm_dir = path_join(aeb_dir, "node_modules")
+    cmd = "NODE_PATH='${nm_dir}' ${webpack_bin} --config '${wp_config}'"
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: webpack failed")
+        return exit_code
+    }
+    println("${mod_dir}: bundle complete")
+    return 0
+}
+
+builder ng_build(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+    build._resolve_npm_deps(ctx)
+
+    // Extract app name from source_dir (e.g. .../apps/products → products)
+    app_name = string_trim(os_exec("basename '${source_dir}'"))
+
+    println("${mod_dir}: building (ng build)")
+
+    aeb_dir = path_join(root, ".aeb")
+    ng_bin = path_join(aeb_dir, "node_modules/.bin/ng")
+    cmd = "${ng_bin} build ${app_name} --configuration production"
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: ng build failed")
+        return exit_code
+    }
+    println("${mod_dir}: build complete")
+    return 0
+}

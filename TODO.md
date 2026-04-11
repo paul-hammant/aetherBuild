@@ -277,3 +277,12 @@ A pre-flight check would need to stay in sync with SDK internals, and
 would report missing tools you don't even need. If a specific SDK's
 failure message is ever cryptic, fix that message rather than adding a
 separate validation system.
+
+## Java/Maven
+
+1. tools/aeb-resolve.jar - maybe not check that it. Maybe  have is slimmer and source transitive deps from ~/.m2/repository using the manifest. If those transitive 
+deps are missing go get them and place them in there
+
+2. maven should have its own aeb module - those should not be comingled with java module
+
+ 

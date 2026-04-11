@@ -257,3 +257,15 @@ all passing from a single `aeb` invocation.
 
 - [Aether](https://github.com/AetherLang/aether) compiler (`ae`) — multi-pattern-glob branch or later
 - Language toolchains: `javac`, `kotlinc`, `go`, `rustc`/`cargo`, `tsc`, `node`
+
+### Maven dependency resolver (required for Maven-based projects)
+
+Projects that use `maven_dep()` or `bom()` need the resolver jar built once:
+
+```bash
+mvn -f tools/resolver/pom.xml package
+mv tools/resolver/target/aeb-resolve-1.0.0.jar tools/aeb-resolve.jar
+rm -rf tools/resolver/target
+```
+
+This produces `tools/aeb-resolve.jar` (not checked in — listed in `.gitignore`).
