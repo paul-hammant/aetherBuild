@@ -1,0 +1,11 @@
+import build
+import rust
+import rust (crate_name)
+
+main() {
+    b = build.start()
+    build.dep(b, "crates/lib")
+    rust.check(b) {
+        crate_name("oxen-cli")
+    }
+}

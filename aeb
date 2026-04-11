@@ -87,7 +87,17 @@ BUILD_MODULES=()
 TEST_MODULES=()
 DIST_MODULES=()
 
-for build_file in $(find . -name '.build.ae' -not -path './target/*' -not -path './.aeb/*' -not -path './lib/*' | sort); do
+# Build exclusion list from .aebignore (one directory per line, like .gitignore)
+IGNORE_EXCLUDES=(-not -path './target/*' -not -path './.aeb/*' -not -path './lib/*')
+if [[ -f "$ROOT/.aebignore" ]]; then
+    while IFS= read -r pattern; do
+        [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+        pattern="${pattern%/}"
+        IGNORE_EXCLUDES+=(-not -path "./${pattern}/*")
+    done < "$ROOT/.aebignore"
+fi
+
+for build_file in $(find . -name '.build.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
     dir=$(dirname "$build_file")
     module_dir="${dir#./}"
     BUILD_MODULES+=("$module_dir")
@@ -95,14 +105,14 @@ for build_file in $(find . -name '.build.ae' -not -path './target/*' -not -path 
     BUILD_FILES["$module_dir"]=1
 done
 
-for dist_file in $(find . -name '.dist.ae' -not -path './target/*' -not -path './.aeb/*' -not -path './lib/*' | sort); do
+for dist_file in $(find . -name '.dist.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
     dir=$(dirname "$dist_file")
     module_dir="${dir#./}"
     DIST_MODULES+=("$module_dir")
     DIST_FILES["$module_dir"]=1
 done
 
-for test_file in $(find . -name '.tests.ae' -not -path './target/*' -not -path './.aeb/*' -not -path './lib/*' | sort); do
+for test_file in $(find . -name '.tests.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
     dir=$(dirname "$test_file")
     module_dir="${dir#./}"
     TEST_MODULES+=("$module_dir")

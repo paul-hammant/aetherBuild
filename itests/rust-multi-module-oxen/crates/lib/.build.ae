@@ -1,0 +1,10 @@
+import build
+import rust
+import rust (crate_name)
+
+main() {
+    b = build.start()
+    rust.check(b) {
+        crate_name("liboxen")
+    }
+}

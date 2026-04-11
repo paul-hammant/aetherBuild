@@ -1,0 +1,2 @@
+# Integration tests — each has its own aeb project, run separately
+itests/

@@ -12,6 +12,10 @@ extern string_concat(a: string, b: string) -> string
 extern string_length(s: string) -> int
 extern io_write_file(path: string, content: string) -> int
 
+extern os_exec(cmd: string) -> string
+extern string_trim(s: string) -> string
+extern file_exists(path: string) -> int
+
 // --- Rust DSL setters ---
 
 lib_name(_ctx: ptr, name: string) {
@@ -28,6 +32,11 @@ features(_ctx: ptr, f: string) {
 
 jobs(_ctx: ptr, n: string) {
     map_put(_ctx, "jobs", n)
+}
+
+// Set the crate/package name for -p flag (workspace member)
+crate_name(_ctx: ptr, name: string) {
+    map_put(_ctx, "crate_name", name)
 }
 
 // --- Command builder ---
@@ -148,5 +157,131 @@ builder cargo_build(ctx: ptr) {
     build._write_artifact(ctx, "ldlibdeps", full_so)
     build._write_artifact(ctx, "shared_library_deps_including_transitive", full_so)
     io_write_file(ts_file, "")
+    return 0
+}
+
+// Compile-check a workspace crate via cargo check -p <name>.
+// Runs from the workspace root (where Cargo.toml [workspace] lives).
+builder check(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    // Derive crate name from Cargo.toml or DSL
+    crate = ""
+    if _builder != null {
+        if map_has(_builder, "crate_name") == 1 {
+            crate = map_get(_builder, "crate_name")
+        }
+    }
+    if string_length(crate) == 0 {
+        println("${mod_dir}: crate_name() is required")
+        return 1
+    }
+
+    println("${mod_dir}: compiling (cargo check -p ${crate})")
+
+    cmd = "cd '${root}' && cargo check -p ${crate}"
+    if _builder != null {
+        if map_has(_builder, "features") == 1 {
+            val = map_get(_builder, "features")
+            cmd = string_concat(cmd, " --features ${val}")
+        }
+    }
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: cargo check failed")
+        return exit_code
+    }
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Run tests for a workspace crate via cargo test -p <name>.
+builder test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    crate = ""
+    if _builder != null {
+        if map_has(_builder, "crate_name") == 1 {
+            crate = map_get(_builder, "crate_name")
+        }
+    }
+    if string_length(crate) == 0 {
+        println("${mod_dir}: crate_name() is required")
+        return 1
+    }
+
+    println("${mod_dir}: running tests (cargo test -p ${crate})")
+
+    cmd = "cd '${root}' && cargo test -p ${crate}"
+    if _builder != null {
+        if map_has(_builder, "features") == 1 {
+            val = map_get(_builder, "features")
+            cmd = string_concat(cmd, " --features ${val}")
+        }
+    }
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Build a workspace crate binary via cargo build -p <name> --release.
+builder build_crate(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    crate = ""
+    if _builder != null {
+        if map_has(_builder, "crate_name") == 1 {
+            crate = map_get(_builder, "crate_name")
+        }
+    }
+    if string_length(crate) == 0 {
+        println("${mod_dir}: crate_name() is required")
+        return 1
+    }
+
+    println("${mod_dir}: compiling (cargo build -p ${crate} --release)")
+
+    cmd = "cd '${root}' && cargo build -p ${crate} --release"
+    if _builder != null {
+        if map_has(_builder, "features") == 1 {
+            val = map_get(_builder, "features")
+            cmd = string_concat(cmd, " --features ${val}")
+        }
+        if map_has(_builder, "jobs") == 1 {
+            val = map_get(_builder, "jobs")
+            cmd = string_concat(cmd, " --jobs ${val}")
+        }
+    }
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: cargo build failed")
+        return exit_code
+    }
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
     return 0
 }

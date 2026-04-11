@@ -28,4 +28,6 @@ fetch_repo "https://github.com/VirtusLab/scala-cli-multi-module-demo.git" "scala
 fetch_repo "https://github.com/dotnet-architecture/eShopOnWeb.git" "dotnet-architecture-eShopOnWeb"
 fetch_repo "https://github.com/fyne-io/fyne.git" "go-multimodule-fyne"
 
+fetch_repo "https://github.com/Oxen-AI/Oxen.git" "rust-multi-module-oxen"
+
 echo "Done. Upstream sources restored."
