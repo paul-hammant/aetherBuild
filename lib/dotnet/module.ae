@@ -1,0 +1,220 @@
+// dotnet — .NET SDK for aether.build
+//
+// Generates .{name}.generated.csproj from .build.ae declarations,
+// then compiles via dotnet build and tests via dotnet test.
+// NuGet versions come from Directory.Packages.props (central management).
+import build
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern file_exists(path: string) -> int
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_trim(s: string) -> string
+extern io_write_file(path: string, content: string) -> int
+
+// --- DSL setters ---
+
+sdk(_ctx: ptr, s: string) {
+    map_put(_ctx, "sdk", s)
+}
+
+// Set the target framework (e.g. "net8.0", "net10.0").
+// Overrides the central default from Directory.Packages.props.
+target_framework(_ctx: ptr, tfm: string) {
+    map_put(_ctx, "target_framework", tfm)
+}
+
+root_namespace(_ctx: ptr, ns: string) {
+    map_put(_ctx, "root_namespace", ns)
+}
+
+assembly_name(_ctx: ptr, name: string) {
+    map_put(_ctx, "assembly_name", name)
+}
+
+configuration(_ctx: ptr, config: string) {
+    map_put(_ctx, "configuration", config)
+}
+
+nuget(_ctx: ptr, pkg: string) {
+    if map_has(_ctx, "nuget_deps") == 0 {
+        map_put(_ctx, "nuget_deps", list_new())
+    }
+    pkgs = map_get(_ctx, "nuget_deps")
+    list_add(pkgs, pkg)
+}
+
+test_project(_ctx: ptr) {
+    map_put(_ctx, "is_test_project", "true")
+}
+
+nullable(_ctx: ptr) {
+    map_put(_ctx, "nullable", "true")
+}
+
+implicit_usings(_ctx: ptr) {
+    map_put(_ctx, "implicit_usings", "true")
+}
+
+// --- SDK functions ---
+
+// Generate .csproj and build a .NET project.
+builder build_project(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    project_name = string_trim(os_exec("basename '${source_dir}'"))
+
+    // --- Generate .csproj ---
+    proj_sdk = "Microsoft.NET.Sdk"
+    if _builder != null {
+        if map_has(_builder, "sdk") == 1 {
+            proj_sdk = map_get(_builder, "sdk")
+        }
+    }
+
+    xml = "<Project Sdk=\"${proj_sdk}\">\n\n  <PropertyGroup>\n"
+
+    // TargetFramework — if set, overrides the central Directory.Packages.props default
+    if _builder != null {
+        if map_has(_builder, "target_framework") == 1 {
+            tfm = map_get(_builder, "target_framework")
+            xml = string_concat(xml, "    <TargetFramework>${tfm}</TargetFramework>\n")
+        }
+    }
+
+    if _builder != null {
+        if map_has(_builder, "root_namespace") == 1 {
+            ns = map_get(_builder, "root_namespace")
+            xml = string_concat(xml, "    <RootNamespace>${ns}</RootNamespace>\n")
+        }
+        if map_has(_builder, "assembly_name") == 1 {
+            an = map_get(_builder, "assembly_name")
+            xml = string_concat(xml, "    <AssemblyName>${an}</AssemblyName>\n")
+        }
+        if map_has(_builder, "nullable") == 1 {
+            xml = string_concat(xml, "    <Nullable>enable</Nullable>\n")
+        }
+        if map_has(_builder, "implicit_usings") == 1 {
+            xml = string_concat(xml, "    <ImplicitUsings>enable</ImplicitUsings>\n")
+        }
+        if map_has(_builder, "is_test_project") == 1 {
+            xml = string_concat(xml, "    <IsPackable>false</IsPackable>\n")
+        }
+    }
+
+    xml = string_concat(xml, "  </PropertyGroup>\n")
+
+    // NuGet PackageReferences
+    if _builder != null {
+        if map_has(_builder, "nuget_deps") == 1 {
+            pkgs = map_get(_builder, "nuget_deps")
+            count = list_size(pkgs)
+            if count > 0 {
+                xml = string_concat(xml, "\n  <ItemGroup>\n")
+                i = 0
+                while i < count {
+                    pkg = list_get(pkgs, i)
+                    xml = string_concat(xml, "    <PackageReference Include=\"${pkg}\" />\n")
+                    i = i + 1
+                }
+                xml = string_concat(xml, "  </ItemGroup>\n")
+            }
+        }
+    }
+
+    // ProjectReferences from build.dep()
+    deps = map_get(ctx, "deps")
+    dep_count = list_size(deps)
+    if dep_count > 0 {
+        xml = string_concat(xml, "\n  <ItemGroup>\n")
+        i = 0
+        while i < dep_count {
+            dp = list_get(deps, i)
+            dep_dir = path_join(root, dp)
+            rel = string_trim(os_exec("python3 -c \"import os; print(os.path.relpath('${dep_dir}', '${source_dir}'))\""))
+            dep_csproj = string_trim(os_exec("ls '${dep_dir}'/.*.generated.csproj 2>/dev/null | head -1"))
+            if string_length(dep_csproj) == 0 {
+                dep_csproj = string_trim(os_exec("ls '${dep_dir}'/*.csproj 2>/dev/null | head -1"))
+            }
+            if string_length(dep_csproj) > 0 {
+                csproj_name = string_trim(os_exec("basename '${dep_csproj}'"))
+                ref_path = string_concat(rel, "/")
+                ref_path = string_concat(ref_path, csproj_name)
+                xml = string_concat(xml, "    <ProjectReference Include=\"${ref_path}\" />\n")
+            }
+            i = i + 1
+        }
+        xml = string_concat(xml, "  </ItemGroup>\n")
+    }
+
+    xml = string_concat(xml, "\n</Project>\n")
+
+    csproj = path_join(source_dir, ".${project_name}.generated.csproj")
+    io_write_file(csproj, xml)
+
+    // --- Build ---
+    println("${mod_dir}: compiling (dotnet)")
+
+    config = "Release"
+    if _builder != null {
+        if map_has(_builder, "configuration") == 1 {
+            config = map_get(_builder, "configuration")
+        }
+    }
+
+    cmd = "dotnet build '${csproj}' --configuration ${config}"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: dotnet build failed")
+        return exit_code
+    }
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Run dotnet test on a test project.
+builder test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    build._mkdirs(target_dir)
+    println("${mod_dir}: running tests (dotnet)")
+
+    csproj = string_trim(os_exec("ls '${source_dir}'/.*.generated.csproj 2>/dev/null | head -1"))
+    if string_length(csproj) == 0 {
+        csproj = string_trim(os_exec("ls '${source_dir}'/*.csproj 2>/dev/null | head -1"))
+    }
+
+    config = "Release"
+    if _builder != null {
+        if map_has(_builder, "configuration") == 1 {
+            config = map_get(_builder, "configuration")
+        }
+    }
+
+    cmd = "dotnet test '${csproj}' --configuration ${config} --no-build"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}

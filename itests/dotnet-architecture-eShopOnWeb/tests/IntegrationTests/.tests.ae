@@ -1,0 +1,8 @@
+import build
+import dotnet
+
+main() {
+    b = build.start()
+    build.dep(b, "tests/IntegrationTests")
+    dotnet.test(b)
+}

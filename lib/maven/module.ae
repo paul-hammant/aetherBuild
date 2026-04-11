@@ -38,9 +38,12 @@ load_bom_file(ctx: ptr, rel_path: string) {
         return 0
     }
 
-    // Store the resolved path so resolve() can pass --bom-file
-    // to the Java resolver, which parses the .bom.ae natively.
-    map_put(ctx, "_bom_file", full_path)
+    // Accumulate bom file paths in a list so multiple can be loaded
+    if map_has(ctx, "_bom_files") == 0 {
+        map_put(ctx, "_bom_files", list_new())
+    }
+    bom_files = map_get(ctx, "_bom_files")
+    list_add(bom_files, full_path)
     return 1
 }
 
@@ -71,10 +74,16 @@ resolve(ctx: ptr) {
     resolver_jar = path_join(aeb_home, "tools/aeb-resolve.jar")
     cmd = "java -jar ${resolver_jar} --output classpath"
 
-    // Add BOM file if set (preferred — the Java resolver parses .bom.ae natively)
-    if map_has(ctx, "_bom_file") == 1 {
-        bom_file = map_get(ctx, "_bom_file")
-        cmd = string_concat(cmd, " --bom-file ${bom_file}")
+    // Add BOM files (the Java resolver parses .bom.ae natively)
+    if map_has(ctx, "_bom_files") == 1 {
+        bom_files = map_get(ctx, "_bom_files")
+        bf_count = list_size(bom_files)
+        bf_i = 0
+        while bf_i < bf_count {
+            bom_file = list_get(bom_files, bf_i)
+            cmd = string_concat(cmd, " --bom-file ${bom_file}")
+            bf_i = bf_i + 1
+        }
     }
 
     // Add explicit BOMs
@@ -148,5 +157,7 @@ classpath(ctx: ptr) {
         i = i + 1
     }
     map_put(ctx, "_maven_cp_built", own_cp)
+    // Write merged classpath so downstream modules see transitive deps
+    build._write_artifact(ctx, "maven_classpath", own_cp)
     return own_cp
 }

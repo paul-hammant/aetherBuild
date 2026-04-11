@@ -1,0 +1,13 @@
+import build
+import maven (load_bom_file)
+import build (dep)
+import clojure
+
+main() {
+    b = build.start()
+    load_bom_file(b, "../../../clojars.bom.ae")
+    load_bom_file(b, "../../../clojure-dep-patches.bom.ae")
+    dep(b, "org.clojure:clojure:1.12.0")
+    dep(b, "ring:ring-jetty-adapter:1.13.0")
+    clojure.compile(b)
+}

@@ -16,7 +16,7 @@ ROOT="$(pwd)"
 AEB_LIB=".aeb/lib"
 
 # --- shipped modules (update this list when adding new SDKs) ---
-SHIPPED_MODULES=(build java kotlin go rust ts container maven pnpm jest webpack angular)
+SHIPPED_MODULES=(build java kotlin go rust ts scala clojure dotnet container maven pnpm jest webpack angular)
 
 # --- argument parsing ---
 TARGET=""

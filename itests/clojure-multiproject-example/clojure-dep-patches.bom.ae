@@ -1,0 +1,18 @@
+// Transitives the resolver misses (POM property interpolation gaps)
+// ring-jetty-adapter needs the full Jetty tree — versions use parent BOM
+// properties the resolver can't interpolate, so list them explicitly.
+dep("org.eclipse.jetty:jetty-server:11.0.21")
+dep("org.eclipse.jetty:jetty-util:11.0.21")
+dep("org.eclipse.jetty:jetty-http:11.0.21")
+dep("org.eclipse.jetty:jetty-io:11.0.21")
+dep("org.eclipse.jetty:jetty-servlet:11.0.21")
+dep("org.eclipse.jetty:jetty-security:11.0.21")
+dep("org.eclipse.jetty.toolchain:jetty-jakarta-servlet-api:5.0.2")
+dep("org.eclipse.jetty.websocket:websocket-jetty-server:11.0.21")
+dep("org.eclipse.jetty.websocket:websocket-jetty-api:11.0.21")
+dep("org.eclipse.jetty.websocket:websocket-servlet:11.0.21")
+dep("org.eclipse.jetty.websocket:websocket-core-server:11.0.21")
+dep("org.eclipse.jetty.websocket:websocket-core-common:11.0.21")
+dep("org.eclipse.jetty.websocket:websocket-jetty-common:11.0.21")
+// jetty-util depends on slf4j-api (version from parent BOM)
+dep("org.slf4j:slf4j-api:2.0.16")

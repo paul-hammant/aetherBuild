@@ -23,5 +23,9 @@ fetch_repo() {
 
 fetch_repo "https://github.com/nrwl/nx-examples.git" "nx-examples"
 fetch_repo "https://github.com/spring-projects/spring-data-examples.git" "spring-data-examples"
+fetch_repo "https://github.com/adityaathalye/clojure-multiproject-example.git" "clojure-multiproject-example"
+fetch_repo "https://github.com/VirtusLab/scala-cli-multi-module-demo.git" "scala-cli-multi-module-demo"
+fetch_repo "https://github.com/dotnet-architecture/eShopOnWeb.git" "dotnet-architecture-eShopOnWeb"
+
 
 echo "Done. Upstream sources restored."

@@ -357,7 +357,11 @@ load_third_party_deps(ctx: ptr, rel_path: string) {
     }
 
     // Store path for maven BOM resolution
-    map_put(ctx, "_bom_file", full_path)
+    if map_has(ctx, "_bom_files") == 0 {
+        map_put(ctx, "_bom_files", list_new())
+    }
+    bom_files = map_get(ctx, "_bom_files")
+    list_add(bom_files, full_path)
 
     // Also extract dep() lines with npm: prefix
     parsed = string_trim(os_exec("grep 'dep.*npm:' '${full_path}' | grep -o '\"npm:[^\"]*\"' | tr -d '\"' | sed 's/^npm://'"))

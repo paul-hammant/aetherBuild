@@ -102,7 +102,7 @@ Initialize a repo to use aetherBuild:
 ```
 
 This creates symlinks in `lib/` for each shipped SDK module (build, java,
-kotlin, go, rust, ts, maven, pnpm, jest, webpack, angular) and adds them to `.gitignore`. Safe to run
+kotlin, go, rust, ts, scala, clojure, dotnet, maven, pnpm, jest, webpack, angular) and adds them to `.gitignore`. Safe to run
 repeatedly — existing correct symlinks are left alone.
 
 ## Running
@@ -244,6 +244,9 @@ aetherBuild/
 │   ├── go/module.ae           # language: go build, go test
 │   ├── rust/module.ae         # language: cargo build
 │   ├── ts/module.ae           # language: tsc, mocha
+│   ├── scala/module.ae        # language: scala-cli compile, test, package
+│   ├── clojure/module.ae      # language: clojure compile, clojure.test
+│   ├── dotnet/module.ae       # language: .csproj generation, dotnet build/test
 │   ├── maven/module.ae        # package mgr: BOM, dep resolution, classpath
 │   ├── pnpm/module.ae         # package mgr: npm dep resolution via pnpm
 │   ├── jest/module.ae         # test runner: Jest
@@ -264,6 +267,82 @@ a simulated Google-style monorepo with Java, Kotlin, Go, Rust, and TypeScript
 modules, cross-language FFI, and JNI. Originally built with bash scripts,
 now ported to Aether Build: 18 compile targets, 2 fat jars, 17 test suites
 all passing from a single `aeb` invocation.
+
+## Integration tests (`itests/`)
+
+Real-world open-source projects converted from their native build systems
+to aetherBuild. Upstream sources are fetched via `itests/fetch-upstream.sh`
+and not committed — only the `.build.ae`, `.tests.ae`, `.bom.ae`, and
+migration status docs are tracked.
+
+### spring-data-examples (Maven → aeb)
+
+Source: [spring-projects/spring-data-examples](https://github.com/spring-projects/spring-data-examples)
+
+90 leaf modules across JPA, MongoDB, Redis, Cassandra, JDBC, R2DBC, etc.
+Replaces 107 `pom.xml` files. Uses `java.javac(b)` / `java.junit5(b)` with
+Spring Boot 4.0.4 BOM for version management. Maven deps resolved via
+`aeb-resolve.jar`. TestContainers works with Podman.
+
+Insight: the BOM mechanism (`load_bom_file` + resolver) handles Maven's
+`<dependencyManagement>` without reimplementing Maven's POM model.
+
+### nx-examples (Nx → aeb)
+
+Source: [nrwl/nx-examples](https://github.com/nrwl/nx-examples)
+
+13 TypeScript modules — Angular 21 (ngc), React 18 (tsc), shared libraries,
+Web Components. Uses `ts.tsc(b)` / `angular.ngc(b)` / `jest.test(b)`. npm
+deps resolved via pnpm. 7/7 test suites pass.
+
+Insight: separating `ts`, `angular`, `jest`, `pnpm`, and `webpack` into
+independent SDK modules keeps each build file focused on what it compiles,
+not how package management works.
+
+### clojure-multiproject-example (deps.edn → aeb)
+
+Source: [adityaathalye/clojure-multiproject-example](https://github.com/adityaathalye/clojure-multiproject-example)
+
+6 Clojure modules — shared library (grugstack), 4 web apps (Ring/Jetty,
+SQLite), 1 stub. Replaces `deps.edn` aliases and `build/build.clj`
+orchestration. Uses `clojure.compile(b)` / `clojure.test(b)`. Clojure
+libs come from Clojars via `clojars.bom.ae`.
+
+Insight: Clojure's source-path-on-classpath model (vs Java's compiled-classes
+model) required a `clojure_src_path` artifact to chain source directories
+transitively through inter-module deps. Also exposed a resolver gap —
+Jetty's POM uses parent-BOM property interpolation for version numbers,
+requiring a `clojure-dep-patches.bom.ae` to list the missing transitives
+explicitly. This led to adding `dep()` support in `.bom.ae` files.
+
+### scala-cli-multi-module-demo (scala-cli → aeb)
+
+Source: [VirtusLab/scala-cli-multi-module-demo](https://github.com/VirtusLab/scala-cli-multi-module-demo)
+
+3 Scala 3 modules — shared library + 2 apps. Uses `scala.scalac(b)`,
+`scala.scalac_test(b)`, `scala.munit(b)`. No scala-cli, Bloop, or
+Coursier — the Scala 3 compiler is invoked directly as
+`java -cp dotty.tools.dotc.Main`, same as javac.
+
+Insight: Scala doesn't need its own build tool. The compiler is a JVM
+program, deps are Maven coordinates, tests run via JUnit. The entire
+scala-cli/sbt/Coursier stack is replaced by `aeb-resolve.jar` + `java`.
+
+### dotnet-architecture-eShopOnWeb (.NET solution → aeb)
+
+Source: [dotnet-architecture/eShopOnWeb](https://github.com/dotnet-architecture/eShopOnWeb)
+
+10 .NET projects — ASP.NET Core MVC, Blazor WASM, REST API, EF Core,
+xUnit tests. Upgraded from .NET 8 to .NET 10. aeb **generates**
+`.{name}.generated.csproj` files from `.build.ae` declarations — NuGet
+packages via `nuget("PackageName")`, project references via `build.dep()`,
+properties via DSL setters. The original `.csproj` files become unnecessary.
+
+Insight: unlike JVM languages where we replace the build tool entirely,
+.NET keeps `dotnet build` and `Directory.Packages.props` for NuGet version
+management. But the `.csproj` files themselves are generated — aeb owns the
+dependency graph and project configuration. When .NET 11 drops `.csproj`
+requirements, aeb is already prepared.
 
 ## Requirements
 

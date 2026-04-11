@@ -1,0 +1,21 @@
+import build
+import dotnet
+import dotnet (root_namespace, nullable, implicit_usings, test_project, nuget)
+
+main() {
+    b = build.start()
+    build.dep(b, "src/ApplicationCore")
+    build.dep(b, "src/PublicApi")
+    build.dep(b, "src/Web")
+    dotnet.build_project(b) {
+        root_namespace("Microsoft.eShopWeb.FunctionalTests")
+        nullable()
+        implicit_usings()
+        test_project()
+        nuget("Microsoft.AspNetCore.Mvc.Testing")
+        nuget("Microsoft.NET.Test.Sdk")
+        nuget("xunit")
+        nuget("xunit.runner.visualstudio")
+        nuget("Microsoft.EntityFrameworkCore.InMemory")
+    }
+}

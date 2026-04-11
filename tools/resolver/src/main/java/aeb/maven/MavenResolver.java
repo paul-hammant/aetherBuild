@@ -62,9 +62,9 @@ public class MavenResolver {
             }
         }
 
-        // Parse .bom.ae files for bom() and repo() declarations
+        // Parse .bom.ae files for maven_bom(), maven_repo(), and dep() declarations
         for (String bomFile : bomFiles) {
-            parseBomAeFile(Paths.get(bomFile), boms, repos);
+            parseBomAeFile(Paths.get(bomFile), boms, repos, deps);
         }
 
         if (repos.isEmpty()) {
@@ -215,11 +215,12 @@ public class MavenResolver {
     }
 
     /**
-     * Parse a .bom.ae file for maven_bom() and maven_repo() declarations.
-     * Extracts quoted strings from lines containing "maven_bom(" or "maven_repo(".
-     * BOMs are g:a:v coordinates (contain two colons), repos are URLs (contain "://").
+     * Parse a .bom.ae file for maven_bom(), maven_repo(), and dep() declarations.
+     * Extracts quoted strings from lines matching these patterns.
+     * BOMs are g:a:v coordinates (contain two colons), repos are URLs (contain "://"),
+     * deps are g:a:v coordinates on lines containing "dep(".
      */
-    private static void parseBomAeFile(Path file, List<String> boms, List<String> repos)
+    private static void parseBomAeFile(Path file, List<String> boms, List<String> repos, List<String> deps)
             throws IOException {
         Pattern quoted = Pattern.compile("\"([^\"]+)\"");
         for (String line : Files.readAllLines(file)) {
@@ -233,6 +234,8 @@ public class MavenResolver {
                     boms.add(val);
                 } else if (line.contains("maven_repo(") && val.contains("://")) {
                     repos.add(val);
+                } else if (line.contains("dep(") && val.chars().filter(c -> c == ':').count() == 2) {
+                    deps.add(val);
                 }
             }
         }

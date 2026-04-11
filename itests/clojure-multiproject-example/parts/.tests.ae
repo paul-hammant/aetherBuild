@@ -1,0 +1,13 @@
+import build
+import maven (load_bom_file)
+import build (dep)
+import clojure
+
+main() {
+    b = build.start()
+    load_bom_file(b, "../clojars.bom.ae")
+    load_bom_file(b, "../clojure-dep-patches.bom.ae")
+    build.dep(b, "parts")
+    dep(b, "org.clojure:clojure:1.12.0")
+    clojure.test(b)
+}

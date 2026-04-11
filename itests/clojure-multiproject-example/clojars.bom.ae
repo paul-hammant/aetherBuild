@@ -1,0 +1,2 @@
+// Clojars — the Clojure community Maven repository
+maven_repo("https://repo.clojars.org")

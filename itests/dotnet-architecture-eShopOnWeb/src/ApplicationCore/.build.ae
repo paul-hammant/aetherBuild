@@ -1,0 +1,17 @@
+import build
+import dotnet
+import dotnet (root_namespace, nullable, nuget)
+
+main() {
+    b = build.start()
+    build.dep(b, "src/BlazorShared")
+    dotnet.build_project(b) {
+        root_namespace("Microsoft.eShopWeb.ApplicationCore")
+        nullable()
+        nuget("Ardalis.GuardClauses")
+        nuget("Ardalis.Result")
+        nuget("Ardalis.Specification")
+        nuget("System.Security.Claims")
+        nuget("System.Text.Json")
+    }
+}

@@ -1,0 +1,14 @@
+import build
+import maven (load_bom_file)
+import build (dep)
+import clojure
+
+main() {
+    b = build.start()
+    load_bom_file(b, "../../clojars.bom.ae")
+    load_bom_file(b, "../../clojure-dep-patches.bom.ae")
+    build.dep(b, "projects/usermanager-first-principles")
+    dep(b, "org.clojure:clojure:1.11.3")
+    dep(b, "clj-http:clj-http:3.12.3")
+    clojure.test(b)
+}

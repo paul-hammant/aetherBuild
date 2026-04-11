@@ -1,0 +1,244 @@
+// scala — Scala SDK for aether.build
+//
+// Compiles Scala source via scalac (invoked as java -cp dotty.tools.dotc.Main).
+// No scala-cli, sbt, or Bloop required — just Java and Maven-resolved jars.
+// Maven deps resolved via the maven module.
+import build
+import maven
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern os_getenv(name: string) -> string
+extern file_exists(path: string) -> int
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_trim(s: string) -> string
+extern io_write_file(path: string, content: string) -> int
+
+// --- DSL setters ---
+
+// Set Scala version (default: 3.8.2)
+scala_version(_ctx: ptr, ver: string) {
+    map_put(_ctx, "scala_version", ver)
+}
+
+// Set the main class for running
+main_class(_ctx: ptr, cls: string) {
+    map_put(_ctx, "main_class", cls)
+}
+
+// --- Internal helpers ---
+
+// Resolve the Scala compiler classpath (compiler + library jars)
+_compiler_classpath(ctx: ptr) {
+    if map_has(ctx, "_scala_compiler_cp") == 1 {
+        return map_get(ctx, "_scala_compiler_cp")
+    }
+
+    ver = "3.8.2"
+    if map_has(ctx, "scala_version") == 1 {
+        ver = map_get(ctx, "scala_version")
+    }
+
+    aeb_home = os_getenv("AEB_HOME")
+    resolver_jar = path_join(aeb_home, "tools/aeb-resolve.jar")
+    cmd = "java -jar ${resolver_jar} --output classpath org.scala-lang:scala3-compiler_3:${ver}"
+    result = string_trim(os_exec(cmd))
+    map_put(ctx, "_scala_compiler_cp", result)
+    return result
+}
+
+// Resolve the Scala library classpath (needed at compile and runtime)
+_library_classpath(ctx: ptr) {
+    if map_has(ctx, "_scala_library_cp") == 1 {
+        return map_get(ctx, "_scala_library_cp")
+    }
+
+    ver = "3.8.2"
+    if map_has(ctx, "scala_version") == 1 {
+        ver = map_get(ctx, "scala_version")
+    }
+
+    aeb_home = os_getenv("AEB_HOME")
+    resolver_jar = path_join(aeb_home, "tools/aeb-resolve.jar")
+    cmd = "java -jar ${resolver_jar} --output classpath org.scala-lang:scala3-library_3:${ver}"
+    result = string_trim(os_exec(cmd))
+    map_put(ctx, "_scala_library_cp", result)
+    return result
+}
+
+// --- SDK functions ---
+
+// Compile Scala sources to .class files via scalac.
+builder scalac(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    classes_dir = path_join(target_dir, "classes")
+    build._mkdirs(classes_dir)
+
+    println("${mod_dir}: compiling (scalac)")
+
+    // Find .scala source files (exclude test files)
+    argfile = path_join(target_dir, "scalac_sources.txt")
+    os_system("find '${source_dir}' -name '*.scala' ! -name '*.test.scala' ! -name '*Test.scala' ! -name '*Tests.scala' > '${argfile}' 2>/dev/null || true")
+
+    argfile_content = string_trim(os_exec("cat '${argfile}'"))
+    if string_length(argfile_content) == 0 {
+        println("${mod_dir}: no .scala source files found")
+        io_write_file(path_join(target_dir, ".timestamp"), "")
+        return 0
+    }
+
+    // Build compile classpath: classes + deps + maven + scala library
+    compiler_cp = _compiler_classpath(ctx)
+    library_cp = _library_classpath(ctx)
+    dep_cp = build._build_dep_classpath(ctx)
+    maven_cp = maven.classpath(ctx)
+
+    cp = classes_dir
+    if string_length(library_cp) > 0 {
+        tmp = string_concat(cp, ":")
+        cp = string_concat(tmp, library_cp)
+    }
+    if string_length(dep_cp) > 0 {
+        tmp2 = string_concat(cp, ":")
+        cp = string_concat(tmp2, dep_cp)
+    }
+    if string_length(maven_cp) > 0 {
+        tmp3 = string_concat(cp, ":")
+        cp = string_concat(tmp3, maven_cp)
+    }
+
+    cmd = "java -cp '${compiler_cp}' dotty.tools.dotc.Main -d '${classes_dir}' -cp '${cp}' @'${argfile}'"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: scalac failed")
+        return exit_code
+    }
+
+    // Write classpath artifact for downstream modules
+    full_cp = classes_dir
+    if string_length(library_cp) > 0 {
+        tmp4 = string_concat(full_cp, ":")
+        full_cp = string_concat(tmp4, library_cp)
+    }
+    if string_length(maven_cp) > 0 {
+        tmp5 = string_concat(full_cp, ":")
+        full_cp = string_concat(tmp5, maven_cp)
+    }
+    build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", full_cp)
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Compile and run Scala tests.
+// Compiles test .scala files, then runs them via JUnit (munit integrates with JUnit).
+builder scalac_test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    test_classes = path_join(target_dir, "test-classes")
+    build._mkdirs(test_classes)
+
+    println("${mod_dir}: compiling test code (scalac)")
+
+    // Find test source files
+    argfile = path_join(target_dir, "scalac_test_sources.txt")
+    os_system("find '${source_dir}' -name '*.test.scala' -o -name '*Test.scala' -o -name '*Tests.scala' > '${argfile}' 2>/dev/null || true")
+
+    argfile_content = string_trim(os_exec("cat '${argfile}'"))
+    if string_length(argfile_content) == 0 {
+        println("${mod_dir}: no test source files found")
+        io_write_file(path_join(target_dir, ".timestamp"), "")
+        return 0
+    }
+
+    // Build classpath: test-classes + prod deps + library + maven
+    compiler_cp = _compiler_classpath(ctx)
+    library_cp = _library_classpath(ctx)
+    dep_cp = build._build_dep_classpath(ctx)
+    maven_cp = maven.classpath(ctx)
+
+    cp = test_classes
+    if string_length(library_cp) > 0 {
+        tmp = string_concat(cp, ":")
+        cp = string_concat(tmp, library_cp)
+    }
+    if string_length(dep_cp) > 0 {
+        tmp2 = string_concat(cp, ":")
+        cp = string_concat(tmp2, dep_cp)
+    }
+    if string_length(maven_cp) > 0 {
+        tmp3 = string_concat(cp, ":")
+        cp = string_concat(tmp3, maven_cp)
+    }
+
+    cmd = "java -cp '${compiler_cp}' dotty.tools.dotc.Main -d '${test_classes}' -cp '${cp}' @'${argfile}'"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: scalac (test) failed")
+        return exit_code
+    }
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Run compiled test classes via JUnit (munit integrates with JUnit 4).
+builder munit(ctx: ptr) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    println("${mod_dir}: running tests (munit)")
+
+    test_classes = path_join(target_dir, "test-classes")
+
+    // Build runtime classpath
+    library_cp = _library_classpath(ctx)
+    dep_cp = build._build_dep_classpath(ctx)
+    maven_cp = maven.classpath(ctx)
+
+    cp = test_classes
+    if string_length(library_cp) > 0 {
+        tmp = string_concat(cp, ":")
+        cp = string_concat(tmp, library_cp)
+    }
+    if string_length(dep_cp) > 0 {
+        tmp2 = string_concat(cp, ":")
+        cp = string_concat(tmp2, dep_cp)
+    }
+    if string_length(maven_cp) > 0 {
+        tmp3 = string_concat(cp, ":")
+        cp = string_concat(tmp3, maven_cp)
+    }
+
+    // Discover test classes
+    class_list = string_trim(os_exec("find '${test_classes}' -name '*.class' ! -name '*$*' | sed 's|^${test_classes}/||; s|/|.|g; s|\\.class$||'"))
+    if string_length(class_list) == 0 {
+        println("${mod_dir}: no test classes found")
+        return 0
+    }
+
+    classes = string_trim(os_exec("echo '${class_list}' | tr '\\n' ' '"))
+    cmd = "java -cp '${cp}' org.junit.runner.JUnitCore ${classes}"
+
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}

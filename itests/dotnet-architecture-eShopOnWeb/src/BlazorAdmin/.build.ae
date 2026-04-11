@@ -1,0 +1,22 @@
+import build
+import dotnet
+import dotnet (sdk, root_namespace, assembly_name, nuget)
+
+main() {
+    b = build.start()
+    build.dep(b, "src/BlazorShared")
+    dotnet.build_project(b) {
+        sdk("Microsoft.NET.Sdk.BlazorWebAssembly")
+        root_namespace("BlazorAdmin")
+        assembly_name("BlazorAdmin")
+        nuget("Blazored.LocalStorage")
+        nuget("BlazorInputFile")
+        nuget("Microsoft.AspNetCore.Components.Authorization")
+        nuget("Microsoft.AspNetCore.Components.WebAssembly")
+        nuget("Microsoft.AspNetCore.Components.WebAssembly.Authentication")
+        nuget("Microsoft.AspNetCore.Components.WebAssembly.DevServer")
+        nuget("Microsoft.Extensions.Identity.Core")
+        nuget("Microsoft.Extensions.Logging.Configuration")
+        nuget("System.Net.Http.Json")
+    }
+}
