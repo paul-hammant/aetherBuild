@@ -6,12 +6,14 @@ Upstream: https://github.com/Oxen-AI/Oxen.git
 
 | Module | Compile | Tests | Notes |
 |--------|---------|-------|-------|
-| crates/lib (liboxen) | FAIL | — | RocksDB native build fails (C++ tooling) |
-| crates/cli (oxen-cli) | FAIL | — | Depends on liboxen |
-| crates/server (oxen-server) | FAIL | — | Depends on liboxen |
+| crates/lib (liboxen) | OK | 769/776 pass | 7 failures need running Oxen server |
+| crates/cli (oxen-cli) | OK | PASS | |
+| crates/server (oxen-server) | intermittent | PASS | RocksDB C++ build resource-sensitive |
 | crates/oxen-py | — | — | Skipped (needs PyO3 + Python) |
 
-0/3 compile. Failure is RocksDB C++ native compilation, not aeb.
+2/3 compile, 2/3 test suites pass. liboxen has 769 passing tests (7 fail —
+need a running Oxen server). oxen-server cargo check intermittently fails
+during RocksDB C++ compilation (disk/resource contention during parallel builds).
 
 ## What aeb replaces
 

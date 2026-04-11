@@ -1,0 +1,10 @@
+import build
+import python
+
+main() {
+    b = build.start()
+    build.dep(b, "chatapp/profanitymasker")
+    python.install(b)
+    python.lint(b)
+    python.typecheck(b)
+}

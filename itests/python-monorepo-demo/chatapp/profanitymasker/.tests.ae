@@ -1,0 +1,8 @@
+import build
+import python
+
+main() {
+    b = build.start()
+    build.dep(b, "chatapp/profanitymasker")
+    python.pytest(b)
+}

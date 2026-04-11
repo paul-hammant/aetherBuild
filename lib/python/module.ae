@@ -1,0 +1,300 @@
+// python — Python SDK for aether.build
+//
+// Creates a venv in .aeb/venv/, installs pip deps, runs tests via pytest,
+// lints via ruff, type-checks via mypy, and packages via build+twine.
+import build
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_system(cmd: string) -> int
+extern file_exists(path: string) -> int
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern io_write_file(path: string, content: string) -> int
+
+// --- DSL setters ---
+
+pip(_ctx: ptr, pkg: string) {
+    if map_has(_ctx, "pip_deps") == 0 {
+        map_put(_ctx, "pip_deps", list_new())
+    }
+    pkgs = map_get(_ctx, "pip_deps")
+    list_add(pkgs, pkg)
+}
+
+requirements_file(_ctx: ptr, path: string) {
+    map_put(_ctx, "requirements_file", path)
+}
+
+// Set the package name for packaging
+package_name(_ctx: ptr, name: string) {
+    map_put(_ctx, "package_name", name)
+}
+
+// Set the package version
+version(_ctx: ptr, ver: string) {
+    map_put(_ctx, "version", ver)
+}
+
+// Set the minimum Python version
+requires_python(_ctx: ptr, spec: string) {
+    map_put(_ctx, "requires_python", spec)
+}
+
+// Set the packages find location (relative to pyproject.toml)
+packages_where(_ctx: ptr, where: string) {
+    map_put(_ctx, "packages_where", where)
+}
+
+// Set the packages include pattern
+packages_include(_ctx: ptr, pattern: string) {
+    map_put(_ctx, "packages_include", pattern)
+}
+
+// --- Internal: ensure venv exists ---
+
+_ensure_venv(root: string) {
+    venv = path_join(root, ".aeb/venv")
+    if file_exists(venv) == 0 {
+        os_system("python3 -m venv '${venv}'")
+    }
+    return venv
+}
+
+// --- SDK functions ---
+
+// Install pip dependencies into .aeb/venv/
+builder install(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+    println("${mod_dir}: installing deps (pip)")
+
+    venv = _ensure_venv(root)
+    pip_bin = path_join(venv, "bin/pip")
+
+    // Install from requirements file
+    if _builder != null {
+        if map_has(_builder, "requirements_file") == 1 {
+            req = map_get(_builder, "requirements_file")
+            req_path = path_join(root, req)
+            if file_exists(req_path) == 1 {
+                os_system("'${pip_bin}' install -q -r '${req_path}'")
+            }
+        }
+    }
+
+    // Install individual pip deps
+    if _builder != null {
+        if map_has(_builder, "pip_deps") == 1 {
+            pkgs = map_get(_builder, "pip_deps")
+            count = list_size(pkgs)
+            i = 0
+            while i < count {
+                pkg = list_get(pkgs, i)
+                os_system("'${pip_bin}' install -q '${pkg}'")
+                i = i + 1
+            }
+        }
+    }
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Run pytest using the .aeb/venv/ python.
+builder pytest(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+    println("${mod_dir}: running tests (pytest)")
+
+    venv = _ensure_venv(root)
+    py = path_join(venv, "bin/python")
+
+    cmd = "cd '${root}' && '${py}' -m pytest '${source_dir}' -v"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: tests FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: tests PASSED")
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Lint Python source with ruff.
+builder lint(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+    println("${mod_dir}: linting (ruff)")
+
+    venv = _ensure_venv(root)
+    pip_bin = path_join(venv, "bin/pip")
+    ruff = path_join(venv, "bin/ruff")
+
+    // Ensure ruff is installed
+    if file_exists(ruff) == 0 {
+        os_system("'${pip_bin}' install -q ruff")
+    }
+
+    cmd = "'${ruff}' check '${source_dir}'"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: lint FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: lint PASSED")
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Type-check Python source with mypy.
+builder typecheck(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+    println("${mod_dir}: type-checking (mypy)")
+
+    venv = _ensure_venv(root)
+    pip_bin = path_join(venv, "bin/pip")
+    mypy = path_join(venv, "bin/mypy")
+
+    // Ensure mypy is installed
+    if file_exists(mypy) == 0 {
+        os_system("'${pip_bin}' install -q mypy")
+    }
+
+    py = path_join(venv, "bin/python")
+    cmd = "cd '${root}' && '${py}' -m mypy '${source_dir}' --ignore-missing-imports"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: typecheck FAILED")
+        return exit_code
+    }
+    println("${mod_dir}: typecheck PASSED")
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Build a Python package (wheel + sdist).
+// Generates pyproject.toml from DSL setters, then runs python -m build.
+builder package(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    dist_dir = path_join(target_dir, "dist")
+    build._mkdirs(dist_dir)
+
+    venv = _ensure_venv(root)
+    pip_bin = path_join(venv, "bin/pip")
+    py = path_join(venv, "bin/python")
+
+    // --- Generate pyproject.toml from DSL ---
+    toml = "[build-system]\nrequires = [\"setuptools\"]\nbuild-backend = \"setuptools.build_meta\"\n\n[project]\n"
+
+    pkg_name = "package"
+    if _builder != null {
+        if map_has(_builder, "package_name") == 1 {
+            pkg_name = map_get(_builder, "package_name")
+        }
+    }
+    toml = string_concat(toml, "name = \"${pkg_name}\"\n")
+
+    pkg_ver = "0.1.0"
+    if _builder != null {
+        if map_has(_builder, "version") == 1 {
+            pkg_ver = map_get(_builder, "version")
+        }
+    }
+    toml = string_concat(toml, "version = \"${pkg_ver}\"\n")
+
+    if _builder != null {
+        if map_has(_builder, "requires_python") == 1 {
+            rp = map_get(_builder, "requires_python")
+            toml = string_concat(toml, "requires-python = \"${rp}\"\n")
+        }
+    }
+
+    // Dependencies from pip() calls
+    if _builder != null {
+        if map_has(_builder, "pip_deps") == 1 {
+            pkgs = map_get(_builder, "pip_deps")
+            count = list_size(pkgs)
+            if count > 0 {
+                toml = string_concat(toml, "dependencies = [\n")
+                i = 0
+                while i < count {
+                    pkg = list_get(pkgs, i)
+                    toml = string_concat(toml, "    \"${pkg}\",\n")
+                    i = i + 1
+                }
+                toml = string_concat(toml, "]\n")
+            }
+        }
+    }
+
+    // Package discovery
+    toml = string_concat(toml, "\n[tool.setuptools.packages.find]\n")
+    pkg_where = "."
+    if _builder != null {
+        if map_has(_builder, "packages_where") == 1 {
+            pkg_where = map_get(_builder, "packages_where")
+        }
+    }
+    toml = string_concat(toml, "where = [\"${pkg_where}\"]\n")
+
+    pkg_include = "${pkg_name}*"
+    if _builder != null {
+        if map_has(_builder, "packages_include") == 1 {
+            pkg_include = map_get(_builder, "packages_include")
+        }
+    }
+    toml = string_concat(toml, "include = [\"${pkg_include}\"]\n")
+
+    pyproject = path_join(source_dir, ".pyproject.generated.toml")
+    io_write_file(pyproject, toml)
+
+    println("${mod_dir}: packaging (python -m build)")
+
+    // Ensure build tool is installed
+    os_system("'${pip_bin}' install -q build")
+
+    cmd = "cd '${source_dir}' && PIP_CONFIG_FILE=/dev/null '${py}' -m build --outdir '${dist_dir}' --config-setting=--build-option=--config='${pyproject}'"
+
+    // python -m build doesn't support --config for pyproject path.
+    // Instead, write pyproject.toml directly (overwrite if exists).
+    real_pyproject = path_join(source_dir, "pyproject.toml")
+    io_write_file(real_pyproject, toml)
+
+    cmd = "cd '${source_dir}' && '${py}' -m build --outdir '${dist_dir}'"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: packaging failed")
+        return exit_code
+    }
+    println("${mod_dir}: packaging done → ${dist_dir}")
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
