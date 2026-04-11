@@ -36,6 +36,11 @@ race(_ctx: ptr) {
     map_put(_ctx, "race", "true")
 }
 
+// Set the Go package pattern (e.g. "./app/..." for subtree, "./..." for all)
+pkg(_ctx: ptr, pattern: string) {
+    map_put(_ctx, "pkg_pattern", pattern)
+}
+
 env_var(_ctx: ptr, kv: string) {
     if map_has(_ctx, "env") == 1 {
         prev = map_get(_ctx, "env")
@@ -132,11 +137,55 @@ go_test_cmd(source_dir: string, ld_path: string, opts: ptr) {
         cmd = string_concat(cmd, " -v")
     }
 
-    cmd = string_concat(cmd, " .")
+    // Package pattern: default "." (current dir only)
+    pkg_pat = "."
+    if opts != null {
+        if map_has(opts, "pkg_pattern") == 1 {
+            pkg_pat = map_get(opts, "pkg_pattern")
+        }
+    }
+    cmd = string_concat(cmd, " ${pkg_pat}")
     return cmd
 }
 
 // --- SDK functions ---
+
+// Compile-check Go packages without producing a binary.
+// Useful for library packages and large single-module repos.
+builder check(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    ts_file = path_join(target_dir, ".timestamp")
+    if build._needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping Go compile check (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling (go)")
+
+    // Determine package pattern
+    pkg_pat = "./..."
+    if _builder != null {
+        if map_has(_builder, "pkg_pattern") == 1 {
+            pkg_pat = map_get(_builder, "pkg_pattern")
+        }
+    }
+
+    cmd = "cd '${root}' && go build ${pkg_pat}"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: go build failed")
+        return exit_code
+    }
+
+    io_write_file(ts_file, "")
+    return 0
+}
 
 builder go_build(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
@@ -222,7 +271,14 @@ builder go_test(ctx: ptr) {
     }
 
     println("${mod_dir}: running Go tests")
+    // For mono-module repos with pkg(), run tests from root so go.mod is found
     test_cmd = go_test_cmd(source_dir, ld_path, _builder)
+    if _builder != null {
+        if map_has(_builder, "pkg_pattern") == 1 {
+            root = build._get(ctx, "root")
+            test_cmd = go_test_cmd(root, ld_path, _builder)
+        }
+    }
     exit_code = os_system(test_cmd)
     if exit_code != 0 {
         println("${mod_dir}: Go tests FAILED")

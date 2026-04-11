@@ -1,0 +1,7 @@
+import build
+import go
+
+main() {
+    b = build.start()
+    go.check(b)
+}

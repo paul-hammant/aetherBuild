@@ -26,6 +26,6 @@ fetch_repo "https://github.com/spring-projects/spring-data-examples.git" "spring
 fetch_repo "https://github.com/adityaathalye/clojure-multiproject-example.git" "clojure-multiproject-example"
 fetch_repo "https://github.com/VirtusLab/scala-cli-multi-module-demo.git" "scala-cli-multi-module-demo"
 fetch_repo "https://github.com/dotnet-architecture/eShopOnWeb.git" "dotnet-architecture-eShopOnWeb"
-
+fetch_repo "https://github.com/fyne-io/fyne.git" "go-multimodule-fyne"
 
 echo "Done. Upstream sources restored."

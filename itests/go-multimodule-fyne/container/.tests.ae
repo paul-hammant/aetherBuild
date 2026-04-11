@@ -1,0 +1,10 @@
+import build
+import go
+import go (pkg)
+
+main() {
+    b = build.start()
+    go.go_test(b) {
+        pkg("./container/...")
+    }
+}
