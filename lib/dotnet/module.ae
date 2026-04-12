@@ -18,6 +18,9 @@ extern file_exists(path: string) -> int
 extern path_join(a: string, b: string) -> string
 extern string_concat(a: string, b: string) -> string
 extern string_length(s: string) -> int
+extern string_contains(s: string, sub: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
 extern string_trim(s: string) -> string
 extern io_write_file(path: string, content: string) -> int
 
@@ -59,6 +62,10 @@ test_project(_ctx: ptr) {
 
 nullable(_ctx: ptr) {
     map_put(_ctx, "nullable", "true")
+}
+
+output_type(_ctx: ptr, t: string) {
+    map_put(_ctx, "output_type", t)
 }
 
 implicit_usings(_ctx: ptr) {
@@ -105,6 +112,10 @@ builder build_project(ctx: ptr) {
             an = map_get(_builder, "assembly_name")
             xml = string_concat(xml, "    <AssemblyName>${an}</AssemblyName>\n")
         }
+        if map_has(_builder, "output_type") == 1 {
+            ot = map_get(_builder, "output_type")
+            xml = string_concat(xml, "    <OutputType>${ot}</OutputType>\n")
+        }
         if map_has(_builder, "nullable") == 1 {
             xml = string_concat(xml, "    <Nullable>enable</Nullable>\n")
         }
@@ -128,7 +139,13 @@ builder build_project(ctx: ptr) {
                 i = 0
                 while i < count {
                     pkg = list_get(pkgs, i)
-                    xml = string_concat(xml, "    <PackageReference Include=\"${pkg}\" />\n")
+                    if string_contains(pkg, ":") == 1 {
+                        pkg_name = string_substring(pkg, 0, string_index_of(pkg, ":"))
+                        pkg_ver = string_substring(pkg, string_index_of(pkg, ":") + 1, string_length(pkg))
+                        xml = string_concat(xml, "    <PackageReference Include=\"${pkg_name}\" Version=\"${pkg_ver}\" />\n")
+                    } else {
+                        xml = string_concat(xml, "    <PackageReference Include=\"${pkg}\" />\n")
+                    }
                     i = i + 1
                 }
                 xml = string_concat(xml, "  </ItemGroup>\n")
