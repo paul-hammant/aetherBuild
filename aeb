@@ -348,31 +348,11 @@ done
 
 # --- Generate orchestrator .ae ---
 ORCH_FILE="$BUILD_DIR/_orchestrator.ae"
-{
-    echo "extern build_session(root: string) -> ptr"
-    echo "extern build_done(s: ptr, module_dir: string)"
-    echo "extern aether_args_get(index: int) -> string"
-    echo ""
-
-    # Extern declarations for all module functions
-    for fname in "${!ALL_MODULES[@]}"; do
-        echo "extern ${fname}(s: ptr) -> int"
-    done
-    echo ""
-
-    # main() calls everything in topo order
-    echo "main() {"
-    echo "    s = build_session(aether_args_get(1))"
-
-    for file_path in "${SORTED_FILES[@]}"; do
-        fname="$(encode_name "$file_path")"
-        label=$(file_to_label "$file_path")
-        echo "    ${fname}(s)"
-        echo "    build_done(s, \"${label}\")"
-    done
-
-    echo "}"
-} > "$ORCH_FILE"
+GEN_ORCH="$AEB_HOME/tools/gen-orchestrator"
+if [[ ! -x "$GEN_ORCH" ]]; then
+    "$AETHER" build "$AEB_HOME/tools/gen-orchestrator.ae" -o "$GEN_ORCH" 2>/dev/null
+fi
+"$GEN_ORCH" "${SORTED_FILES[@]}" > "$ORCH_FILE"
 
 # --- Compile orchestrator and link ---
 ORCH_C="$BUILD_DIR/_orchestrator.c"
