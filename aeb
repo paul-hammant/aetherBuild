@@ -1,7 +1,8 @@
 #!/bin/bash
 # aeb — Aether Build runner
-# Scans .build.ae and .tests.ae files, extracts deps, generates a single
-# linked program, runs it. One process, one map, no subprocess coordination.
+# Scans .build.ae / .tests.ae / .dist.ae files (or takes an explicit .ae file),
+# builds a unified DAG, topo-sorts, compiles each to C, links into one binary,
+# and runs it. One process, one map, no subprocess coordination.
 set -eo pipefail
 
 AETHER="${AETHER:-ae}"
@@ -20,7 +21,6 @@ SHIPPED_MODULES=(build java kotlin go rust ts scala clojure dotnet python contai
 
 # --- argument parsing ---
 TARGET=""
-FORCE_DIST=0
 
 if [[ "${1:-}" == "--init" ]]; then
     mkdir -p "$ROOT/$AEB_LIB"
@@ -66,26 +66,69 @@ fi
 # Parse remaining args
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dist) FORCE_DIST=1; shift ;;
         *) TARGET="$1"; shift ;;
     esac
 done
+# Strip trailing slash
+TARGET="${TARGET%/}"
 
-# --- Encode module path to C-safe function name ---
-# / → _    _ → __
+# --- Encode file path to C-safe function name ---
+# / → _    _ → __   - → _H_   . → _D_
 encode_name() {
-    echo "$1" | sed 's/__/\x00/g; s|/|_|g; s/-/_H_/g; s/\x00/__/g'
+    echo "$1" | sed 's/__/\x00/g; s|/|_|g; s/-/_H_/g; s/\./_D_/g; s/\x00/__/g'
 }
 
-# --- Scan for .build.ae and .tests.ae files ---
-declare -A BUILD_DEPS    # module_dir → deps (from .build.ae)
-declare -A BUILD_FILES   # module_dir → 1 (exists marker)
-declare -A TEST_DEPS     # module_dir → deps (from .tests.ae)
-declare -A TEST_FILES    # module_dir → 1
-declare -A DIST_FILES    # module_dir → 1
-BUILD_MODULES=()
-TEST_MODULES=()
-DIST_MODULES=()
+# --- Resolve a dep reference to a file path ---
+# New-style: "path/to/.tests.ae" (ends in .ae) — used as-is
+# Legacy:    "path/to/dir" — resolved to dir/.build.ae (or .tests.ae or .dist.ae)
+resolve_dep() {
+    local dep="$1"
+    if [[ "$dep" == *.ae ]]; then
+        echo "$dep"
+        return
+    fi
+    # Legacy directory dep — find the .build.ae in that dir
+    if [[ -f "./${dep}/.build.ae" ]]; then
+        echo "${dep}/.build.ae"
+    elif [[ -f "./${dep}/.tests.ae" ]]; then
+        echo "${dep}/.tests.ae"
+    elif [[ -f "./${dep}/.dist.ae" ]]; then
+        echo "${dep}/.dist.ae"
+    else
+        echo "${dep}/.build.ae"  # pass through, will fail at compile time
+    fi
+}
+
+# --- Infer file type from filename ---
+# Used to determine the module_dir label prefix (test: / dist: / none)
+infer_type() {
+    local file="$1"
+    case "$file" in
+        *.tests.ae) echo "test" ;;
+        *.dist.ae)  echo "dist" ;;
+        *)          echo "build" ;;
+    esac
+}
+
+# --- Derive module_dir from file path ---
+# The runtime's build.begin() expects a directory path, optionally with test:/dist: prefix
+file_to_label() {
+    local file="$1"
+    local type
+    type=$(infer_type "$file")
+    local dir
+    dir=$(dirname "$file")
+    case "$type" in
+        test) echo "test:$dir" ;;
+        dist) echo "dist:$dir" ;;
+        *)    echo "$dir" ;;
+    esac
+}
+
+# --- Unified DAG: scan or explicit ---
+declare -A FILE_DEPS     # file_path → space-separated resolved dep file paths
+declare -A FILE_EXISTS   # file_path → 1
+ALL_AE_FILES=()
 
 # Build exclusion list from .aebignore (one directory per line, like .gitignore)
 IGNORE_EXCLUDES=(-not -path './target/*' -not -path './.aeb/*' -not -path './lib/*')
@@ -97,134 +140,100 @@ if [[ -f "$ROOT/.aebignore" ]]; then
     done < "$ROOT/.aebignore"
 fi
 
-for build_file in $(find . -name '.build.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
-    dir=$(dirname "$build_file")
-    module_dir="${dir#./}"
-    BUILD_MODULES+=("$module_dir")
-    BUILD_DEPS["$module_dir"]="$(grep -oP '(?<=dep\(b, ")[^"]+' "$build_file" 2>/dev/null || true)"
-    BUILD_FILES["$module_dir"]=1
-done
+# Extract and resolve deps from a .ae file
+extract_deps() {
+    local file="$1"
+    local raw_deps resolved_deps=""
+    raw_deps="$(grep -oP '(?<=dep\(b, ")[^"]+' "$file" 2>/dev/null || true)"
+    for dep in $raw_deps; do
+        local resolved
+        resolved=$(resolve_dep "$dep")
+        resolved_deps+="$resolved "
+    done
+    echo "$resolved_deps"
+}
 
-for dist_file in $(find . -name '.dist.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
-    dir=$(dirname "$dist_file")
-    module_dir="${dir#./}"
-    DIST_MODULES+=("$module_dir")
-    DIST_FILES["$module_dir"]=1
-done
+if [[ -z "$TARGET" ]]; then
+    # --- Scan mode: discover all .build.ae, .tests.ae, .dist.ae files ---
+    for ae_file in $(find . \( -name '.build.ae' -o -name '.tests.ae' -o -name '.dist.ae' \) "${IGNORE_EXCLUDES[@]}" | sort); do
+        file_path="${ae_file#./}"
+        ALL_AE_FILES+=("$file_path")
+        FILE_EXISTS["$file_path"]=1
+        FILE_DEPS["$file_path"]="$(extract_deps "$ae_file")"
+    done
+else
+    # --- Explicit target mode ---
+    if [[ "$TARGET" == *.ae ]]; then
+        # Explicit file: aeb path/to/whatever.ae
+        if [[ ! -f "./$TARGET" ]]; then
+            echo "error: $TARGET not found" >&2
+            exit 1
+        fi
+    else
+        # Legacy directory target: resolve to a file
+        if [[ -f "./${TARGET}/.tests.ae" ]]; then
+            TARGET="${TARGET}/.tests.ae"
+        elif [[ -f "./${TARGET}/.build.ae" ]]; then
+            TARGET="${TARGET}/.build.ae"
+        elif [[ -f "./${TARGET}/.dist.ae" ]]; then
+            TARGET="${TARGET}/.dist.ae"
+        else
+            echo "error: no .ae files found in $TARGET" >&2
+            exit 1
+        fi
+    fi
 
-for test_file in $(find . -name '.tests.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
-    dir=$(dirname "$test_file")
-    module_dir="${dir#./}"
-    TEST_MODULES+=("$module_dir")
-    TEST_DEPS["$module_dir"]="$(grep -oP '(?<=dep\(b, ")[^"]+' "$test_file" 2>/dev/null || true)"
-    TEST_FILES["$module_dir"]=1
-done
+    # BFS to discover the target and all transitive deps
+    declare -a QUEUE=("$TARGET")
+    declare -A SEEN
+    SEEN["$TARGET"]=1
+    local_i=0
+    while (( local_i < ${#QUEUE[@]} )); do
+        file="${QUEUE[$local_i]}"
+        local_i=$(( local_i + 1 ))
+        ALL_AE_FILES+=("$file")
+        FILE_EXISTS["$file"]=1
+        FILE_DEPS["$file"]="$(extract_deps "./$file")"
+        for dep in ${FILE_DEPS[$file]}; do
+            if [[ -z "${SEEN[$dep]+x}" ]] && [[ -f "./$dep" ]]; then
+                SEEN["$dep"]=1
+                QUEUE+=("$dep")
+            fi
+        done
+    done
+fi
 
-if [ ${#BUILD_MODULES[@]} -eq 0 ] && [ ${#TEST_MODULES[@]} -eq 0 ]; then
-    echo "No .build.ae or .tests.ae files found"
+if [ ${#ALL_AE_FILES[@]} -eq 0 ]; then
+    echo "No .ae build files found"
     exit 0
 fi
 
-# --- Topological sort (build modules only, tests come after) ---
+# --- Topological sort (unified, all file types) ---
 declare -A VISITED
-SORTED_BUILD=()
+SORTED_FILES=()
 
 visit() {
-    local mod="$1"
-    if [[ "${VISITED[$mod]}" == "done" ]]; then return; fi
-    if [[ "${VISITED[$mod]}" == "visiting" ]]; then
-        echo "error: circular dependency involving $mod" >&2
+    local file="$1"
+    [[ "${VISITED[$file]}" == "done" ]] && return
+    if [[ "${VISITED[$file]}" == "visiting" ]]; then
+        echo "error: circular dependency involving $file" >&2
         exit 1
     fi
-    VISITED["$mod"]="visiting"
-    for dep in ${BUILD_DEPS[$mod]}; do
-        if [[ -n "${BUILD_FILES[$dep]+x}" ]]; then
+    VISITED["$file"]="visiting"
+    for dep in ${FILE_DEPS[$file]}; do
+        if [[ -n "${FILE_EXISTS[$dep]+x}" ]]; then
             visit "$dep"
         fi
     done
-    VISITED["$mod"]="done"
-    SORTED_BUILD+=("$mod")
+    VISITED["$file"]="done"
+    SORTED_FILES+=("$file")
 }
 
-for mod in "${BUILD_MODULES[@]}"; do
-    visit "$mod"
+for f in "${ALL_AE_FILES[@]}"; do
+    visit "$f"
 done
 
-# --- Target filtering ---
-if [[ -n "$TARGET" ]]; then
-    # Strip trailing slash
-    TARGET="${TARGET%/}"
-
-    # Collect transitive build deps of a module
-    declare -A NEEDED_BUILD
-    collect_build_deps() {
-        local mod="$1"
-        if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then return; fi
-        NEEDED_BUILD["$mod"]=1
-        for dep in ${BUILD_DEPS[$mod]}; do
-            if [[ -n "${BUILD_FILES[$dep]+x}" ]]; then
-                collect_build_deps "$dep"
-            fi
-        done
-    }
-
-    # Auto-detect: what kind of target is this?
-    IS_TEST=0
-    IS_BUILD=0
-    IS_DIST=0
-    [[ -n "${TEST_FILES[$TARGET]+x}" ]] && IS_TEST=1
-    [[ -n "${BUILD_FILES[$TARGET]+x}" ]] && IS_BUILD=1
-    [[ -n "${DIST_FILES[$TARGET]+x}" ]] && IS_DIST=1
-
-    if [[ $IS_TEST -eq 0 && $IS_BUILD -eq 0 && $IS_DIST -eq 0 ]]; then
-        echo "error: no .build.ae, .tests.ae, or .dist.ae found for $TARGET" >&2
-        exit 1
-    fi
-
-    if [[ $FORCE_DIST -eq 1 && $IS_DIST -eq 1 ]]; then
-        # Explicit --dist: build + package (takes priority)
-        collect_build_deps "$TARGET"
-        FILTERED_BUILD=()
-        for mod in "${SORTED_BUILD[@]}"; do
-            if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then
-                FILTERED_BUILD+=("$mod")
-            fi
-        done
-        SORTED_BUILD=("${FILTERED_BUILD[@]}")
-        DIST_MODULES=("$TARGET")
-        TEST_MODULES=()
-    elif [[ $IS_TEST -eq 1 ]]; then
-        # Test target: build its deps, then run the test
-        for dep in ${TEST_DEPS[$TARGET]}; do
-            if [[ -n "${BUILD_FILES[$dep]+x}" ]]; then
-                collect_build_deps "$dep"
-            fi
-        done
-        FILTERED_BUILD=()
-        for mod in "${SORTED_BUILD[@]}"; do
-            if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then
-                FILTERED_BUILD+=("$mod")
-            fi
-        done
-        SORTED_BUILD=("${FILTERED_BUILD[@]}")
-        TEST_MODULES=("$TARGET")
-        DIST_MODULES=()
-    else
-        # Build target + deps
-        collect_build_deps "$TARGET"
-        FILTERED_BUILD=()
-        for mod in "${SORTED_BUILD[@]}"; do
-            if [[ -n "${NEEDED_BUILD[$mod]+x}" ]]; then
-                FILTERED_BUILD+=("$mod")
-            fi
-        done
-        SORTED_BUILD=("${FILTERED_BUILD[@]}")
-        TEST_MODULES=()
-        DIST_MODULES=()
-    fi
-fi
-
-# --- Compile each module separately, then link ---
+# --- Compile each .ae file separately, then link ---
 AETHERC="${AETHER}therc"
 if ! command -v "$AETHERC" &>/dev/null; then
     AETHERC="$(dirname "$(command -v "$AETHER")")/aetherc"
@@ -232,8 +241,6 @@ fi
 BUILD_DIR="$ROOT/target/_aeb"
 mkdir -p "$BUILD_DIR"
 
-# All .ae source files (build, test, dist) to compile
-declare -A ALL_SOURCES   # fname → source .ae path
 declare -A ALL_MODULES   # fname → module_dir
 ALL_C_FILES=()
 
@@ -269,8 +276,6 @@ resolve_transitive_imports() {
     done
 
     # Return transitive imports not already fully imported in the source file.
-    # A selective import like "import maven (load_bom_file)" doesn't count —
-    # the compiler needs a full "import maven" to resolve all cross-module calls.
     local -A full_imports=()
     while IFS= read -r line; do
         [[ -n "$line" ]] && full_imports["$line"]=1
@@ -287,11 +292,11 @@ resolve_transitive_imports() {
 # Transform a .ae file: rename main(), replace build.start() with build.begin(),
 # and inject transitive imports so the compiler can resolve cross-module calls.
 transform_ae() {
-    local src="$1" func_name="$2" module_dir="$3" out="$4"
-    local escaped_mod
-    escaped_mod=$(echo "$module_dir" | sed 's/\//\\\//g')
+    local src="$1" func_name="$2" label="$3" out="$4"
+    local escaped_label
+    escaped_label=$(echo "$label" | sed 's/\//\\\//g')
     sed -e "s/^main() {/${func_name}(s: ptr) {/" \
-        -e "s/b = build\.start()/b = build.begin(s, \"${escaped_mod}\")\n    if b == 0 { return 0 }/" \
+        -e "s/b = build\.start()/b = build.begin(s, \"${escaped_label}\")\n    if b == 0 { return 0 }/" \
         "$src" > "$out"
 
     # Add transitive imports at the top of the file
@@ -302,57 +307,42 @@ transform_ae() {
         while IFS= read -r mod; do
             imports+="import ${mod}"$'\n'
         done <<< "$extra"
-        # Prepend transitive imports before existing content
         local tmp="${out}.tmp"
         printf '%s' "$imports" | cat - "$out" > "$tmp" && mv "$tmp" "$out"
     fi
 }
 
-echo "aeb: ${#SORTED_BUILD[@]} compile + ${#DIST_MODULES[@]} dist + ${#TEST_MODULES[@]} test"
-
-# Compile build targets
-for mod in "${SORTED_BUILD[@]}"; do
-    fname="build_$(encode_name "$mod")"
-    src="./${mod}/.build.ae"
-    ae_tmp="$BUILD_DIR/${fname}.ae"
-    c_out="$BUILD_DIR/${fname}.c"
-
-    echo "  compile: $mod"
-    transform_ae "$src" "$fname" "$mod" "$ae_tmp"
-    "$AETHERC" --lib "$ROOT/$AEB_LIB" "$ae_tmp" "$c_out" 2>/dev/null
-
-    ALL_C_FILES+=("$c_out")
-    ALL_MODULES["$fname"]="$mod"
+# Count by type for display
+n_build=0; n_test=0; n_dist=0
+for f in "${SORTED_FILES[@]}"; do
+    case "$(infer_type "$f")" in
+        build) n_build=$(( n_build + 1 )) ;;
+        test)  n_test=$(( n_test + 1 )) ;;
+        dist)  n_dist=$(( n_dist + 1 )) ;;
+    esac
 done
+echo "aeb: ${n_build} compile + ${n_dist} dist + ${n_test} test"
 
-# Compile test targets
-for mod in "${TEST_MODULES[@]}"; do
-    fname="test_$(encode_name "$mod")"
-    src="./${mod}/.tests.ae"
+# Compile all targets in topo order
+for file_path in "${SORTED_FILES[@]}"; do
+    type=$(infer_type "$file_path")
+    fname="$(encode_name "$file_path")"
+    src="./${file_path}"
     ae_tmp="$BUILD_DIR/${fname}.ae"
     c_out="$BUILD_DIR/${fname}.c"
+    label=$(file_to_label "$file_path")
 
-    echo "  test:    $mod"
-    transform_ae "$src" "$fname" "test:$mod" "$ae_tmp"
+    case "$type" in
+        build) echo "  compile: $(dirname "$file_path")" ;;
+        test)  echo "  test:    $(dirname "$file_path")" ;;
+        dist)  echo "  dist:    $(dirname "$file_path")" ;;
+    esac
+
+    transform_ae "$src" "$fname" "$label" "$ae_tmp"
     "$AETHERC" --lib "$ROOT/$AEB_LIB" "$ae_tmp" "$c_out" 2>/dev/null
 
     ALL_C_FILES+=("$c_out")
-    ALL_MODULES["$fname"]="$mod"
-done
-
-# Compile dist targets
-for mod in "${DIST_MODULES[@]}"; do
-    fname="dist_$(encode_name "$mod")"
-    src="./${mod}/.dist.ae"
-    ae_tmp="$BUILD_DIR/${fname}.ae"
-    c_out="$BUILD_DIR/${fname}.c"
-
-    echo "  dist:    $mod"
-    transform_ae "$src" "$fname" "dist:$mod" "$ae_tmp"
-    "$AETHERC" --lib "$ROOT/$AEB_LIB" "$ae_tmp" "$c_out" 2>/dev/null
-
-    ALL_C_FILES+=("$c_out")
-    ALL_MODULES["$fname"]="$mod"
+    ALL_MODULES["$fname"]="$(dirname "$file_path")"
 done
 
 # --- Generate orchestrator .ae ---
@@ -369,29 +359,15 @@ ORCH_FILE="$BUILD_DIR/_orchestrator.ae"
     done
     echo ""
 
-    # main() calls everything in order
+    # main() calls everything in topo order
     echo "main() {"
     echo "    s = build_session(aether_args_get(1))"
 
-    # Build targets in topo order
-    for mod in "${SORTED_BUILD[@]}"; do
-        fname="build_$(encode_name "$mod")"
+    for file_path in "${SORTED_FILES[@]}"; do
+        fname="$(encode_name "$file_path")"
+        label=$(file_to_label "$file_path")
         echo "    ${fname}(s)"
-        echo "    build_done(s, \"${mod}\")"
-    done
-
-    # Dist targets
-    for mod in "${DIST_MODULES[@]}"; do
-        fname="dist_$(encode_name "$mod")"
-        echo "    ${fname}(s)"
-        echo "    build_done(s, \"dist:${mod}\")"
-    done
-
-    # Test targets
-    for mod in "${TEST_MODULES[@]}"; do
-        fname="test_$(encode_name "$mod")"
-        echo "    ${fname}(s)"
-        echo "    build_done(s, \"test:${mod}\")"
+        echo "    build_done(s, \"${label}\")"
     done
 
     echo "}"
