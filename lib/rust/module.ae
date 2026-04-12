@@ -15,6 +15,11 @@ extern io_write_file(path: string, content: string) -> int
 extern os_exec(cmd: string) -> string
 extern string_trim(s: string) -> string
 extern file_exists(path: string) -> int
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern string_contains(s: string, sub: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
 
 // --- Rust DSL setters ---
 
@@ -37,6 +42,237 @@ jobs(_ctx: ptr, n: string) {
 // Set the crate/package name for -p flag (workspace member)
 crate_name(_ctx: ptr, name: string) {
     map_put(_ctx, "crate_name", name)
+}
+
+// --- Cargo.toml generation DSL setters ---
+
+edition(_ctx: ptr, e: string) {
+    map_put(_ctx, "edition", e)
+}
+
+version(_ctx: ptr, v: string) {
+    map_put(_ctx, "version", v)
+}
+
+crate_type(_ctx: ptr, t: string) {
+    map_put(_ctx, "crate_type", t)
+}
+
+lib_path(_ctx: ptr, p: string) {
+    map_put(_ctx, "lib_path", p)
+}
+
+// Add a crate dependency: name and version
+crate_dep(_ctx: ptr, name: string, ver: string) {
+    if map_has(_ctx, "_crate_deps") == 0 {
+        map_put(_ctx, "_crate_deps", list_new())
+    }
+    deps = map_get(_ctx, "_crate_deps")
+    entry = string_concat(name, "=")
+    entry = string_concat(entry, ver)
+    list_add(deps, entry)
+}
+
+// Add a crate dependency with features: "name", "version", "feat1,feat2"
+crate_dep_features(_ctx: ptr, name: string, ver: string, feats: string) {
+    if map_has(_ctx, "_crate_deps_features") == 0 {
+        map_put(_ctx, "_crate_deps_features", list_new())
+    }
+    deps = map_get(_ctx, "_crate_deps_features")
+    entry = string_concat(name, "=")
+    entry = string_concat(entry, ver)
+    entry = string_concat(entry, "=")
+    entry = string_concat(entry, feats)
+    list_add(deps, entry)
+}
+
+// Add a path dependency (inter-module)
+path_dep(_ctx: ptr, name: string, path: string) {
+    if map_has(_ctx, "_path_deps") == 0 {
+        map_put(_ctx, "_path_deps", list_new())
+    }
+    deps = map_get(_ctx, "_path_deps")
+    entry = string_concat(name, "=")
+    entry = string_concat(entry, path)
+    list_add(deps, entry)
+}
+
+// --- Cargo.toml content generator ---
+// Pure function: takes an options map, returns TOML string.
+// Split "name=value" entries using string_index_of/string_substring.
+
+_split_first(entry: string, sep: string) {
+    idx = string_index_of(entry, sep)
+    return string_substring(entry, 0, idx)
+}
+
+_split_second(entry: string, sep: string) {
+    idx = string_index_of(entry, sep)
+    return string_substring(entry, idx + 1, string_length(entry))
+}
+
+cargo_toml_content(opts: ptr) {
+    toml = "[package]\n"
+
+    // name
+    if opts != null {
+        if map_has(opts, "crate_name") == 1 {
+            name = map_get(opts, "crate_name")
+            toml = string_concat(toml, "name = \"${name}\"\n")
+        }
+    }
+
+    // version
+    ver = "0.1.0"
+    if opts != null {
+        if map_has(opts, "version") == 1 {
+            ver = map_get(opts, "version")
+        }
+    }
+    toml = string_concat(toml, "version = \"${ver}\"\n")
+
+    // edition
+    ed = "2021"
+    if opts != null {
+        if map_has(opts, "edition") == 1 {
+            ed = map_get(opts, "edition")
+        }
+    }
+    toml = string_concat(toml, "edition = \"${ed}\"\n")
+
+    // [lib] section if crate_type or lib_path is set
+    has_lib = 0
+    if opts != null {
+        if map_has(opts, "crate_type") == 1 { has_lib = 1 }
+        if map_has(opts, "lib_path") == 1 { has_lib = 1 }
+    }
+    if has_lib == 1 {
+        toml = string_concat(toml, "\n[lib]\n")
+        if map_has(opts, "lib_path") == 1 {
+            lp = map_get(opts, "lib_path")
+            toml = string_concat(toml, "path = \"${lp}\"\n")
+        }
+        if map_has(opts, "crate_type") == 1 {
+            ct = map_get(opts, "crate_type")
+            toml = string_concat(toml, "crate-type = [\"${ct}\"]\n")
+        }
+    }
+
+    // [dependencies]
+    has_deps = 0
+    if opts != null {
+        if map_has(opts, "_crate_deps") == 1 {
+            has_deps = 1
+        }
+        if map_has(opts, "_crate_deps_features") == 1 {
+            has_deps = 1
+        }
+        if map_has(opts, "_path_deps") == 1 {
+            has_deps = 1
+        }
+    }
+
+    if has_deps == 1 {
+        toml = string_concat(toml, "\n[dependencies]\n")
+
+        // Simple version deps: name = "version"
+        if map_has(opts, "_crate_deps") == 1 {
+            deps = map_get(opts, "_crate_deps")
+            count = list_size(deps)
+            i = 0
+            while i < count {
+                entry = list_get(deps, i)
+                name = _split_first(entry, "=")
+                ver = _split_second(entry, "=")
+                toml = string_concat(toml, "${name} = \"${ver}\"\n")
+                i = i + 1
+            }
+        }
+
+        // Deps with features: name = { version = "ver", features = ["f1", "f2"] }
+        if map_has(opts, "_crate_deps_features") == 1 {
+            deps = map_get(opts, "_crate_deps_features")
+            count = list_size(deps)
+            i = 0
+            while i < count {
+                entry = list_get(deps, i)
+                // format: name=version=feat1,feat2
+                name = _split_first(entry, "=")
+                rest = _split_second(entry, "=")
+                ver = _split_first(rest, "=")
+                feats = _split_second(rest, "=")
+                // Convert comma-separated to ["f1", "f2"]
+                feat_toml = string_trim(os_exec("echo '${feats}' | sed 's/,/\", \"/g'"))
+                toml = string_concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
+                i = i + 1
+            }
+        }
+
+        // Path deps: name = { path = "..." }
+        if map_has(opts, "_path_deps") == 1 {
+            deps = map_get(opts, "_path_deps")
+            count = list_size(deps)
+            i = 0
+            while i < count {
+                entry = list_get(deps, i)
+                name = _split_first(entry, "=")
+                p = _split_second(entry, "=")
+                toml = string_concat(toml, "${name} = { path = \"${p}\" }\n")
+                i = i + 1
+            }
+        }
+    }
+
+    return toml
+}
+
+// --- cargo_project builder: generate Cargo.toml + cargo build ---
+
+builder cargo_project(ctx: ptr) {
+    root = build._get(ctx, "root")
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    build._mkdirs(target_dir)
+
+    lib_dir = path_join(target_dir, "lib")
+    build._mkdirs(lib_dir)
+
+    ts_file = path_join(lib_dir, ".timestamp")
+    if build._needs_rebuild(source_dir, ts_file) == 0 {
+        println("${mod_dir}: skipping compilation of prod code (not changed)")
+        return 0
+    }
+
+    // Generate Cargo.toml from DSL (cargo requires this exact filename)
+    toml = cargo_toml_content(_builder)
+    cargo_toml = path_join(source_dir, "Cargo.toml")
+    io_write_file(cargo_toml, toml)
+    println("${mod_dir}: generated Cargo.toml")
+
+    // Build
+    println("${mod_dir}: compiling prod code (cargo build)")
+    cargo_cmd = cargo_build_cmd(source_dir, target_dir, _builder)
+    exit_code = os_system(cargo_cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: cargo build failed")
+        return exit_code
+    }
+
+    // Write shared library artifact if lib_name is set
+    if _builder != null {
+        if map_has(_builder, "lib_name") == 1 {
+            cb_lib_name = map_get(_builder, "lib_name")
+            release_dir = path_join(lib_dir, "release")
+            full_so = path_join(release_dir, cb_lib_name)
+            build._write_artifact(ctx, "ldlibdeps", full_so)
+            build._write_artifact(ctx, "shared_library_deps_including_transitive", full_so)
+        }
+    }
+
+    io_write_file(ts_file, "")
+    return 0
 }
 
 // --- Command builder ---
