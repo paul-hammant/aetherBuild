@@ -1,0 +1,57 @@
+// transform-ae — transforms a .build.ae/.tests.ae/.dist.ae for linking
+//
+// Usage: transform-ae <source> <func_name> <label> <output> <lib_dir> <aeb_home>
+//
+// Transforms:
+// 1. Renames main() to func_name(s: ptr)
+// 2. Replaces build.start() with build.begin(s, "label") + guard
+// 3. Strips .ae filenames from dep() references (runtime needs dirs)
+// 4. Injects transitive SDK imports at the top
+
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_trim(s: string) -> string
+extern os_exec(cmd: string) -> string
+extern os_system(cmd: string) -> int
+extern io_write_file(path: string, content: string) -> int
+
+main() {
+    argc = aether_args_count()
+    if argc < 7 {
+        println("Usage: transform-ae <source> <func_name> <label> <output> <lib_dir> <aeb_home>")
+        exit(1)
+    }
+
+    src = aether_args_get(1)
+    func_name = aether_args_get(2)
+    label = aether_args_get(3)
+    out = aether_args_get(4)
+    lib_dir = aether_args_get(5)
+    aeb_home = aether_args_get(6)
+
+    // Step 1: write a sed script to a temp file (avoids shell quoting issues)
+    sed_script = "s/^main() {/"
+    sed_script = string_concat(sed_script, func_name)
+    sed_script = string_concat(sed_script, "(s: ptr) {/\n")
+    sed_script = string_concat(sed_script, "s|b = build\\.start()|b = build.begin(s, \"")
+    sed_script = string_concat(sed_script, label)
+    sed_script = string_concat(sed_script, "\")\\n    if b == 0 { return 0 }|\n")
+    sed_script = string_concat(sed_script, "s|dep(b, \"\\([^\"]*\\)/\\.[^\"/]*\\.ae\")|dep(b, \"\\1\")|g\n")
+
+    sed_file = string_concat(out, ".sed")
+    io_write_file(sed_file, sed_script)
+    os_system("sed -f '${sed_file}' '${src}' > '${out}'")
+    os_system("rm -f '${sed_file}'")
+
+    // Step 2: resolve transitive imports via external script
+    resolve_cmd = string_concat(aeb_home, "/tools/resolve-imports.sh '${src}' '${lib_dir}'")
+    extra = string_trim(os_exec(resolve_cmd))
+
+    // Step 3: prepend transitive imports to output file
+    if string_length(extra) > 0 {
+        tmp_file = string_concat(out, ".tmp")
+        os_system("printf '%s\\n' '${extra}' | cat - '${out}' > '${tmp_file}' && mv '${tmp_file}' '${out}'")
+    }
+}
