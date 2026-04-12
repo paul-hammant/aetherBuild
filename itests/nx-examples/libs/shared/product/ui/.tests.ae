@@ -4,7 +4,7 @@ import jest
 
 main() {
     b = build.start()
-    dep(b, "libs/shared/product/ui")
+    dep(b, "libs/shared/product/ui/.build.ae")
     load_third_party_deps(b, "../../../../base.deps.ae")
     jest.test(b)
 }

@@ -4,7 +4,7 @@ import jest
 
 main() {
     b = build.start()
-    dep(b, "libs/products/home-page")
+    dep(b, "libs/products/home-page/.build.ae")
     load_third_party_deps(b, "../../../angular.deps.ae")
     jest.test(b)
 }

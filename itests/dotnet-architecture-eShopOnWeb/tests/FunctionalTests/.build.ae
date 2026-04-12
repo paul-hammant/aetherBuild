@@ -4,9 +4,9 @@ import dotnet (root_namespace, nullable, implicit_usings, test_project, nuget)
 
 main() {
     b = build.start()
-    build.dep(b, "src/ApplicationCore")
-    build.dep(b, "src/PublicApi")
-    build.dep(b, "src/Web")
+    build.dep(b, "src/ApplicationCore/.build.ae")
+    build.dep(b, "src/PublicApi/.build.ae")
+    build.dep(b, "src/Web/.build.ae")
     dotnet.build_project(b) {
         root_namespace("Microsoft.eShopWeb.FunctionalTests")
         nullable()

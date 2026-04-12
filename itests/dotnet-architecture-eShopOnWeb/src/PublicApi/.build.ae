@@ -4,8 +4,8 @@ import dotnet (sdk, root_namespace, nullable, nuget)
 
 main() {
     b = build.start()
-    build.dep(b, "src/ApplicationCore")
-    build.dep(b, "src/Infrastructure")
+    build.dep(b, "src/ApplicationCore/.build.ae")
+    build.dep(b, "src/Infrastructure/.build.ae")
     dotnet.build_project(b) {
         sdk("Microsoft.NET.Sdk.Web")
         root_namespace("Microsoft.eShopWeb.PublicApi")

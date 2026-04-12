@@ -297,6 +297,7 @@ transform_ae() {
     escaped_label=$(echo "$label" | sed 's/\//\\\//g')
     sed -e "s/^main() {/${func_name}(s: ptr) {/" \
         -e "s/b = build\.start()/b = build.begin(s, \"${escaped_label}\")\n    if b == 0 { return 0 }/" \
+        -e 's|dep(b, "\([^"]*\)/\.[^"/]*\.ae")|dep(b, "\1")|g' \
         "$src" > "$out"
 
     # Add transitive imports at the top of the file

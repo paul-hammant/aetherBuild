@@ -4,7 +4,7 @@ import rust (crate_name)
 
 main() {
     b = build.start()
-    build.dep(b, "crates/cli")
+    build.dep(b, "crates/cli/.build.ae")
     rust.test(b) {
         crate_name("oxen-cli")
     }

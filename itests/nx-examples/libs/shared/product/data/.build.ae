@@ -6,7 +6,7 @@ import ts (skip_lib_check)
 main() {
     b = build.start()
     load_third_party_deps(b, "../../../../base.deps.ae")
-    dep(b, "libs/shared/product/types")
+    dep(b, "libs/shared/product/types/.build.ae")
     ts.tsc(b) {
         skip_lib_check()
     }

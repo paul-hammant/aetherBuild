@@ -6,7 +6,7 @@ import ts (skip_lib_check)
 main() {
     b = build.start()
     load_third_party_deps(b, "../../../../base.deps.ae")
-    dep(b, "libs/shared/jsxify")
+    dep(b, "libs/shared/jsxify/.build.ae")
     ts.tsc(b) {
         skip_lib_check()
     }

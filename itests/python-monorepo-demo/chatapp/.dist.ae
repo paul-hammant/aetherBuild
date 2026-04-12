@@ -4,7 +4,7 @@ import python (package_name, version, requires_python, pip, packages_where, pack
 
 main() {
     b = build.start()
-    build.dep(b, "chatapp/contentbuilder")
+    build.dep(b, "chatapp/contentbuilder/.build.ae")
     python.package(b) {
         package_name("chatapp")
         version("0.1.0")

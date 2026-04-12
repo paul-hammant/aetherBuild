@@ -3,7 +3,7 @@ import python
 
 main() {
     b = build.start()
-    build.dep(b, "chatapp/profanitymasker")
+    build.dep(b, "chatapp/profanitymasker/.build.ae")
     python.install(b)
     python.lint(b)
     python.typecheck(b)

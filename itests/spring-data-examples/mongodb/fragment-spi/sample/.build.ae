@@ -9,7 +9,7 @@ main() {
     load_bom_file(b, "../../../spring-boot.bom.ae")
     dep(b, "org.springframework.boot:spring-boot-starter-data-mongodb")
     dep(b, "org.projectlombok:lombok")
-    dep(b, "mongodb/fragment-spi/atlas-api")
+    dep(b, "mongodb/fragment-spi/atlas-api/.build.ae")
     java.javac(b) {
         release("25")
         source_layout("maven idiomatic")

@@ -4,7 +4,7 @@ import scala
 
 main() {
     b = build.start()
-    build.dep(b, "common")
+    build.dep(b, "common/.build.ae")
     dep(b, "org.scalameta:munit_3:1.0.0-M7")
     dep(b, "org.hamcrest:hamcrest-core:1.3")
     scala.scalac_test(b)

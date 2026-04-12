@@ -4,7 +4,7 @@ import angular
 
 main() {
     b = build.start()
-    dep(b, "apps/products")
+    dep(b, "apps/products/.build.ae")
     load_third_party_deps(b, "../../angular.deps.ae")
     angular.ng_build(b)
 }

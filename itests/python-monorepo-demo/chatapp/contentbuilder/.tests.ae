@@ -3,6 +3,6 @@ import python
 
 main() {
     b = build.start()
-    build.dep(b, "chatapp/contentbuilder")
+    build.dep(b, "chatapp/contentbuilder/.build.ae")
     python.pytest(b)
 }
