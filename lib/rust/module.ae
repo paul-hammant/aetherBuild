@@ -62,13 +62,25 @@ lib_path(_ctx: ptr, p: string) {
     map_put(_ctx, "lib_path", p)
 }
 
+// Declare a binary target: bin("oxen", "src/main.rs")
+// Emits [[bin]] name = "..." path = "..."
+bin(_ctx: ptr, name: string, path: string) {
+    if map_has(_ctx, "_bins") == 0 {
+        map_put(_ctx, "_bins", list_new())
+    }
+    bins = map_get(_ctx, "_bins")
+    entry = string_concat(name, "~")
+    entry = string_concat(entry, path)
+    list_add(bins, entry)
+}
+
 // Add a crate dependency: name and version
 crate_dep(_ctx: ptr, name: string, ver: string) {
     if map_has(_ctx, "_crate_deps") == 0 {
         map_put(_ctx, "_crate_deps", list_new())
     }
     deps = map_get(_ctx, "_crate_deps")
-    entry = string_concat(name, "=")
+    entry = string_concat(name, "~")
     entry = string_concat(entry, ver)
     list_add(deps, entry)
 }
@@ -79,9 +91,9 @@ crate_dep_features(_ctx: ptr, name: string, ver: string, feats: string) {
         map_put(_ctx, "_crate_deps_features", list_new())
     }
     deps = map_get(_ctx, "_crate_deps_features")
-    entry = string_concat(name, "=")
+    entry = string_concat(name, "~")
     entry = string_concat(entry, ver)
-    entry = string_concat(entry, "=")
+    entry = string_concat(entry, "~")
     entry = string_concat(entry, feats)
     list_add(deps, entry)
 }
@@ -92,9 +104,26 @@ path_dep(_ctx: ptr, name: string, path: string) {
         map_put(_ctx, "_path_deps", list_new())
     }
     deps = map_get(_ctx, "_path_deps")
-    entry = string_concat(name, "=")
+    entry = string_concat(name, "~")
     entry = string_concat(entry, path)
     list_add(deps, entry)
+}
+
+// Declare a feature: feature("otel", "dep:opentelemetry,dep:tracing-opentelemetry")
+// Use "" for an empty feature flag (feature_name = [])
+feature(_ctx: ptr, name: string, deps_csv: string) {
+    if map_has(_ctx, "_features") == 0 {
+        map_put(_ctx, "_features", list_new())
+    }
+    feats = map_get(_ctx, "_features")
+    entry = string_concat(name, "~")
+    entry = string_concat(entry, deps_csv)
+    list_add(feats, entry)
+}
+
+// Set the default features list (comma-separated)
+default_features(_ctx: ptr, feats_csv: string) {
+    map_put(_ctx, "_default_features", feats_csv)
 }
 
 // --- Cargo.toml content generator ---
@@ -182,8 +211,8 @@ cargo_toml_content(opts: ptr) {
             i = 0
             while i < count {
                 entry = list_get(deps, i)
-                name = _split_first(entry, "=")
-                ver = _split_second(entry, "=")
+                name = _split_first(entry, "~")
+                ver = _split_second(entry, "~")
                 toml = string_concat(toml, "${name} = \"${ver}\"\n")
                 i = i + 1
             }
@@ -197,10 +226,10 @@ cargo_toml_content(opts: ptr) {
             while i < count {
                 entry = list_get(deps, i)
                 // format: name=version=feat1,feat2
-                name = _split_first(entry, "=")
-                rest = _split_second(entry, "=")
-                ver = _split_first(rest, "=")
-                feats = _split_second(rest, "=")
+                name = _split_first(entry, "~")
+                rest = _split_second(entry, "~")
+                ver = _split_first(rest, "~")
+                feats = _split_second(rest, "~")
                 // Convert comma-separated to ["f1", "f2"]
                 feat_toml = string_trim(os_exec("echo '${feats}' | sed 's/,/\", \"/g'"))
                 toml = string_concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
@@ -215,8 +244,8 @@ cargo_toml_content(opts: ptr) {
             i = 0
             while i < count {
                 entry = list_get(deps, i)
-                name = _split_first(entry, "=")
-                p = _split_second(entry, "=")
+                name = _split_first(entry, "~")
+                p = _split_second(entry, "~")
                 toml = string_concat(toml, "${name} = { path = \"${p}\" }\n")
                 i = i + 1
             }
@@ -224,6 +253,545 @@ cargo_toml_content(opts: ptr) {
     }
 
     return toml
+}
+
+// --- Workspace Cargo.toml generator ---
+// Generates the root Cargo.toml for a workspace with [workspace], members,
+// optional [workspace.package], and [workspace.dependencies].
+
+// DSL setters for workspace builder
+workspace_member(_ctx: ptr, path: string) {
+    if map_has(_ctx, "_ws_members") == 0 {
+        map_put(_ctx, "_ws_members", list_new())
+    }
+    members = map_get(_ctx, "_ws_members")
+    list_add(members, path)
+}
+
+workspace_dep(_ctx: ptr, name: string, ver: string) {
+    if map_has(_ctx, "_ws_deps") == 0 {
+        map_put(_ctx, "_ws_deps", list_new())
+    }
+    deps = map_get(_ctx, "_ws_deps")
+    entry = string_concat(name, "~")
+    entry = string_concat(entry, ver)
+    list_add(deps, entry)
+}
+
+workspace_dep_features(_ctx: ptr, name: string, ver: string, feats: string) {
+    if map_has(_ctx, "_ws_deps_features") == 0 {
+        map_put(_ctx, "_ws_deps_features", list_new())
+    }
+    deps = map_get(_ctx, "_ws_deps_features")
+    entry = string_concat(name, "~")
+    entry = string_concat(entry, ver)
+    entry = string_concat(entry, "~")
+    entry = string_concat(entry, feats)
+    list_add(deps, entry)
+}
+
+// Advanced workspace dep with full control:
+// workspace_dep_full("name", "version", "feat1,feat2", "package_alias", "true|false" for default-features)
+// Pass "" for any field to omit it.
+// Emits: name = { version = "ver", features = [..], package = "..", default-features = false }
+workspace_dep_full(_ctx: ptr, name: string, ver: string, feats: string, pkg: string, no_default: string) {
+    if map_has(_ctx, "_ws_deps_full") == 0 {
+        map_put(_ctx, "_ws_deps_full", list_new())
+    }
+    deps = map_get(_ctx, "_ws_deps_full")
+    entry = string_concat(name, "~")
+    entry = string_concat(entry, ver)
+    entry = string_concat(entry, "~")
+    entry = string_concat(entry, feats)
+    entry = string_concat(entry, "~")
+    entry = string_concat(entry, pkg)
+    entry = string_concat(entry, "~")
+    entry = string_concat(entry, no_default)
+    list_add(deps, entry)
+}
+
+workspace_resolver(_ctx: ptr, r: string) {
+    map_put(_ctx, "resolver", r)
+}
+
+workspace_edition(_ctx: ptr, e: string) {
+    map_put(_ctx, "edition", e)
+}
+
+workspace_version(_ctx: ptr, v: string) {
+    map_put(_ctx, "version", v)
+}
+
+// Pure function: opts map → workspace Cargo.toml string
+cargo_workspace_toml_content(opts: ptr) {
+    toml = "[workspace]\n"
+
+    // resolver
+    res = "2"
+    if opts != null {
+        if map_has(opts, "resolver") == 1 {
+            res = map_get(opts, "resolver")
+        }
+    }
+    toml = string_concat(toml, "resolver = \"${res}\"\n")
+
+    // members
+    if opts != null {
+        if map_has(opts, "_ws_members") == 1 {
+            members = map_get(opts, "_ws_members")
+            count = list_size(members)
+            if count > 0 {
+                toml = string_concat(toml, "members = [\n")
+                i = 0
+                while i < count {
+                    m = list_get(members, i)
+                    toml = string_concat(toml, "    \"${m}\",\n")
+                    i = i + 1
+                }
+                toml = string_concat(toml, "]\n")
+            }
+        }
+    }
+
+    // [workspace.package] — optional, emitted if edition or version is set
+    has_pkg = 0
+    if opts != null {
+        if map_has(opts, "edition") == 1 { has_pkg = 1 }
+        if map_has(opts, "version") == 1 { has_pkg = 1 }
+    }
+    if has_pkg == 1 {
+        toml = string_concat(toml, "\n[workspace.package]\n")
+        if map_has(opts, "version") == 1 {
+            wv = map_get(opts, "version")
+            toml = string_concat(toml, "version = \"${wv}\"\n")
+        }
+        if map_has(opts, "edition") == 1 {
+            ed = map_get(opts, "edition")
+            toml = string_concat(toml, "edition = \"${ed}\"\n")
+        }
+    }
+
+    // [workspace.dependencies]
+    has_ws_deps = 0
+    if opts != null {
+        if map_has(opts, "_ws_deps") == 1 { has_ws_deps = 1 }
+        if map_has(opts, "_ws_deps_features") == 1 { has_ws_deps = 1 }
+        if map_has(opts, "_ws_deps_full") == 1 { has_ws_deps = 1 }
+    }
+
+    if has_ws_deps == 1 {
+        toml = string_concat(toml, "\n[workspace.dependencies]\n")
+
+        // Simple version deps
+        if map_has(opts, "_ws_deps") == 1 {
+            deps = map_get(opts, "_ws_deps")
+            count = list_size(deps)
+            i = 0
+            while i < count {
+                entry = list_get(deps, i)
+                name = _split_first(entry, "~")
+                ver = _split_second(entry, "~")
+                toml = string_concat(toml, "${name} = \"${ver}\"\n")
+                i = i + 1
+            }
+        }
+
+        // Deps with features
+        if map_has(opts, "_ws_deps_features") == 1 {
+            deps = map_get(opts, "_ws_deps_features")
+            count = list_size(deps)
+            i = 0
+            while i < count {
+                entry = list_get(deps, i)
+                name = _split_first(entry, "~")
+                rest = _split_second(entry, "~")
+                ver = _split_first(rest, "~")
+                feats = _split_second(rest, "~")
+                feat_toml = string_trim(os_exec("echo '${feats}' | sed 's/,/\", \"/g'"))
+                toml = string_concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
+                i = i + 1
+            }
+        }
+
+        // Full deps: name~version~features~package~no_default
+        if map_has(opts, "_ws_deps_full") == 1 {
+            deps = map_get(opts, "_ws_deps_full")
+            count = list_size(deps)
+            i = 0
+            while i < count {
+                entry = list_get(deps, i)
+                // Parse 5-field entry via progressive splits
+                f_name = _split_first(entry, "~")
+                r1 = _split_second(entry, "~")
+                f_ver = _split_first(r1, "~")
+                r2 = _split_second(r1, "~")
+                f_feats = _split_first(r2, "~")
+                r3 = _split_second(r2, "~")
+                f_pkg = _split_first(r3, "~")
+                f_nodef = _split_second(r3, "~")
+
+                line = "${f_name} = { "
+                first_field = 1
+                if string_length(f_pkg) > 0 {
+                    line = string_concat(line, "package = \"${f_pkg}\"")
+                    first_field = 0
+                }
+                if string_length(f_ver) > 0 {
+                    if first_field == 0 {
+                        line = string_concat(line, ", ")
+                    }
+                    line = string_concat(line, "version = \"${f_ver}\"")
+                    first_field = 0
+                }
+                if string_length(f_feats) > 0 {
+                    if first_field == 0 {
+                        line = string_concat(line, ", ")
+                    }
+                    f_feat_toml = string_trim(os_exec("echo '${f_feats}' | sed 's/,/\", \"/g'"))
+                    line = string_concat(line, "features = [\"${f_feat_toml}\"]")
+                    first_field = 0
+                }
+                if f_nodef == "true" {
+                    if first_field == 0 {
+                        line = string_concat(line, ", ")
+                    }
+                    line = string_concat(line, "default-features = false")
+                }
+                line = string_concat(line, " }\n")
+                toml = string_concat(toml, line)
+                i = i + 1
+            }
+        }
+    }
+
+    return toml
+}
+
+// --- Member crate Cargo.toml generator ---
+// For crates inside a workspace that use `dep.workspace = true`
+
+// DSL setter: reference a workspace dep by name
+ws_dep(_ctx: ptr, name: string) {
+    if map_has(_ctx, "_ws_refs") == 0 {
+        map_put(_ctx, "_ws_refs", list_new())
+    }
+    refs = map_get(_ctx, "_ws_refs")
+    list_add(refs, name)
+}
+
+// DSL setter: reference a workspace dep in [dev-dependencies]
+dev_ws_dep(_ctx: ptr, name: string) {
+    if map_has(_ctx, "_dev_ws_refs") == 0 {
+        map_put(_ctx, "_dev_ws_refs", list_new())
+    }
+    refs = map_get(_ctx, "_dev_ws_refs")
+    list_add(refs, name)
+}
+
+// Pure function: opts map → member Cargo.toml string
+cargo_member_toml_content(opts: ptr) {
+    toml = "[package]\n"
+
+    // name
+    if opts != null {
+        if map_has(opts, "crate_name") == 1 {
+            name = map_get(opts, "crate_name")
+            toml = string_concat(toml, "name = \"${name}\"\n")
+        }
+    }
+
+    // edition — inherit from workspace
+    if opts != null {
+        if map_has(opts, "edition") == 1 {
+            toml = string_concat(toml, "edition.workspace = true\n")
+        }
+    }
+
+    // version — inherit from workspace if not explicitly set
+    if opts != null {
+        if map_has(opts, "version") == 1 {
+            ver = map_get(opts, "version")
+            toml = string_concat(toml, "version = \"${ver}\"\n")
+        }
+    }
+
+    // [[bin]] sections
+    if opts != null {
+        if map_has(opts, "_bins") == 1 {
+            bins = map_get(opts, "_bins")
+            bcount = list_size(bins)
+            bi = 0
+            while bi < bcount {
+                bentry = list_get(bins, bi)
+                bname = _split_first(bentry, "~")
+                bpath = _split_second(bentry, "~")
+                toml = string_concat(toml, "\n[[bin]]\n")
+                toml = string_concat(toml, "name = \"${bname}\"\n")
+                toml = string_concat(toml, "path = \"${bpath}\"\n")
+                bi = bi + 1
+            }
+        }
+    }
+
+    // [lib] section
+    has_lib = 0
+    if opts != null {
+        if map_has(opts, "crate_type") == 1 { has_lib = 1 }
+        if map_has(opts, "lib_path") == 1 { has_lib = 1 }
+    }
+    if has_lib == 1 {
+        toml = string_concat(toml, "\n[lib]\n")
+        if map_has(opts, "lib_path") == 1 {
+            lp = map_get(opts, "lib_path")
+            toml = string_concat(toml, "path = \"${lp}\"\n")
+        }
+        if map_has(opts, "crate_type") == 1 {
+            ct = map_get(opts, "crate_type")
+            toml = string_concat(toml, "crate-type = [\"${ct}\"]\n")
+        }
+    }
+
+    // [dependencies]
+    has_deps = 0
+    if opts != null {
+        if map_has(opts, "_ws_refs") == 1 { has_deps = 1 }
+        if map_has(opts, "_crate_deps") == 1 { has_deps = 1 }
+        if map_has(opts, "_crate_deps_features") == 1 { has_deps = 1 }
+        if map_has(opts, "_path_deps") == 1 { has_deps = 1 }
+    }
+
+    if has_deps == 1 {
+        toml = string_concat(toml, "\n[dependencies]\n")
+
+        // Workspace refs: dep.workspace = true
+        if map_has(opts, "_ws_refs") == 1 {
+            refs = map_get(opts, "_ws_refs")
+            count = list_size(refs)
+            i = 0
+            while i < count {
+                name = list_get(refs, i)
+                toml = string_concat(toml, "${name}.workspace = true\n")
+                i = i + 1
+            }
+        }
+
+        // Direct version deps (non-workspace)
+        if map_has(opts, "_crate_deps") == 1 {
+            deps = map_get(opts, "_crate_deps")
+            count = list_size(deps)
+            i = 0
+            while i < count {
+                entry = list_get(deps, i)
+                name = _split_first(entry, "~")
+                ver = _split_second(entry, "~")
+                toml = string_concat(toml, "${name} = \"${ver}\"\n")
+                i = i + 1
+            }
+        }
+
+        // Deps with features (non-workspace)
+        if map_has(opts, "_crate_deps_features") == 1 {
+            deps = map_get(opts, "_crate_deps_features")
+            count = list_size(deps)
+            i = 0
+            while i < count {
+                entry = list_get(deps, i)
+                name = _split_first(entry, "~")
+                rest = _split_second(entry, "~")
+                ver = _split_first(rest, "~")
+                feats = _split_second(rest, "~")
+                feat_toml = string_trim(os_exec("echo '${feats}' | sed 's/,/\", \"/g'"))
+                toml = string_concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
+                i = i + 1
+            }
+        }
+
+        // Path deps
+        if map_has(opts, "_path_deps") == 1 {
+            deps = map_get(opts, "_path_deps")
+            count = list_size(deps)
+            i = 0
+            while i < count {
+                entry = list_get(deps, i)
+                name = _split_first(entry, "~")
+                p = _split_second(entry, "~")
+                toml = string_concat(toml, "${name} = { path = \"${p}\" }\n")
+                i = i + 1
+            }
+        }
+    }
+
+    // [dev-dependencies] section
+    if opts != null {
+        if map_has(opts, "_dev_ws_refs") == 1 {
+            toml = string_concat(toml, "\n[dev-dependencies]\n")
+            dev_refs = map_get(opts, "_dev_ws_refs")
+            dcount = list_size(dev_refs)
+            di = 0
+            while di < dcount {
+                dname = list_get(dev_refs, di)
+                toml = string_concat(toml, "${dname}.workspace = true\n")
+                di = di + 1
+            }
+        }
+    }
+
+    // [features] section
+    has_features = 0
+    if opts != null {
+        if map_has(opts, "_features") == 1 { has_features = 1 }
+        if map_has(opts, "_default_features") == 1 { has_features = 1 }
+    }
+    if has_features == 1 {
+        toml = string_concat(toml, "\n[features]\n")
+        // default = [...]
+        if map_has(opts, "_default_features") == 1 {
+            df = map_get(opts, "_default_features")
+            // Convert comma-separated to "a", "b", "c"
+            df_toml = string_trim(os_exec("echo '${df}' | sed 's/,/\", \"/g'"))
+            toml = string_concat(toml, "default = [\"${df_toml}\"]\n")
+        }
+        // Individual feature declarations
+        if map_has(opts, "_features") == 1 {
+            feats = map_get(opts, "_features")
+            fcount = list_size(feats)
+            fi = 0
+            while fi < fcount {
+                fentry = list_get(feats, fi)
+                fname = _split_first(fentry, "~")
+                fdeps_csv = _split_second(fentry, "~")
+                if string_length(fdeps_csv) == 0 {
+                    toml = string_concat(toml, "${fname} = []\n")
+                } else {
+                    fdeps_toml = string_trim(os_exec("echo '${fdeps_csv}' | sed 's/,/\", \"/g'"))
+                    toml = string_concat(toml, "${fname} = [\"${fdeps_toml}\"]\n")
+                }
+                fi = fi + 1
+            }
+        }
+    }
+
+    return toml
+}
+
+// --- Load workspace deps from a file ---
+// Reads a deps file with lines like:
+//   workspace_dep("serde_json", "1.0.106")
+//   workspace_dep_features("tokio", "1.32.0", "full,tracing")
+// Populates the builder's _ws_deps and _ws_deps_features lists.
+load_workspace_deps(_ctx: ptr, rel_path: string) {
+    // rel_path is relative to source_dir or absolute
+    full_path = rel_path
+    if file_exists(full_path) == 0 {
+        println("warning: workspace deps file not found: ${full_path}")
+        return 0
+    }
+
+    // Extract simple deps: workspace_dep("name", "ver")
+    simple = string_trim(os_exec("grep 'workspace_dep(' '${full_path}' | grep -v 'workspace_dep_features' | grep -v 'workspace_dep_full' | sed 's/.*workspace_dep(\"//; s/\", \"/~/; s/\").*//'"))
+    if string_length(simple) > 0 {
+        if map_has(_ctx, "_ws_deps") == 0 {
+            map_put(_ctx, "_ws_deps", list_new())
+        }
+        deps = map_get(_ctx, "_ws_deps")
+        si = 1
+        sline = ""
+        while si <= 500 {
+            sline = string_trim(os_exec("echo '${simple}' | sed -n '${si}p'"))
+            if string_length(sline) == 0 {
+                si = 999
+            } else {
+                list_add(deps, sline)
+                si = si + 1
+            }
+        }
+    }
+
+    // Extract feature deps: workspace_dep_features("name", "ver", "feat1,feat2")
+    featured = string_trim(os_exec("grep 'workspace_dep_features(' '${full_path}' | sed 's/.*workspace_dep_features(\"//; s/\", \"/~/g; s/\").*//'"))
+    if string_length(featured) > 0 {
+        if map_has(_ctx, "_ws_deps_features") == 0 {
+            map_put(_ctx, "_ws_deps_features", list_new())
+        }
+        fdeps = map_get(_ctx, "_ws_deps_features")
+        fi = 1
+        fline = ""
+        while fi <= 500 {
+            fline = string_trim(os_exec("echo '${featured}' | sed -n '${fi}p'"))
+            if string_length(fline) == 0 {
+                fi = 999
+            } else {
+                list_add(fdeps, fline)
+                fi = fi + 1
+            }
+        }
+    }
+
+    // Extract full deps: workspace_dep_full("name", "ver", "feats", "pkg", "nodef")
+    full = string_trim(os_exec("grep 'workspace_dep_full(' '${full_path}' | sed 's/.*workspace_dep_full(\"//; s/\", \"/~/g; s/\").*//'"))
+    if string_length(full) > 0 {
+        if map_has(_ctx, "_ws_deps_full") == 0 {
+            map_put(_ctx, "_ws_deps_full", list_new())
+        }
+        full_deps = map_get(_ctx, "_ws_deps_full")
+        fui = 1
+        fuline = ""
+        while fui <= 500 {
+            fuline = string_trim(os_exec("echo '${full}' | sed -n '${fui}p'"))
+            if string_length(fuline) == 0 {
+                fui = 999
+            } else {
+                list_add(full_deps, fuline)
+                fui = fui + 1
+            }
+        }
+    }
+    return 1
+}
+
+// --- cargo_workspace builder: generate root Cargo.toml for a workspace ---
+
+builder cargo_workspace(ctx: ptr) {
+    root = build._get(ctx, "root")
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    build._mkdirs(target_dir)
+
+    // Generate workspace Cargo.toml
+    toml = cargo_workspace_toml_content(_builder)
+    cargo_toml = path_join(source_dir, "Cargo.toml")
+    io_write_file(cargo_toml, toml)
+    println("${mod_dir}: generated workspace Cargo.toml")
+
+    // Also generate member Cargo.tomls from their .build.ae files
+    // Each member .build.ae with cargo_member() will have deposited its content
+    // via the member_tomls map during aeb's topo-sorted execution.
+    // For now, we just generate the workspace root.
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// --- cargo_member builder: generate member Cargo.toml with workspace refs ---
+
+builder cargo_member(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    build._mkdirs(target_dir)
+
+    // Generate member Cargo.toml only — use rust.check() separately for compilation
+    toml = cargo_member_toml_content(_builder)
+    cargo_toml = path_join(source_dir, "Cargo.toml")
+    io_write_file(cargo_toml, toml)
+    println("${mod_dir}: generated member Cargo.toml")
+
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
 }
 
 // --- cargo_project builder: generate Cargo.toml + cargo build ---

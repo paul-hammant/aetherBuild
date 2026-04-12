@@ -1,0 +1,15 @@
+import build
+import rust
+import rust (workspace_member, workspace_edition, workspace_version, load_workspace_deps)
+
+main() {
+    b = build.start()
+    rust.cargo_workspace(b) {
+        workspace_version("0.46.11")
+        workspace_edition("2024")
+        workspace_member("crates/lib")
+        workspace_member("crates/cli")
+        workspace_member("crates/server")
+        load_workspace_deps("workspace.deps.ae")
+    }
+}
