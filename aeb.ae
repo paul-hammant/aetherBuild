@@ -1,0 +1,630 @@
+// aeb — Aether Build runner
+//
+// Scans .build.ae and .tests.ae files, extracts deps, generates a single
+// linked program, runs it. One process, one map, no subprocess coordination.
+//
+// This is the Aether implementation of the bash aeb script.
+// Compile once: aetherc aeb.ae aeb.c && gcc -O2 aeb.c -laether -o aeb
+
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern os_getenv(name: string) -> string
+extern file_exists(path: string) -> int
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_trim(s: string) -> string
+extern string_contains(s: string, sub: string) -> int
+extern string_starts_with(s: string, prefix: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_index_of(s: string, sub: string) -> int
+extern io_read_file(path: string) -> string
+extern io_write_file(path: string, content: string) -> int
+extern map_new() -> ptr
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+
+// --- Globals ---
+
+_root() {
+    return string_trim(os_exec("pwd"))
+}
+
+_aeb_home() {
+    return string_trim(os_exec("dirname $(readlink -f $(which aeb))"))
+}
+
+// --- Init ---
+
+_do_init(root: string) {
+    aeb_home = _aeb_home()
+    aeb_lib = path_join(root, ".aeb/lib")
+    os_system("mkdir -p '${aeb_lib}'")
+
+    shipped = "build java kotlin go rust ts scala clojure dotnet python container maven pnpm jest webpack angular"
+    i = 1
+    while i <= 30 {
+        mod_name = string_trim(os_exec("echo '${shipped}' | tr ' ' '\\n' | sed -n '${i}p'"))
+        if string_length(mod_name) == 0 {
+            i = 999
+        } else {
+            target_path = path_join(aeb_home, "lib/${mod_name}")
+            link_path = path_join(aeb_lib, mod_name)
+            if file_exists(link_path) == 1 {
+                existing = string_trim(os_exec("readlink '${link_path}' 2>/dev/null || true"))
+                if existing == target_path {
+                    println("  ok: .aeb/lib/${mod_name}")
+                } else {
+                    os_system("rm '${link_path}' && ln -s '${target_path}' '${link_path}'")
+                    println("  updated: .aeb/lib/${mod_name}")
+                }
+            } else {
+                os_system("ln -s '${target_path}' '${link_path}'")
+                println("  linked: .aeb/lib/${mod_name} -> ${target_path}")
+            }
+            i = i + 1
+        }
+    }
+
+    // Update .gitignore
+    gitignore = path_join(root, ".gitignore")
+    if file_exists(gitignore) == 1 {
+        content = io_read_file(gitignore)
+        if string_contains(content, "# aetherBuild modules") == 1 {
+            println("  .gitignore already configured")
+        } else {
+            os_system("echo '' >> '${gitignore}' && echo '# aetherBuild modules' >> '${gitignore}' && echo '.aeb/' >> '${gitignore}'")
+            println("  updated .gitignore")
+        }
+    } else {
+        io_write_file(gitignore, "# aetherBuild modules\n.aeb/\n")
+        println("  updated .gitignore")
+    }
+
+    println("aetherBuild initialized.")
+}
+
+// --- Encode module path to C-safe function name ---
+// / -> _    - -> _H_
+
+_encode_name(path: string) {
+    return string_trim(os_exec("echo '${path}' | sed 's/__/\\x00/g; s|/|_|g; s/-/_H_/g; s/\\x00/__/g'"))
+}
+
+// --- Build .aebignore exclusion args for find ---
+
+_build_find_excludes(root: string) {
+    excludes = "-not -path './target/*' -not -path './.aeb/*' -not -path './lib/*'"
+    ignore_file = path_join(root, ".aebignore")
+    if file_exists(ignore_file) == 1 {
+        lines = io_read_file(ignore_file)
+        i = 1
+        while i <= 50 {
+            line = string_trim(os_exec("echo '${lines}' | sed -n '${i}p'"))
+            if string_length(line) == 0 {
+                i = 999
+            } else {
+                if string_starts_with(line, "#") == 0 {
+                    // Strip trailing slash
+                    if string_length(line) > 0 {
+                        last = string_substring(line, string_length(line) - 1, string_length(line))
+                        if last == "/" {
+                            line = string_substring(line, 0, string_length(line) - 1)
+                        }
+                    }
+                    excl = " -not -path './${line}/*'"
+                    excludes = string_concat(excludes, excl)
+                }
+                i = i + 1
+            }
+        }
+    }
+    return excludes
+}
+
+// --- Scan for modules ---
+
+_scan_modules(root: string, excludes: string, suffix: string) {
+    modules = list_new()
+    cmd = "find . -name '${suffix}' ${excludes} | sort"
+    result = string_trim(os_exec(cmd))
+    if string_length(result) == 0 {
+        return modules
+    }
+    i = 1
+    while i <= 500 {
+        line = string_trim(os_exec("echo '${result}' | sed -n '${i}p'"))
+        if string_length(line) == 0 {
+            i = 999
+        } else {
+            // Strip ./ prefix and /suffix
+            dir = string_trim(os_exec("dirname '${line}' | sed 's|^\\./||'"))
+            list_add(modules, dir)
+            i = i + 1
+        }
+    }
+    return modules
+}
+
+// --- Extract deps from a .ae file ---
+
+_extract_deps(file_path: string) {
+    return string_trim(os_exec("grep -oP '(?<=dep\\(b, \")[^\"]+' '${file_path}' 2>/dev/null || true"))
+}
+
+// --- Topological sort ---
+
+_topo_sort(build_modules: ptr, deps_map: ptr) {
+    sorted = list_new()
+    visited = map_new()
+    count = list_size(build_modules)
+    i = 0
+    while i < count {
+        mod_name = list_get(build_modules, i)
+        _topo_visit(mod_name, deps_map, visited, sorted, build_modules)
+        i = i + 1
+    }
+    return sorted
+}
+
+_topo_visit(mod_name: string, deps_map: ptr, visited: ptr, sorted: ptr, all_modules: ptr) {
+    if map_has(visited, mod_name) == 1 {
+        state = map_get(visited, mod_name)
+        if state == "done" { return 0 }
+        if state == "visiting" {
+            println("error: circular dependency involving ${mod_name}")
+            exit(1)
+        }
+    }
+    map_put(visited, mod_name, "visiting")
+
+    if map_has(deps_map, mod_name) == 1 {
+        dep_str = map_get(deps_map, mod_name)
+        if string_length(dep_str) > 0 {
+            di = 1
+            while di <= 50 {
+                dep = string_trim(os_exec("echo '${dep_str}' | tr ' ' '\\n' | sed -n '${di}p'"))
+                if string_length(dep) == 0 {
+                    di = 999
+                } else {
+                    // Only visit if it's in our module list
+                    _topo_visit(dep, deps_map, visited, sorted, all_modules)
+                    di = di + 1
+                }
+            }
+        }
+    }
+
+    map_put(visited, mod_name, "done")
+    list_add(sorted, mod_name)
+    return 0
+}
+
+// --- Resolve transitive SDK imports ---
+
+_resolve_transitive_imports(src: string, aeb_lib: string) {
+    // Pre-declare variables used across scopes
+    full_imports = map_new()
+
+    // Get direct imports
+    all_imports = string_trim(os_exec("grep -oP '^import \\K\\w+' '${src}' | sort -u"))
+    if string_length(all_imports) == 0 { return "" }
+
+    // BFS through SDK module imports
+    seen = map_new()
+    queue = list_new()
+
+    i = 1
+    while i <= 30 {
+        imp = string_trim(os_exec("echo '${all_imports}' | sed -n '${i}p'"))
+        if string_length(imp) == 0 { i = 999 } else {
+            map_put(seen, imp, "1")
+            list_add(queue, imp)
+            i = i + 1
+        }
+    }
+
+    qi = 0
+    while qi < list_size(queue) {
+        cur = list_get(queue, qi)
+        qi = qi + 1
+        mod_file = path_join(aeb_lib, "${cur}/module.ae")
+        if file_exists(mod_file) == 1 {
+            sub_imports = string_trim(os_exec("grep -oP '^import \\K\\w+' '${mod_file}' | sort -u"))
+            if string_length(sub_imports) > 0 {
+                si = 1
+                while si <= 30 {
+                    sub = string_trim(os_exec("echo '${sub_imports}' | sed -n '${si}p'"))
+                    if string_length(sub) == 0 { si = 999 } else {
+                        if map_has(seen, sub) == 0 {
+                            map_put(seen, sub, "1")
+                            list_add(queue, sub)
+                        }
+                        si = si + 1
+                    }
+                }
+            }
+        }
+    }
+
+    // Find full imports in source (not selective)
+    full_imports = map_new()
+    fi = 1
+    while fi <= 30 {
+        full = string_trim(os_exec("grep -oP '^import \\K\\w+$' '${src}' | sed -n '${fi}p'"))
+        if string_length(full) == 0 { fi = 999 } else {
+            map_put(full_imports, full, "1")
+            fi = fi + 1
+        }
+    }
+
+    // Return imports not already fully imported
+    extra = ""
+    ei = 0
+    while ei < list_size(queue) {
+        mod_name = list_get(queue, ei)
+        if map_has(full_imports, mod_name) == 0 {
+            extra = string_concat(extra, "import ${mod_name}\n")
+        }
+        ei = ei + 1
+    }
+    return extra
+}
+
+// --- Transform a .ae file ---
+
+_transform_ae(src: string, func_name: string, module_dir: string, out: string, aeb_lib: string) {
+    escaped = string_trim(os_exec("echo '${module_dir}' | sed 's/\\//\\\\\\//g'"))
+    os_system("sed -e 's/^main() {/${func_name}(s: ptr) {/' -e 's/b = build\\.start()/b = build.begin(s, \"${escaped}\")\\n    if b == 0 { return 0 }/' '${src}' > '${out}'")
+
+    // Add transitive imports
+    extra = _resolve_transitive_imports(src, aeb_lib)
+    if string_length(extra) > 0 {
+        tmp = string_concat(out, ".tmp")
+        io_write_file(tmp, extra)
+        os_system("cat '${out}' >> '${tmp}' && mv '${tmp}' '${out}'")
+    }
+}
+
+// --- Main ---
+
+main() {
+    root = _root()
+    argc = aether_args_count()
+
+    // Pre-declare variables used across scopes
+    sorted_build = list_new()
+    dist_files = map_new()
+    test_deps = map_new()
+    orch_file = ""
+
+    // --- --init ---
+    if argc >= 2 {
+        arg1 = aether_args_get(1)
+        if arg1 == "--init" {
+            _do_init(root)
+            return 0
+        }
+    }
+
+    // --- Parse args ---
+    target = ""
+    force_dist = 0
+    ai = 1
+    while ai < argc {
+        arg = aether_args_get(ai)
+        if arg == "--dist" {
+            force_dist = 1
+        } else {
+            target = arg
+        }
+        ai = ai + 1
+    }
+
+    // Strip trailing slash from target
+    if string_length(target) > 0 {
+        last = string_substring(target, string_length(target) - 1, string_length(target))
+        if last == "/" {
+            target = string_substring(target, 0, string_length(target) - 1)
+        }
+    }
+
+    aeb_lib = path_join(root, ".aeb/lib")
+    excludes = _build_find_excludes(root)
+
+    // --- Scan ---
+    build_modules = _scan_modules(root, excludes, ".build.ae")
+    test_modules = _scan_modules(root, excludes, ".tests.ae")
+    dist_modules = _scan_modules(root, excludes, ".dist.ae")
+
+    if list_size(build_modules) == 0 {
+        if list_size(test_modules) == 0 {
+            println("No .build.ae or .tests.ae files found")
+            return 0
+        }
+    }
+
+    // --- Extract deps ---
+    build_deps = map_new()
+    build_files = map_new()
+    i = 0
+    while i < list_size(build_modules) {
+        mod_name = list_get(build_modules, i)
+        src = "./${mod_name}/.build.ae"
+        deps = _extract_deps(src)
+        map_put(build_deps, mod_name, deps)
+        map_put(build_files, mod_name, "1")
+        i = i + 1
+    }
+
+    test_deps = map_new()
+    test_files = map_new()
+    i = 0
+    while i < list_size(test_modules) {
+        mod_name = list_get(test_modules, i)
+        src = "./${mod_name}/.tests.ae"
+        deps = _extract_deps(src)
+        map_put(test_deps, mod_name, deps)
+        map_put(test_files, mod_name, "1")
+        i = i + 1
+    }
+
+    dist_files = map_new()
+    i = 0
+    while i < list_size(dist_modules) {
+        mod_name = list_get(dist_modules, i)
+        map_put(dist_files, mod_name, "1")
+        i = i + 1
+    }
+
+    // --- Topo sort ---
+    sorted_build = _topo_sort(build_modules, build_deps)
+
+    // --- Target filtering ---
+    if string_length(target) > 0 {
+        is_test = map_has(test_files, target)
+        is_build = map_has(build_files, target)
+        is_dist = map_has(dist_files, target)
+
+        if is_test == 0 {
+            if is_build == 0 {
+                if is_dist == 0 {
+                    println("error: no .build.ae, .tests.ae, or .dist.ae found for ${target}")
+                    exit(1)
+                }
+            }
+        }
+
+        // Collect transitive build deps
+        needed = map_new()
+        _collect_deps(target, build_deps, build_files, needed)
+
+        // Also collect deps from test deps
+        if is_test == 1 {
+            if map_has(test_deps, target) == 1 {
+                td = map_get(test_deps, target)
+                if string_length(td) > 0 {
+                    tdi = 1
+                    while tdi <= 50 {
+                        dep = string_trim(os_exec("echo '${td}' | tr ' ' '\\n' | sed -n '${tdi}p'"))
+                        if string_length(dep) == 0 { tdi = 999 } else {
+                            _collect_deps(dep, build_deps, build_files, needed)
+                            tdi = tdi + 1
+                        }
+                    }
+                }
+            }
+        }
+
+        // Filter sorted_build to only needed
+        filtered = list_new()
+        fi = 0
+        while fi < list_size(sorted_build) {
+            mod_name = list_get(sorted_build, fi)
+            if map_has(needed, mod_name) == 1 {
+                list_add(filtered, mod_name)
+            }
+            fi = fi + 1
+        }
+        sorted_build = filtered
+
+        if is_test == 1 {
+            test_modules = list_new()
+            list_add(test_modules, target)
+            dist_modules = list_new()
+        } else {
+            if force_dist == 1 {
+                if is_dist == 1 {
+                    dist_modules = list_new()
+                    list_add(dist_modules, target)
+                    test_modules = list_new()
+                }
+            } else {
+                test_modules = list_new()
+                dist_modules = list_new()
+            }
+        }
+    }
+
+    // --- Compile ---
+    build_dir = path_join(root, "target/_aeb")
+    os_system("mkdir -p '${build_dir}'")
+
+    aetherc = string_trim(os_exec("dirname $(which ae) 2>/dev/null || echo /usr/local/bin"))
+    aetherc = path_join(aetherc, "aetherc")
+
+    // Check AETHER env var
+    aether_env = os_getenv("AETHER")
+    if string_length(aether_env) > 0 {
+        aetherc = string_trim(os_exec("dirname '${aether_env}'"))
+        aetherc = path_join(aetherc, "aetherc")
+    }
+
+    c_files = list_new()
+
+    println("aeb: ${list_size(sorted_build)} compile + ${list_size(dist_modules)} dist + ${list_size(test_modules)} test")
+
+    // Compile build targets
+    i = 0
+    while i < list_size(sorted_build) {
+        mod_name = list_get(sorted_build, i)
+        fname = string_concat("build_", _encode_name(mod_name))
+        src = "./${mod_name}/.build.ae"
+        ae_tmp = path_join(build_dir, "${fname}.ae")
+        c_out = path_join(build_dir, "${fname}.c")
+
+        println("  compile: ${mod_name}")
+        _transform_ae(src, fname, mod_name, ae_tmp, aeb_lib)
+        os_system("'${aetherc}' --lib '${aeb_lib}' '${ae_tmp}' '${c_out}' 2>/dev/null")
+        list_add(c_files, c_out)
+        i = i + 1
+    }
+
+    // Compile test targets
+    i = 0
+    while i < list_size(test_modules) {
+        mod_name = list_get(test_modules, i)
+        fname = string_concat("test_", _encode_name(mod_name))
+        src = "./${mod_name}/.tests.ae"
+        ae_tmp = path_join(build_dir, "${fname}.ae")
+        c_out = path_join(build_dir, "${fname}.c")
+
+        println("  test:    ${mod_name}")
+        _transform_ae(src, fname, "test:${mod_name}", ae_tmp, aeb_lib)
+        os_system("'${aetherc}' --lib '${aeb_lib}' '${ae_tmp}' '${c_out}' 2>/dev/null")
+        list_add(c_files, c_out)
+        i = i + 1
+    }
+
+    // Compile dist targets
+    i = 0
+    while i < list_size(dist_modules) {
+        mod_name = list_get(dist_modules, i)
+        fname = string_concat("dist_", _encode_name(mod_name))
+        src = "./${mod_name}/.dist.ae"
+        ae_tmp = path_join(build_dir, "${fname}.ae")
+        c_out = path_join(build_dir, "${fname}.c")
+
+        println("  dist:    ${mod_name}")
+        _transform_ae(src, fname, "dist:${mod_name}", ae_tmp, aeb_lib)
+        os_system("'${aetherc}' --lib '${aeb_lib}' '${ae_tmp}' '${c_out}' 2>/dev/null")
+        list_add(c_files, c_out)
+        i = i + 1
+    }
+
+    // --- Generate orchestrator ---
+    orch_file = path_join(build_dir, "_orchestrator.ae")
+    orch = "extern build_session(root: string) -> ptr\nextern build_done(s: ptr, module_dir: string)\nextern aether_args_get(index: int) -> string\n\n"
+
+    // Extern declarations
+    i = 0
+    while i < list_size(sorted_build) {
+        fname = string_concat("build_", _encode_name(list_get(sorted_build, i)))
+        orch = string_concat(orch, "extern ${fname}(s: ptr) -> int\n")
+        i = i + 1
+    }
+    i = 0
+    while i < list_size(dist_modules) {
+        fname = string_concat("dist_", _encode_name(list_get(dist_modules, i)))
+        orch = string_concat(orch, "extern ${fname}(s: ptr) -> int\n")
+        i = i + 1
+    }
+    i = 0
+    while i < list_size(test_modules) {
+        fname = string_concat("test_", _encode_name(list_get(test_modules, i)))
+        orch = string_concat(orch, "extern ${fname}(s: ptr) -> int\n")
+        i = i + 1
+    }
+
+    orch = string_concat(orch, "\nmain() {\n    s = build_session(aether_args_get(1))\n")
+
+    // Build calls
+    i = 0
+    while i < list_size(sorted_build) {
+        mod_name = list_get(sorted_build, i)
+        fname = string_concat("build_", _encode_name(mod_name))
+        orch = string_concat(orch, "    ${fname}(s)\n    build_done(s, \"${mod_name}\")\n")
+        i = i + 1
+    }
+
+    // Dist calls
+    i = 0
+    while i < list_size(dist_modules) {
+        mod_name = list_get(dist_modules, i)
+        fname = string_concat("dist_", _encode_name(mod_name))
+        orch = string_concat(orch, "    ${fname}(s)\n    build_done(s, \"dist:${mod_name}\")\n")
+        i = i + 1
+    }
+
+    // Test calls
+    i = 0
+    while i < list_size(test_modules) {
+        mod_name = list_get(test_modules, i)
+        fname = string_concat("test_", _encode_name(mod_name))
+        orch = string_concat(orch, "    ${fname}(s)\n    build_done(s, \"test:${mod_name}\")\n")
+        i = i + 1
+    }
+
+    orch = string_concat(orch, "}\n")
+    io_write_file(orch_file, orch)
+
+    // Compile orchestrator
+    orch_c = path_join(build_dir, "_orchestrator.c")
+    os_system("'${aetherc}' --lib '${aeb_lib}' '${orch_file}' '${orch_c}' 2>/dev/null")
+
+    // --- Link and run ---
+    build_bin = path_join(root, "target/_ae_build_all")
+    aether_dir = string_trim(os_exec("dirname '${aetherc}'"))
+    aether_lib = path_join(aether_dir, "libaether.a")
+
+    // Build gcc command with all .c files
+    gcc_cmd = "gcc -O2 -pipe -w '${orch_c}'"
+    ci = 0
+    while ci < list_size(c_files) {
+        cf = list_get(c_files, ci)
+        gcc_cmd = string_concat(gcc_cmd, " '${cf}'")
+        ci = ci + 1
+    }
+
+    if file_exists(aether_lib) == 1 {
+        gcc_cmd = string_concat(gcc_cmd, " -L'${aether_dir}' -laether -o '${build_bin}' -pthread -lm -Wl,--allow-multiple-definition")
+    } else {
+        aether_root = string_trim(os_exec("cd '${aether_dir}/..' && pwd"))
+        gcc_cmd = string_concat(gcc_cmd, " '${aether_root}'/runtime/*.c -I'${aether_root}/runtime' -o '${build_bin}' -pthread -lm -Wl,--allow-multiple-definition")
+    }
+
+    os_system(gcc_cmd)
+    os_system("'${build_bin}' '${root}'")
+    return 0
+}
+
+// --- Helper: collect transitive build deps ---
+
+_collect_deps(mod_name: string, deps_map: ptr, build_files: ptr, needed: ptr) {
+    if map_has(needed, mod_name) == 1 { return 0 }
+    map_put(needed, mod_name, "1")
+
+    if map_has(deps_map, mod_name) == 1 {
+        dep_str = map_get(deps_map, mod_name)
+        if string_length(dep_str) > 0 {
+            di = 1
+            while di <= 50 {
+                dep = string_trim(os_exec("echo '${dep_str}' | tr ' ' '\\n' | sed -n '${di}p'"))
+                if string_length(dep) == 0 { di = 999 } else {
+                    if map_has(build_files, dep) == 1 {
+                        _collect_deps(dep, deps_map, build_files, needed)
+                    }
+                    di = di + 1
+                }
+            }
+        }
+    }
+    return 0
+}
