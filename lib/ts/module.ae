@@ -51,6 +51,67 @@ mocha_grep(_ctx: ptr, pat: string) {
 
 // --- SDK functions ---
 
+// npm_vendored — declare an npm package from the local vendored layout.
+// Use in a .npm.ae file so downstream consumers that dep on this file
+// get the package included in their npm_deps_including_transitive artifact.
+//
+// Coord format:
+//     libs:javascript/ffi-napi  — name in libs/javascript/npm_vendored/package-map
+builder npm_vendored(ctx: ptr, coord: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    build._write_artifact(ctx, "npm_deps_including_transitive", coord)
+    println("${mod_dir}: vendored npm ${coord}")
+    return 0
+}
+
+// npm_registry — declare an npm package to fetch from the npm registry
+// (via pnpm). Use in a .npm.ae file so consumers pick it up through the
+// npm_registry_deps_including_transitive artifact.
+//
+// Coord format:
+//     name~version  (e.g. "react~18.3.1")
+builder npm_registry(ctx: ptr, name_and_ver: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    build._write_artifact(ctx, "npm_registry_deps_including_transitive", name_and_ver)
+    println("${mod_dir}: registry npm ${name_and_ver}")
+    return 0
+}
+
+// Pull registry npm deps from any .npm.ae files in the dep graph and
+// inject them into the current module's npm_deps list as "name:version"
+// entries so pnpm.resolve processes them alongside inline declarations.
+_merge_npm_registry_deps(ctx: ptr) {
+    deps = map_get(ctx, "deps")
+    npm_deps_list = map_get(ctx, "npm_deps")
+    dep_count = list_size(deps)
+    di = 0
+    while di < dep_count {
+        dp = list_get(deps, di)
+        dm = build._strip_lang(dp)
+        raw = build._read_dep_artifact(ctx, dm, "npm_registry_deps_including_transitive")
+        if string_length(raw) > 0 {
+            i = 1
+            while i <= 200 {
+                line = string_trim(os_exec("printf '%s\\n' '${raw}' | sed -n '${i}p'"))
+                if string_length(line) == 0 {
+                    i = 999
+                } else {
+                    // Translate "name~version" to "name:version" for pnpm.resolve
+                    colonized = string_trim(os_exec("printf '%s' '${line}' | sed 's/~/:/'"))
+                    list_add(npm_deps_list, colonized)
+                    i = i + 1
+                }
+            }
+        }
+        di = di + 1
+    }
+    return 0
+}
+
 builder tsc_files(ctx: ptr) {
     root = build._get(ctx, "root")
     source_dir = build._get(ctx, "source_dir")
@@ -81,6 +142,9 @@ builder tsc_files(ctx: ptr) {
         i = i + 1
     }
     build._write_artifact(ctx, "typescript_module_deps_including_transitive", ts_deps)
+
+    // Merge registry npm deps from .npm.ae dep files into ctx.npm_deps
+    _merge_npm_registry_deps(ctx)
 
     npm_deps_list = map_get(ctx, "npm_deps")
     npm_count = list_size(npm_deps_list)
@@ -279,6 +343,9 @@ builder tsc(ctx: ptr) {
     root = build._get(ctx, "root")
 
     build._mkdirs(target_dir)
+
+    // Merge registry npm deps from .npm.ae dep files into ctx.npm_deps
+    _merge_npm_registry_deps(ctx)
 
     // Resolve npm deps first (ensures .aeb/node_modules exists)
     pnpm.resolve(ctx)

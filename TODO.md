@@ -120,6 +120,60 @@ aeb javatests/components/vowelbase            # auto-detects test
 aeb --dist java/applications/monorepos_rule   # compile + package
 ```
 
+### `scan()` grammar function — glob-based dep discovery
+
+A DSL function inside a composite `.ae` file that expands to many
+`build.dep()` entries via a glob pattern. Enables named bundles
+composed from globs, without any CLI flag.
+
+```aether
+// .all_tests.ae at the repo root
+import build
+
+main() {
+    b = build.start()
+    build.scan(b, "**/*.tests.ae")
+}
+```
+
+```aether
+// .smoke-tests.ae
+main() {
+    b = build.start()
+    build.scan(b, "javatests/components/**/*.tests.ae")
+    build.scan(b, "csharptests/components/**/*.tests.ae")
+}
+```
+
+```aether
+// .integration.ae — compose scans with explicit deps
+main() {
+    b = build.start()
+    build.dep(b, ".smoke-tests.ae")
+    build.dep(b, ".release-builds.ae")
+    build.dep(b, "end-to-end/.tests.ae")
+}
+```
+
+`aeb .all_tests.ae` runs all matching tests plus their transitive deps.
+Named targets become composable `.ae` files — no CLI flags, same DAG,
+same topo sort, same sparse-checkout story via `gcheckout`.
+
+**Implementation:**
+- Extract `scan()` calls during the same grep pass as `dep()` in
+  `aeb`'s `extract_deps`
+- For each pattern, run `find . -path "./$pattern" -type f` (respecting
+  `.aebignore`)
+- Concatenate matched paths into the file's `FILE_DEPS` list
+- BFS + topo sort handle the rest
+- `build.scan()` is a runtime no-op (like `build.dep()` — both are
+  statically extracted by the runner, not executed)
+
+**Gotchas:**
+- Glob must respect `.aebignore`
+- Zero matches should be an error (typo protection)
+- A file shouldn't match its own `scan()` pattern (self-ref loop)
+
 ### Parallel execution
 
 Independent modules in the DAG can build concurrently. The visited map

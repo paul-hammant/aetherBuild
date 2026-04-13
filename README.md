@@ -1,7 +1,9 @@
 # Aether Build
 
-A build system for polyglot monorepos. Five-line build files replace
-thirty-line bash scripts. Convention does the work; you declare the intent.
+A build system for polyglot monorepos. Small declarative files replace
+Makefiles, `pom.xml`, `package.json` scripts, `deps.edn`, `Cargo.toml`,
+`.csproj`, and `pyproject.toml` — and replace them consistently across
+languages. Convention does the work; you declare the intent.
 
 ## What it looks like
 
@@ -9,354 +11,474 @@ A Java component with one dependency:
 
 ```aether
 import build
+import java
 
 main() {
     b = build.start()
-    build.dep(b, "java/components/vowelbase")
-    build.javac(b)
+    build.dep(b, "java/components/vowelbase/.build.ae")
+    java.javac(b)
 }
 ```
 
-A Rust shared library:
+A Rust shared library that depends on a vendored `jni` crate:
 
 ```aether
 import build
+import rust
+import rust (crate_name, edition, crate_type, lib_path, lib_name)
 
 main() {
     b = build.start()
-    build.cargo_dep(b, "libs:rust/jni")
-    build.cargo_build(b, "libvowelbase.so")
+    build.dep(b, "libs/rust/registry/vendor/jni/.jni.crate.ae")
+    rust.cargo_project(b) {
+        crate_name("vowelbase")
+        edition("2021")
+        crate_type("cdylib")
+        lib_path("lib.rs")
+        lib_name("libvowelbase.so")
+    }
 }
 ```
 
-A TypeScript app with cross-language FFI (TypeScript → Go):
+A JUnit test module with vendored `junit.jar`:
 
 ```aether
 import build
+import java
 
 main() {
     b = build.start()
-    build.dep(b, "typescript/components/explanation")
-    build.dep(b, "go/components/nasal")
-    build.npm_dep(b, "libs:javascript/ffi-napi")
-    build.tsc(b)
+    build.dep(b, "java/components/vowelbase/.build.ae")
+    build.dep(b, "libs/java/junit/.junit.jar.ae")
+    build.dep(b, "libs/java/hamcrest/.hamcrest.jar.ae")
+    java.javac_test(b)
+    java.junit(b)
 }
 ```
 
-A test module:
+A Spring Boot test module with Maven dependencies via a BOM:
 
 ```aether
 import build
+import java
+import maven (load_bom_file)
+import java (release, source_layout, enable_preview, parameters)
 
 main() {
     b = build.start()
-    build.dep(b, "java/components/vowelbase")
-    build.lib(b, "java/junit/junit.jar")
-    build.lib(b, "java/hamcrest/hamcrest.jar")
-    build.javac_test(b)
-    build.junit(b)
-}
-```
-
-A fat jar (dist):
-
-```aether
-import build
-
-main() {
-    b = build.start()
-    build.shade(b, "applications.monorepos_rule.MonoreposRule", "monorepos-rule.jar")
+    build.dep(b, "jpa/example/.build.ae")
+    load_bom_file(b, "../../spring-boot.bom.ae")
+    build.dep(b, "org.springframework.boot:spring-boot-starter-test")
+    build.dep(b, "org.springframework.boot:spring-boot-data-jpa-test")
+    java.javac_test(b) {
+        release("25")
+        source_layout("maven idiomatic")
+        enable_preview()
+        parameters()
+    }
+    java.junit5(b) {
+        enable_preview()
+    }
 }
 ```
 
 ## How it works
 
-Each module directory contains a `.build.ae` file (compilation),
-`.tests.ae` file (tests), and optionally a `.dist.ae` file (packaging).
+A module's build intent lives in one or more dot-prefixed `.ae` files:
+
+| File                  | Role                                      |
+|-----------------------|-------------------------------------------|
+| `.build.ae`           | compile the module                        |
+| `.tests.ae`           | compile + run tests                       |
+| `.dist.ae`            | package (fat jar, Docker image, wheel…)   |
+| `.{name}.jar.ae`      | vendored JVM jar                          |
+| `.{name}.crate.ae`    | vendored / registry Rust crate            |
+| `.{name}.npm.ae`      | vendored / registry npm package           |
+| `.{name}.nupkg.ae`    | vendored / registry NuGet package         |
+| `.{name}.whl.ae`      | vendored / registry Python wheel          |
 
 The runner (`aeb`) does four things:
 
-1. **Scan** — find all `.build.ae` / `.tests.ae` / `.dist.ae` files
-2. **Graph** — grep `dep()` lines to build the dependency DAG
-3. **Sort** — topological order
-4. **Generate** — produce a single `.ae` file with one function per module, compile it to a native binary, run it
+1. **Scan** — walk the tree and collect every `.*.ae` file
+2. **Graph** — grep each `dep(b, "…")` line to derive a file-based DAG
+3. **Sort** — topologically order the files
+4. **Generate + link** — produce a single orchestrator `.ae` file with one
+   function per module, compile them all to C, link into a single native
+   binary, run it
 
 The generated binary is one process with one in-memory visited-module map.
-Each module function calls its deps directly — no subprocesses, no file-based
-coordination. The visited map prevents redundant builds:
+Each module function calls its deps directly — no subprocesses, no
+file-based coordination. Per-module artifacts (classpaths, library paths,
+crate paths, NuGet refs, source paths) are written to `target/<module>/`
+so downstream modules can read and compose them transitively.
+
+File paths encode to C-safe function names:
 
 ```
-build_rust_components_vowelbase(s)    // compiles Rust .so
-build_java_components_vowelbase(s)    // calls Rust first (already done → skip), then javac
-build_java_components_vowels(s)       // calls vowelbase (skip), then javac
+java/components/vowelbase/.build.ae
+→ java_components_vowelbase__D_build_D_ae
 ```
 
-Module paths encode to C-safe function names: `/` → `_`, literal `_` → `__`.
+(`/` → `_`, `.` → `_D_`, `-` → `_H_`, `_` → `__`.)
 
 ## Setup
 
 Initialize a repo to use aetherBuild:
 
 ```bash
-/path/to/aeb --init
+/path/to/aetherBuild/aeb --init
 ```
 
-This creates symlinks in `lib/` for each shipped SDK module (build, java,
-kotlin, go, rust, ts, scala, clojure, dotnet, maven, pnpm, jest, webpack, angular) and adds them to `.gitignore`. Safe to run
-repeatedly — existing correct symlinks are left alone.
+This creates symlinks in `.aeb/lib/` for every shipped SDK module and
+adds `.aeb/` to `.gitignore`. Safe to re-run.
 
 ## Running
 
 ```bash
-# From the monorepo root:
-AETHER=/path/to/ae aeb
+# Build and test everything under the current directory:
+aeb
+
+# Run one target (file-based):
+aeb jpa/example/.build.ae
+aeb jpa/example/.tests.ae
+
+# Or from inside the module directory:
+cd jpa/example && aeb .tests.ae
 ```
 
-Builds all compile targets, then runs all dist steps, then runs all tests.
+aeb auto-detects Podman's socket and sets `DOCKER_HOST` so TestContainers
+works without a daemon.
 
-### Target filtering
-
-Build a single target and its transitive deps:
-
-```bash
-aeb java/components/vowels                          # just this + deps
-aeb javatests/components/vowelbase                   # auto-detects test, builds deps + runs it
-aeb --dist java/applications/monorepos_rule          # compile + package
-```
-
-The target type is auto-detected from which build file exists at the
-path (`.build.ae`, `.tests.ae`, or `.dist.ae`). Use `--dist` when a
-module has both `.build.ae` and `.dist.ae` and you want packaging.
-
-### Full build output
+### Typical output
 
 ```
 aeb: 18 compile + 2 dist + 17 test
-go/components/nasal: compiling Go prod & test code
-rust/components/vowelbase: compiling prod code
-java/components/vowelbase: compiling prod code
-...
-dist:java/applications/monorepos_rule: packaging monorepos-rule.jar
-...
-javatests/components/vowelbase: tests PASSED
-typescripttests/applications/mmmm: tests PASSED
-```
-
-Second run skips unchanged modules (timestamp-based):
-
-```
-go/components/nasal: skipping compilation of Go prod & test code (not changed)
-...
+  compile: rust/components/vowelbase
+  compile: java/components/vowelbase
+  ...
+  dist:    java/applications/monorepos_rule
+  test:    javatests/components/vowelbase
+  ...
 javatests/components/vowelbase: tests PASSED
 ```
 
 ## Dependencies
 
-Dependencies are declared as function calls, one per line:
+Every dependency — local module, third-party library, Maven coordinate, npm
+package, NuGet package, Cargo crate, or Python wheel — is declared with a
+single `build.dep()` call. The form of the argument distinguishes them:
 
 ```aether
-build.dep(b, "java/components/vowelbase")    // module in the monorepo
-build.lib(b, "java/junit/junit.jar")         // vendored binary (jar, .a, .so)
-build.npm_dep(b, "libs:javascript/ffi-napi") // vendored npm package
-build.cargo_dep(b, "libs:rust/jni")          // vendored cargo crate
+// Local module (reference the dep module's .build.ae file)
+build.dep(b, "java/components/vowelbase/.build.ae")
+
+// Vendored / registry third-party (reference its .{name}.jar.ae etc.)
+build.dep(b, "libs/java/junit/.junit.jar.ae")
+build.dep(b, "libs/rust/registry/vendor/jni/.jni.crate.ae")
+build.dep(b, "libs/javascript/mocha/.mocha.npm.ae")
+build.dep(b, "libs/dotnet/Shouldly/.Shouldly.nupkg.ae")
+build.dep(b, "libs/python/pytest/.pytest.whl.ae")
+
+// Maven coordinate (colon-separated; version from BOM if omitted)
+build.dep(b, "org.springframework.boot:spring-boot-starter-data-jpa")
+build.dep(b, "com.github.javafaker:javafaker:1.0.2")
 ```
 
-These lines are greppable — the build graph is extracted by scanning
-files, not by compiling them. Same contract as Bazel's BUILD files.
+All of these lines are greppable — the build graph is extracted by
+scanning source files, not by compiling them. Same contract as Bazel's
+`BUILD` files.
+
+### Third-party dep files: `.ae-as-dep`
+
+Rather than a dozen bespoke helpers (`build.npm_dep`, `build.cargo_dep`,
+`build.lib`, …), each third-party dep is its own `.ae` file that registers
+its contribution via a language-SDK builder. Examples:
+
+```aether
+// libs/java/junit/.junit.jar.ae — vendored jar
+main() {
+    b = build.start()
+    java.jar_vendored(b, "libs/java/junit/junit.jar")
+}
+```
+
+```aether
+// libs/rust/registry/vendor/jni/.jni.crate.ae — registry Rust crate
+main() {
+    b = build.start()
+    rust.crate_registry(b, "jni~0.21.1")
+}
+```
+
+```aether
+// libs/python/pytest/.pytest.whl.ae — pypi wheel
+main() {
+    b = build.start()
+    python.wheel_registry(b, "pytest~")
+}
+```
+
+Each SDK has symmetric `X_vendored` / `X_registry` builders:
+
+| Language | Vendored              | Registry / fetched     |
+|----------|-----------------------|------------------------|
+| Java     | `java.jar_vendored`   | `java.jar_registry`    |
+| Rust     | `rust.crate_vendored` | `rust.crate_registry`  |
+| TS       | `ts.npm_vendored`     | `ts.npm_registry`      |
+| .NET     | `dotnet.nuget_vendored` | `dotnet.nuget_registry` |
+| Python   | `python.wheel_vendored` | `python.wheel_registry` |
+
+Consumers don't care which — they just `build.dep(b, "libs/.../.foo.bar.ae")`.
 
 ## Language SDKs
 
-### Java
-
 ```aether
-build.javac(b)                      // compile **/*.java
-build.javac_test(b)                  // compile test **/*.java
-build.junit(b)                       // run *Tests.class with JUnitCore
-build.shade(b, "com.Main", "a.jar")  // fat jar with all deps + native libs
+import java
+java.javac(b) { release("25") source_layout("maven idiomatic") }
+java.javac_test(b) { enable_preview() parameters() }
+java.junit(b)          // JUnit 4
+java.junit5(b)         // JUnit 5 / Jupiter
+java.shade(b, "com.Main", "app.jar")
 ```
 
-### Kotlin
-
 ```aether
-build.kotlinc(b)                                       // compile **/*.kt
-build.kotlinc_test(b)                                   // compile test **/*.kt
-build.kotlin_test(b, "pkg.TestClassKt")                 // run test class via java -ea
+import kotlin
+kotlin.kotlinc(b)
+kotlin.kotlinc_test(b)
+kotlin.kotlin_test(b, "pkg.TestClassKt")
 ```
 
-Shares JVM classpath format with Java. Cross-language deps just work.
-
-### Go
-
 ```aether
-build.go_build(b, "c-shared", "libname.so")  // shared library
-build.go_test(b)                              // go test -v .
+import go
+go.go_build(b, "c-shared", "libname.so")
+go.go_test(b)
 ```
 
-### Rust
-
 ```aether
-build.cargo_dep(b, "libs:rust/jni")           // local registry crate
-build.cargo_build(b, "libname.so")            // cargo build --release
+import rust
+rust.cargo_project(b) { crate_name("…") edition("2021") crate_type("cdylib") }
+rust.cargo_workspace(b) { … }    // root-level workspace Cargo.toml
+rust.cargo_crate(b) { … }        // workspace member Cargo.toml
+rust.check_workspace(b)
+rust.test_workspace(b)
 ```
 
-### TypeScript
+```aether
+import ts
+ts.tsc(b)
+```
 
 ```aether
-build.tsc(b)                                  // compile via tsconfig.json
-build.mocha(b, "path/to/Tests.js")            // run with Mocha + NODE_PATH
+import scala
+scala.scalac(b)
+scala.scalac_test(b)
+scala.munit(b)
 ```
+
+```aether
+import clojure
+clojure.compile(b)
+clojure.test(b)
+```
+
+```aether
+import dotnet
+dotnet.csproj(b) { … }      // generates .{name}.generated.csproj
+dotnet.build(b)
+dotnet.test(b)
+```
+
+```aether
+import python
+python.install(b)           // pip install deps into venv
+python.pytest(b)
+python.package(b) { … }     // generate pyproject.toml and build wheel
+```
+
+## Maven / BOM support
+
+A `.bom.ae` file at the repo root declares Maven BOMs and extra repos:
+
+```aether
+// spring-boot.bom.ae
+maven_bom("org.springframework.boot:spring-boot-dependencies:4.0.4")
+```
+
+Modules load it via `load_bom_file(b, "../../spring-boot.bom.ae")`, then
+use `build.dep(b, "group:artifact")` with version omitted — the BOM
+supplies it. Resolution is performed by `tools/aeb-resolve.jar`, which
+wraps the Maven Resolver API and caches to `~/.aeb/repo`.
 
 ## Cross-language dependencies
 
 Modules in different languages can depend on each other:
 
 ```aether
-build.dep(b, "rust/components/vowelbase")  // Java gets .so via ldlibdeps
-build.dep(b, "kotlin/components/sonorants")  // Java gets JVM classpath
-build.dep(b, "go/components/nasal")          // TypeScript gets .so via LD_LIBRARY_PATH
+build.dep(b, "rust/components/vowelbase/.build.ae")    // Java → Rust (JNI .so)
+build.dep(b, "kotlin/components/sonorants/.build.ae")  // Java → Kotlin (JVM classpath)
+build.dep(b, "go/components/nasal/.build.ae")          // Java → Go (shared library)
 ```
 
-Each SDK writes artifact metadata to `target/{module}/`. Downstream
-SDKs read these files to assemble classpaths, library paths, and
-tsconfig mappings transitively.
+Each SDK writes artifact metadata to `target/<module>/`:
 
-Working cross-language chains:
-- Java → Rust (JNI shared library)
-- Java → Kotlin (JVM classpath interop)
-- Java → Go (shared library)
-- TypeScript → Go (FFI via ffi-napi)
+- `jvm_classpath_deps_including_transitive`
+- `rust_path_deps_including_transitive` / `rust_registry_deps_including_transitive`
+- `npm_deps_including_transitive` / `npm_registry_deps_including_transitive`
+- `dotnet_nuget_deps_including_transitive`
+- `python_pypi_deps_including_transitive` / `python_vendored_wheels_including_transitive`
+- `ldlibdeps` / `shared_library_deps` (for JNI-style linking)
+
+Downstream SDKs read these files to assemble classpaths, library paths,
+Cargo.toml `[dependencies]`, `<PackageReference>`s, `pyproject.toml`
+`[project.dependencies]`, and `tsconfig` path mappings.
+
+Working cross-language chains include Java→Rust (JNI), Java→Kotlin,
+Java→Go, TypeScript→Go, C#→Rust, Python→Rust (ctypes).
 
 ## Incremental builds
 
-SDK functions check file timestamps before doing work. If source files
-haven't changed since the last build, compilation is skipped. Tests
-always run (only compilation is skipped).
+SDK builders check source file timestamps against a per-module timestamp
+file before doing work. Unchanged modules are skipped at the compile
+step; tests always re-run.
 
-## Project structure
+## Project layout
 
 ```
 aetherBuild/
-├── aeb                        # runner script (scan, topo-sort, generate, compile, run)
-├── lib/
-│   ├── build/module.ae        # core: session, deps, context, shared helpers
-│   ├── java/module.ae         # language: javac, junit, junit5, shade
-│   ├── kotlin/module.ae       # language: kotlinc
-│   ├── go/module.ae           # language: go build, go test
-│   ├── rust/module.ae         # language: cargo build
-│   ├── ts/module.ae           # language: tsc, mocha
-│   ├── scala/module.ae        # language: scala-cli compile, test, package
-│   ├── clojure/module.ae      # language: clojure compile, clojure.test
-│   ├── dotnet/module.ae       # language: .csproj generation, dotnet build/test
-│   ├── maven/module.ae        # package mgr: BOM, dep resolution, classpath
-│   ├── pnpm/module.ae         # package mgr: npm dep resolution via pnpm
-│   ├── jest/module.ae         # test runner: Jest
-│   ├── webpack/module.ae      # bundler: Webpack
-│   ├── angular/module.ae      # framework: ngc, ng build
-│   └── container/module.ae    # infra: OCI images, LXC containers
+├── aeb                        # runner: scan, sort, transform, compile, link, exec
+├── lib/                       # shipped SDK modules (symlinked into consumer repos)
+│   ├── build/module.ae        # core: session, deps, context, artifact helpers
+│   ├── java/module.ae         # language: javac, junit, junit5, shade, jar_vendored, jar_registry
+│   ├── kotlin/module.ae
+│   ├── go/module.ae
+│   ├── rust/module.ae         # cargo_project / cargo_workspace / cargo_crate / crate_vendored / crate_registry
+│   ├── ts/module.ae           # tsc, npm_vendored, npm_registry
+│   ├── scala/module.ae
+│   ├── clojure/module.ae
+│   ├── dotnet/module.ae       # .csproj generation, nuget_vendored, nuget_registry
+│   ├── python/module.ae       # pyproject.toml generation, wheel_vendored, wheel_registry
+│   ├── maven/module.ae        # BOM parsing, Maven resolution wrapper
+│   ├── pnpm/module.ae         # pnpm-based npm resolution
+│   ├── jest/module.ae
+│   ├── webpack/module.ae
+│   ├── angular/module.ae
+│   └── container/module.ae    # OCI image builds, LXC
+├── tools/
+│   ├── transform-ae.ae        # rewrites user .ae files for linking
+│   ├── gen-orchestrator.ae    # emits the single-binary orchestrator
+│   ├── resolve-imports.sh     # transitive import resolution for transform-ae
+│   └── resolver/              # Maven Resolver wrapper (→ aeb-resolve.jar)
+├── itests/                    # integration tests (real open-source projects)
 ├── README.md
 └── TODO.md
 ```
 
-The consuming monorepo needs SDK modules in `lib/` to resolve imports.
-Run `aeb --init` from the monorepo root to set up the symlinks.
-
 ## Example repo
 
-[google-monorepo-sim](https://github.com/paul-hammant/google-monorepo-sim) —
-a simulated Google-style monorepo with Java, Kotlin, Go, Rust, and TypeScript
-modules, cross-language FFI, and JNI. Originally built with bash scripts,
-now ported to Aether Build: 18 compile targets, 2 fat jars, 17 test suites
-all passing from a single `aeb` invocation.
+[google-monorepo-sim](https://github.com/paul-hammant/google-monorepo-sim)
+— a simulated Google-style monorepo with Java, Kotlin, Go, Rust, C#,
+TypeScript, and Python modules, cross-language FFI, JNI, and per-language
+third-party deps. Everything builds and tests from a single `aeb`
+invocation.
 
 ## Integration tests (`itests/`)
 
 Real-world open-source projects converted from their native build systems
 to aetherBuild. Upstream sources are fetched via `itests/fetch-upstream.sh`
-and not committed — only the `.build.ae`, `.tests.ae`, `.bom.ae`, and
-migration status docs are tracked.
+and not committed — only the `.build.ae`, `.tests.ae`, `.dist.ae`,
+`.bom.ae`, and migration-status docs are tracked. Some repositories are
+pinned to a specific commit to avoid source drift against unreleased
+upstream dependencies.
 
 ### spring-data-examples (Maven → aeb)
 
 Source: [spring-projects/spring-data-examples](https://github.com/spring-projects/spring-data-examples)
+(pinned to commit `cd0d2b36`)
 
-90 leaf modules across JPA, MongoDB, Redis, Cassandra, JDBC, R2DBC, etc.
-Replaces 107 `pom.xml` files. Uses `java.javac(b)` / `java.junit5(b)` with
-Spring Boot 4.0.4 BOM for version management. Maven deps resolved via
-`aeb-resolve.jar`. TestContainers works with Podman.
-
-Insight: the BOM mechanism (`load_bom_file` + resolver) handles Maven's
-`<dependencyManagement>` without reimplementing Maven's POM model.
+~90 leaf modules across JPA, MongoDB, Redis, Cassandra, JDBC, R2DBC, REST,
+Web, and multi-store scenarios. Replaces 107 `pom.xml` files. Uses
+`java.javac(b)` + `java.junit5(b)` with a Spring Boot BOM for version
+management, TestContainers for integration tests (Podman-compatible).
 
 ### nx-examples (Nx → aeb)
 
 Source: [nrwl/nx-examples](https://github.com/nrwl/nx-examples)
 
-13 TypeScript modules — Angular 21 (ngc), React 18 (tsc), shared libraries,
-Web Components. Uses `ts.tsc(b)` / `angular.ngc(b)` / `jest.test(b)`. npm
-deps resolved via pnpm. 7/7 test suites pass.
-
-Insight: separating `ts`, `angular`, `jest`, `pnpm`, and `webpack` into
-independent SDK modules keeps each build file focused on what it compiles,
-not how package management works.
+13 TypeScript modules — Angular 21 (ngc), React 18 (tsc), shared
+libraries, Web Components. Uses `ts.tsc` / `angular.ngc` / `jest.test`.
+npm deps resolved via pnpm.
 
 ### clojure-multiproject-example (deps.edn → aeb)
 
 Source: [adityaathalye/clojure-multiproject-example](https://github.com/adityaathalye/clojure-multiproject-example)
 
-6 Clojure modules — shared library (grugstack), 4 web apps (Ring/Jetty,
-SQLite), 1 stub. Replaces `deps.edn` aliases and `build/build.clj`
-orchestration. Uses `clojure.compile(b)` / `clojure.test(b)`. Clojure
-libs come from Clojars via `clojars.bom.ae`.
-
-Insight: Clojure's source-path-on-classpath model (vs Java's compiled-classes
-model) required a `clojure_src_path` artifact to chain source directories
-transitively through inter-module deps. Also exposed a resolver gap —
-Jetty's POM uses parent-BOM property interpolation for version numbers,
-requiring a `clojure-dep-patches.bom.ae` to list the missing transitives
-explicitly. This led to adding `dep()` support in `.bom.ae` files.
+6 Clojure modules — shared library (grugstack), 4 Ring/Jetty/SQLite web
+apps, 1 stub. Replaces `deps.edn` aliases and `build/build.clj`
+orchestration. Clojure's source-path classpath model is chained
+transitively via a `clojure_src_path` artifact.
 
 ### scala-cli-multi-module-demo (scala-cli → aeb)
 
 Source: [VirtusLab/scala-cli-multi-module-demo](https://github.com/VirtusLab/scala-cli-multi-module-demo)
 
-3 Scala 3 modules — shared library + 2 apps. Uses `scala.scalac(b)`,
-`scala.scalac_test(b)`, `scala.munit(b)`. No scala-cli, Bloop, or
-Coursier — the Scala 3 compiler is invoked directly as
-`java -cp dotty.tools.dotc.Main`, same as javac.
-
-Insight: Scala doesn't need its own build tool. The compiler is a JVM
-program, deps are Maven coordinates, tests run via JUnit. The entire
-scala-cli/sbt/Coursier stack is replaced by `aeb-resolve.jar` + `java`.
+3 Scala 3 modules — shared library + 2 apps. The Scala 3 compiler is
+invoked directly (`java -cp dotty.tools.dotc.Main`), same as javac. No
+scala-cli, Bloop, Coursier, or sbt — `aeb-resolve.jar` + `java` replaces
+the entire stack.
 
 ### dotnet-architecture-eShopOnWeb (.NET solution → aeb)
 
 Source: [dotnet-architecture/eShopOnWeb](https://github.com/dotnet-architecture/eShopOnWeb)
 
 10 .NET projects — ASP.NET Core MVC, Blazor WASM, REST API, EF Core,
-xUnit tests. Upgraded from .NET 8 to .NET 10. aeb **generates**
+xUnit. Upgraded from .NET 8 to .NET 10. aeb **generates**
 `.{name}.generated.csproj` files from `.build.ae` declarations — NuGet
-packages via `nuget("PackageName")`, project references via `build.dep()`,
-properties via DSL setters. The original `.csproj` files become unnecessary.
+via `dotnet.nuget_registry`, project refs via `build.dep()`.
 
-Insight: unlike JVM languages where we replace the build tool entirely,
-.NET keeps `dotnet build` and `Directory.Packages.props` for NuGet version
-management. But the `.csproj` files themselves are generated — aeb owns the
-dependency graph and project configuration. When .NET 11 drops `.csproj`
-requirements, aeb is already prepared.
+### fyne-io/fyne (Go workspace → aeb)
+
+Source: [fyne-io/fyne](https://github.com/fyne-io/fyne)
+
+Multi-module Go workspace. Uses `go.go_build` / `go.go_test`.
+
+### Oxen-AI/Oxen (Rust workspace → aeb)
+
+Source: [Oxen-AI/Oxen](https://github.com/Oxen-AI/Oxen)
+
+Large Rust workspace; exercises `rust.cargo_workspace` and
+`rust.cargo_crate`, with `Cargo.toml` generation for both the workspace
+root and every member crate. `crate_registry` handles dozens of
+dependencies with feature flags.
+
+### python-monorepo-demo (Pants → aeb)
+
+Source: [SystemCraftsman/pants-python-monorepo-demo](https://github.com/SystemCraftsman/pants-python-monorepo-demo)
+
+A small Python monorepo. Uses `python.install` / `python.pytest` with
+`.whl.ae` dep files (`python.wheel_registry` / `wheel_vendored`).
+`python.package(b)` generates `pyproject.toml` at build time — no
+hand-written packaging metadata.
+
+### mrhdias_rust_store (Tokio → aeb)
+
+Source: [mrhdias/store](https://github.com/mrhdias/store)
+
+A small Tokio/axum Rust project. Single-crate `Cargo.toml` generation.
 
 ## Requirements
 
-- [Aether](https://github.com/AetherLang/aether) compiler (`ae`) — multi-pattern-glob branch or later
-- Language toolchains: `javac`, `kotlinc`, `go`, `rustc`/`cargo`, `tsc`, `node`
+- [Aether](https://github.com/AetherLang/aether) compiler (`ae`) —
+  recent enough to include the `hoist_loop_vars` and parameter-redeclare
+  fixes in `codegen/`.
+- Language toolchains for whatever you build: `javac`, `kotlinc`, `go`,
+  `cargo`, `tsc`/`node`, `scala` (Scala 3 compiler jar), `clojure`,
+  `dotnet` SDK, `python3`, `pnpm`.
+- For Java projects with Maven deps: build the resolver jar once —
 
-### Maven dependency resolver (required for Maven-based projects)
-
-Projects that use `maven_dep()` or `bom()` need the resolver jar built once:
-
-```bash
-mvn -f tools/resolver/pom.xml package
-mv tools/resolver/target/aeb-resolve-1.0.0.jar tools/aeb-resolve.jar
-rm -rf tools/resolver/target
-```
-
-This produces `tools/aeb-resolve.jar` (not checked in — listed in `.gitignore`).
+  ```bash
+  mvn -f tools/resolver/pom.xml package
+  mv tools/resolver/target/aeb-resolve-1.0.0.jar tools/aeb-resolve.jar
+  rm -rf tools/resolver/target
+  ```
+- For TestContainers-based tests: Docker or Podman. aeb auto-detects the
+  user-level Podman socket.

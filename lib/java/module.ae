@@ -220,23 +220,44 @@ junit_cmd(classpath: string, class_names: string, ld_path: string, opts: ptr) {
 
 // --- SDK functions ---
 
-// vendored_jar — declare a vendored jar as a classpath contribution.
-// Use this in a `.jar.ae` file so downstream consumers that dep on this
+// jar_vendored — declare a vendored jar as a classpath contribution.
+// Use this in a .jar.ae file so downstream consumers that dep on this
 // file pick up the jar in their classpath artifact.
-//
-// Example libs/java/junit/junit.jar.ae:
-//     import build
-//     import java
-//     main() {
-//         b = build.start()
-//         java.vendored_jar(b, "libs/java/junit/junit.jar")
-//     }
-builder vendored_jar(ctx: ptr, jar_path: string) {
+builder jar_vendored(ctx: ptr, jar_path: string) {
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
     build._mkdirs(target_dir)
     build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", jar_path)
     println("${mod_dir}: vendored jar ${jar_path}")
+    return 0
+}
+
+// jar_registry — declare a jar to fetch from Maven Central. Adds the coord
+// to maven_deps for later resolution. Use jar_registry_finalize(b) as the final builder
+// in a .jar.ae file to actually resolve and write the classpath artifact.
+jar_registry(ctx: ptr, coord: string) {
+    maven_deps = map_get(ctx, "maven_deps")
+    list_add(maven_deps, coord)
+}
+
+// jar_registry_finalize — resolve all previously-declared jar_registry coords and write
+// the jvm_classpath_deps_including_transitive artifact so downstream
+// consumers pick up these jars on their classpath.
+builder jar_registry_finalize(ctx: ptr) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+
+    cp = maven.resolve(ctx)
+    if string_length(cp) == 0 {
+        println("${mod_dir}: no maven deps resolved")
+        return 1
+    }
+
+    // Convert colon-separated to newline-separated for the classpath artifact
+    cp_nl = string_trim(os_exec("echo '${cp}' | tr ':' '\\n'"))
+    build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", cp_nl)
+    println("${mod_dir}: fetched maven deps")
     return 0
 }
 

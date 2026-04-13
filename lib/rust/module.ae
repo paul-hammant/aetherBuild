@@ -903,7 +903,129 @@ builder cargo_crate(ctx: ptr) {
     return 0
 }
 
+// crate_vendored — declare a vendored Rust crate as a path-dep contribution.
+// Use in a .crate.ae file so downstream consumers that dep on this file
+// pick up the crate as a path dep in their generated Cargo.toml.
+//
+// The arg is "name~path" (the ~ separator matches other rust DSL entries).
+// The artifact is a newline-separated list of "name~path" entries. Consumers
+// of cargo_project / cargo_crate merge these with their DSL-declared path_deps.
+builder crate_vendored(ctx: ptr, name_and_path: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    build._write_artifact(ctx, "rust_path_deps_including_transitive", name_and_path)
+    println("${mod_dir}: vendored crate ${name_and_path}")
+    return 0
+}
+
+// crate_registry — declare a crate to fetch from crates.io via cargo.
+// Use in a .crate.ae file to register a simple version dep that flows
+// into the consumer's generated Cargo.toml.
+//
+// Arg format: "name~version" (e.g. "serde~1.0").
+// The artifact is rust_registry_deps_including_transitive — cargo_project
+// merges these as [dependencies] version entries.
+//
+// The actual fetch happens when cargo itself is invoked on the generated
+// Cargo.toml in the consumer.
+builder crate_registry(ctx: ptr, name_and_ver: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    build._write_artifact(ctx, "rust_registry_deps_including_transitive", name_and_ver)
+    println("${mod_dir}: registry crate ${name_and_ver}")
+    return 0
+}
+
+// crate_registry_features — version dep with features.
+// Arg format: "name~version~feat1,feat2"
+builder crate_registry_features(ctx: ptr, name_ver_feats: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    build._write_artifact(ctx, "rust_registry_features_deps_including_transitive", name_ver_feats)
+    println("${mod_dir}: registry crate ${name_ver_feats}")
+    return 0
+}
+
 // --- cargo_project builder: generate Cargo.toml + cargo build ---
+
+// Merge dep artifacts from .crate.ae files into the builder.
+// Supports three artifact types:
+//   rust_path_deps_including_transitive            → _path_deps (name~path)
+//   rust_registry_deps_including_transitive        → _crate_deps (name~version)
+//   rust_registry_features_deps_including_transitive → _crate_deps_features (name~ver~feats)
+_merge_rust_dep_artifacts(ctx: ptr, bld: ptr) {
+    if bld == null { return 0 }
+    deps = map_get(ctx, "deps")
+    dep_count = list_size(deps)
+    di = 0
+    while di < dep_count {
+        dp = list_get(deps, di)
+        dm = build._strip_lang(dp)
+
+        // --- path deps ---
+        raw_path = build._read_dep_artifact(ctx, dm, "rust_path_deps_including_transitive")
+        if string_length(raw_path) > 0 {
+            if map_has(bld, "_path_deps") == 0 {
+                map_put(bld, "_path_deps", list_new())
+            }
+            pd_list = map_get(bld, "_path_deps")
+            i = 1
+            while i <= 200 {
+                line = string_trim(os_exec("printf '%s\\n' '${raw_path}' | sed -n '${i}p'"))
+                if string_length(line) == 0 {
+                    i = 999
+                } else {
+                    list_add(pd_list, line)
+                    i = i + 1
+                }
+            }
+        }
+
+        // --- simple registry deps ---
+        raw_reg = build._read_dep_artifact(ctx, dm, "rust_registry_deps_including_transitive")
+        if string_length(raw_reg) > 0 {
+            if map_has(bld, "_crate_deps") == 0 {
+                map_put(bld, "_crate_deps", list_new())
+            }
+            cd_list = map_get(bld, "_crate_deps")
+            j = 1
+            while j <= 200 {
+                rline = string_trim(os_exec("printf '%s\\n' '${raw_reg}' | sed -n '${j}p'"))
+                if string_length(rline) == 0 {
+                    j = 999
+                } else {
+                    list_add(cd_list, rline)
+                    j = j + 1
+                }
+            }
+        }
+
+        // --- feature registry deps ---
+        raw_feat = build._read_dep_artifact(ctx, dm, "rust_registry_features_deps_including_transitive")
+        if string_length(raw_feat) > 0 {
+            if map_has(bld, "_crate_deps_features") == 0 {
+                map_put(bld, "_crate_deps_features", list_new())
+            }
+            fd_list = map_get(bld, "_crate_deps_features")
+            k = 1
+            while k <= 200 {
+                fline = string_trim(os_exec("printf '%s\\n' '${raw_feat}' | sed -n '${k}p'"))
+                if string_length(fline) == 0 {
+                    k = 999
+                } else {
+                    list_add(fd_list, fline)
+                    k = k + 1
+                }
+            }
+        }
+
+        di = di + 1
+    }
+    return 0
+}
 
 builder cargo_project(ctx: ptr) {
     root = build._get(ctx, "root")
@@ -921,6 +1043,9 @@ builder cargo_project(ctx: ptr) {
         println("${mod_dir}: skipping compilation of prod code (not changed)")
         return 0
     }
+
+    // Merge path_deps from dep artifacts (.crate.ae files) into _builder
+    _merge_rust_dep_artifacts(ctx, _builder)
 
     // Generate Cargo.toml from DSL (cargo requires this exact filename)
     toml = cargo_toml_content(_builder)

@@ -1,13 +1,11 @@
 import build
 import python
-import python (pip)
 
 main() {
     b = build.start()
-    python.install(b) {
-        pip("setuptools>=70,<81")
-        pip("pytest")
-    }
+    build.dep(b, "libs/python/setuptools/.setuptools.whl.ae")
+    build.dep(b, "libs/python/pytest/.pytest.whl.ae")
+    python.install(b)
     python.lint(b)
     python.typecheck(b)
 }

@@ -187,20 +187,16 @@ dep(ctx: ptr, path: string) {
     }
 }
 
-lib(ctx: ptr, path: string) {
-    libs = map_get(ctx, "libs")
-    list_add(libs, path)
-}
-
-cargo_dep(ctx: ptr, path: string) {
-    cdeps = map_get(ctx, "cargo_deps")
-    list_add(cdeps, path)
-}
-
-npm_dep(ctx: ptr, path: string) {
-    ndeps = map_get(ctx, "npm_deps")
-    list_add(ndeps, path)
-}
+// Note: build.lib, build.cargo_dep, build.npm_dep have been removed.
+// Use the .ae-as-dep pattern instead:
+//
+//   build.dep(b, "libs/java/junit/.junit.jar.ae")      // was build.lib
+//   build.dep(b, "libs/rust/vendor/jni/.jni.crate.ae") // was build.cargo_dep
+//   build.dep(b, "libs/javascript/mocha/.mocha.npm.ae") // was build.npm_dep
+//
+// Each .ae file registers its contribution via a language-SDK builder
+// (java.jar_vendored, rust.crate_vendored, ts.npm_vendored, etc.) and
+// writes an artifact that consumers read through the normal dep graph.
 
 // --- Internal helpers (used by language modules via build._helper()) ---
 

@@ -4,7 +4,7 @@ import maven (load_bom_file)
 import kotlin
 import kotlin (source_layout, jvm_target)
 import java
-import java (release, source_layout, enable_preview, test_timeout)
+import java (release, source_layout, enable_preview, test_timeout, parameters)
 
 main() {
     b = build.start()

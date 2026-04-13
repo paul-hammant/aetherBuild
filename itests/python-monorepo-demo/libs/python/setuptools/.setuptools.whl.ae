@@ -1,0 +1,17 @@
+// setuptools.whl.ae — Python setuptools (bounded version range)
+//
+// upstream: https://github.com/pypa/setuptools
+// version:  >=70,<81
+// license:  MIT
+//
+// Consumers that dep on this file get setuptools installed into the venv
+// at the specified version bound (needed because newer setuptools drops
+// deprecated pkg_resources APIs used by some libraries).
+
+import build
+import python
+
+main() {
+    b = build.start()
+    python.wheel_registry(b, "setuptools~>=70,<81")
+}

@@ -2,7 +2,7 @@ import build
 import build (dep)
 import maven (load_bom_file)
 import java
-import java (release, source_layout, enable_preview, test_timeout)
+import java (release, source_layout, enable_preview, test_timeout, parameters)
 
 main() {
     b = build.start()
@@ -11,10 +11,12 @@ main() {
     dep(b, "org.springframework.boot:spring-boot-starter-test")
     dep(b, "org.springframework.boot:spring-boot-data-jpa-test")
     dep(b, "org.junit.platform:junit-platform-console")
+    dep(b, "com.github.javafaker:javafaker:1.0.2")
     java.javac_test(b) {
         release("25")
         source_layout("maven idiomatic")
         enable_preview()
+        parameters()
     }
     java.junit5(b) {
         test_timeout("30")

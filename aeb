@@ -154,8 +154,11 @@ extract_deps() {
 }
 
 if [[ -z "$TARGET" ]]; then
-    # --- Scan mode: discover all .build.ae, .tests.ae, .dist.ae files ---
-    for ae_file in $(find . \( -name '.build.ae' -o -name '.tests.ae' -o -name '.dist.ae' \) "${IGNORE_EXCLUDES[@]}" | sort); do
+    # --- Scan mode: discover any dot-prefixed .ae file ---
+    # Matches .build.ae, .tests.ae, .dist.ae, .junit.jar.ae, .serde_json.crate.ae,
+    # .mocha.npm.ae, .Shouldly.nupkg.ae, .pytest.whl.ae, and any other third-party
+    # dep file that follows the .xxx.ae convention.
+    for ae_file in $(find . -name '.*.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
         file_path="${ae_file#./}"
         ALL_AE_FILES+=("$file_path")
         FILE_EXISTS["$file_path"]=1

@@ -16,11 +16,13 @@ extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
 // encode_name: path → C-safe identifier
-// / → _    _ → __   - → _H_   . → _D_
+// Matches the bash encode_name in aeb:
+//   / → _    __ → __   - → _H_   . → _D_
+// (single _ is NOT doubled; bash preserves it as-is)
 encode_name(input: string) {
     cmd = "printf '%s' '"
     cmd = string_concat(cmd, input)
-    cmd = string_concat(cmd, "' | sed 's/__/DBLUND/g; s/_/__/g; s|/|_|g; s/-/_H_/g; s/\\./_D_/g; s/DBLUND/____/g'")
+    cmd = string_concat(cmd, "' | sed 's/__/DBLUND/g; s|/|_|g; s/-/_H_/g; s/\\./_D_/g; s/DBLUND/__/g'")
     return string_trim(os_exec(cmd))
 }
 
