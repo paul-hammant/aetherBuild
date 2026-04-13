@@ -5,7 +5,7 @@ import rust (crate_name, edition, ws_dep, dev_ws_dep, path_dep, feature, bin)
 main() {
     b = build.start()
     build.dep(b, ".build.ae")
-    rust.cargo_member(b) {
+    rust.cargo_crate(b) {
         crate_name("oxen-server")
         edition("2024")
         bin("oxen-server", "src/main.rs")

@@ -220,6 +220,26 @@ junit_cmd(classpath: string, class_names: string, ld_path: string, opts: ptr) {
 
 // --- SDK functions ---
 
+// vendored_jar — declare a vendored jar as a classpath contribution.
+// Use this in a `.jar.ae` file so downstream consumers that dep on this
+// file pick up the jar in their classpath artifact.
+//
+// Example libs/java/junit/junit.jar.ae:
+//     import build
+//     import java
+//     main() {
+//         b = build.start()
+//         java.vendored_jar(b, "libs/java/junit/junit.jar")
+//     }
+builder vendored_jar(ctx: ptr, jar_path: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", jar_path)
+    println("${mod_dir}: vendored jar ${jar_path}")
+    return 0
+}
+
 builder javac(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")

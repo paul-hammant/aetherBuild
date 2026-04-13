@@ -5,7 +5,7 @@ import rust (crate_name, edition, ws_dep, path_dep, bin)
 main() {
     b = build.start()
     build.dep(b, ".build.ae")
-    rust.cargo_member(b) {
+    rust.cargo_crate(b) {
         crate_name("oxen-cli")
         edition("2024")
         bin("oxen", "src/main.rs")

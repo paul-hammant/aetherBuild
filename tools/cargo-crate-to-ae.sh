@@ -23,7 +23,7 @@ echo ""
 echo "main() {"
 echo "    b = build.start()"
 echo "    build.dep(b, \".build.ae\")"
-echo "    rust.cargo_member(b) {"
+echo "    rust.cargo_crate(b) {"
 echo "        crate_name(\"$crate_name\")"
 echo "        edition(\"2024\")"
 

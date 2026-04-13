@@ -2,7 +2,7 @@ import build
 // Tests for cargo_workspace_toml_content() — workspace Cargo.toml generation
 
 import rust
-import rust (cargo_workspace_toml_content, cargo_member_toml_content,
+import rust (cargo_workspace_toml_content, cargo_crate_toml_content,
              workspace_member, workspace_dep,
              workspace_dep_features, workspace_edition, workspace_resolver)
 
@@ -140,7 +140,7 @@ main() {
     list_add(ws_refs, "serde")
     list_add(ws_refs, "tokio")
     list_add(ws_refs, "log")
-    toml7 = cargo_member_toml_content(opts7)
+    toml7 = cargo_crate_toml_content(opts7)
     _assert_contains("member name", toml7, "name = \"liboxen\"")
     _assert_contains("member edition inherit", toml7, "edition.workspace = true")
     _assert_contains("serde workspace", toml7, "serde.workspace = true")
@@ -165,7 +165,7 @@ main() {
     entry = string_concat("liboxen", "~")
     entry = string_concat(entry, "../lib")
     list_add(pd, entry)
-    toml8 = cargo_member_toml_content(opts8)
+    toml8 = cargo_crate_toml_content(opts8)
     _assert_contains("member name server", toml8, "name = \"oxen-server\"")
     _assert_contains("actix workspace", toml8, "actix-web.workspace = true")
     _assert_contains("path dep liboxen", toml8, "liboxen = { path = \"../lib\" }")
@@ -190,7 +190,7 @@ main() {
     // Empty feature flag
     e9c = string_concat("backup", "~")
     list_add(f9, e9c)
-    toml9 = cargo_member_toml_content(opts9)
+    toml9 = cargo_crate_toml_content(opts9)
     _assert_contains("has [features]", toml9, "[features]")
     _assert_contains("otel feature", toml9, "otel = [\"dep:opentelemetry\", \"dep:tracing-opentelemetry\"]")
     _assert_contains("postgres feature", toml9, "postgres = [\"sqlx/postgres\"]")
@@ -201,7 +201,7 @@ main() {
     map_put(opts10, "crate_name", "myapp")
     map_put(opts10, "edition", "2024")
     map_put(opts10, "_default_features", "otel,postgres")
-    toml10 = cargo_member_toml_content(opts10)
+    toml10 = cargo_crate_toml_content(opts10)
     _assert_contains("default features", toml10, "default = [\"otel\", \"postgres\"]")
 
     // --- Test 11: [[bin]] sections ---
@@ -215,7 +215,7 @@ main() {
     e11 = string_concat("oxen", "~")
     e11 = string_concat(e11, "src/main.rs")
     list_add(b11, e11)
-    toml11 = cargo_member_toml_content(opts11)
+    toml11 = cargo_crate_toml_content(opts11)
     _assert_contains("has [[bin]]", toml11, "[[bin]]")
     _assert_contains("bin name", toml11, "name = \"oxen\"")
     _assert_contains("bin path", toml11, "path = \"src/main.rs\"")
@@ -287,7 +287,7 @@ main() {
     dev13 = map_get(opts13, "_dev_ws_refs")
     list_add(dev13, "actix-multipart-test")
     list_add(dev13, "mockito")
-    toml13 = cargo_member_toml_content(opts13)
+    toml13 = cargo_crate_toml_content(opts13)
     _assert_contains("has [dev-dependencies]", toml13, "[dev-dependencies]")
     _assert_contains("dev actix-multipart-test", toml13, "actix-multipart-test.workspace = true")
     _assert_contains("dev mockito", toml13, "mockito.workspace = true")

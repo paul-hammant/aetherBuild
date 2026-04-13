@@ -559,7 +559,7 @@ dev_ws_dep(_ctx: ptr, name: string) {
 }
 
 // Pure function: opts map → member Cargo.toml string
-cargo_member_toml_content(opts: ptr) {
+cargo_crate_toml_content(opts: ptr) {
     toml = "[package]\n"
 
     // name
@@ -836,7 +836,7 @@ builder cargo_workspace(ctx: ptr) {
     println("${mod_dir}: generated workspace Cargo.toml")
 
     // Also generate member Cargo.tomls from their .build.ae files
-    // Each member .build.ae with cargo_member() will have deposited its content
+    // Each member .build.ae with cargo_crate() will have deposited its content
     // via the member_tomls map during aeb's topo-sorted execution.
     // For now, we just generate the workspace root.
 
@@ -844,9 +844,48 @@ builder cargo_workspace(ctx: ptr) {
     return 0
 }
 
-// --- cargo_member builder: generate member Cargo.toml with workspace refs ---
+// Run `cargo check --workspace` on the whole workspace.
+// Use this in a workspace-root .tests.ae or .check.ae after all members generate.
+builder check_workspace(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
 
-builder cargo_member(ctx: ptr) {
+    build._mkdirs(target_dir)
+
+    println("${mod_dir}: cargo check --workspace")
+    cmd = "cd '${source_dir}' && cargo check --workspace"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: cargo check --workspace failed")
+        return exit_code
+    }
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// Run `cargo test --workspace` on the whole workspace.
+builder test_workspace(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    build._mkdirs(target_dir)
+
+    println("${mod_dir}: cargo test --workspace")
+    cmd = "cd '${source_dir}' && cargo test --workspace"
+    exit_code = os_system(cmd)
+    if exit_code != 0 {
+        println("${mod_dir}: cargo test --workspace failed")
+        return exit_code
+    }
+    io_write_file(path_join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// --- cargo_crate builder: generate member Cargo.toml with workspace refs ---
+
+builder cargo_crate(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
@@ -855,7 +894,7 @@ builder cargo_member(ctx: ptr) {
     build._mkdirs(target_dir)
 
     // Generate member Cargo.toml only — use rust.check() separately for compilation
-    toml = cargo_member_toml_content(_builder)
+    toml = cargo_crate_toml_content(_builder)
     cargo_toml = path_join(source_dir, "Cargo.toml")
     io_write_file(cargo_toml, toml)
     println("${mod_dir}: generated member Cargo.toml")

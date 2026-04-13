@@ -5,7 +5,7 @@ import rust (crate_name, edition, ws_dep)
 main() {
     b = build.start()
     build.dep(b, ".build.ae")
-    rust.cargo_member(b) {
+    rust.cargo_crate(b) {
         crate_name("liboxen")
         edition("2024")
         ws_dep("approx")
