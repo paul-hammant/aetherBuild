@@ -3,6 +3,7 @@ tools/resolver/target
 
 # Built tool binaries (rebuilt lazily by aeb on first run)
 tools/encode-name
+tools/extract-deps
 tools/file-to-label
 tools/gen-orchestrator
 tools/infer-type

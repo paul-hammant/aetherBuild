@@ -133,16 +133,13 @@ if [[ -f "$ROOT/.aebignore" ]]; then
 fi
 
 # Extract and resolve deps from a .ae file
+# Implementation lives in tools/extract-deps.ae (pure Aether, cross-platform).
+EXTRACT_DEPS_BIN="$AEB_HOME/tools/extract-deps"
+if [[ ! -x "$EXTRACT_DEPS_BIN" ]]; then
+    "$AETHER" build "$AEB_HOME/tools/extract-deps.ae" -o "$EXTRACT_DEPS_BIN" 2>/dev/null
+fi
 extract_deps() {
-    local file="$1"
-    local raw_deps resolved_deps=""
-    raw_deps="$(grep -oP '(?<=dep\(b, ")[^"]+' "$file" 2>/dev/null || true)"
-    for dep in $raw_deps; do
-        local resolved
-        resolved=$(resolve_dep "$dep")
-        resolved_deps+="$resolved "
-    done
-    echo "$resolved_deps"
+    "$EXTRACT_DEPS_BIN" "$1"
 }
 
 if [[ -z "$TARGET" ]]; then
