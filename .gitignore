@@ -4,6 +4,7 @@ tools/resolver/target
 # Built tool binaries (rebuilt lazily by aeb on first run)
 tools/aeb-init
 tools/aeb-link
+tools/aeb-main
 tools/encode-name
 tools/extract-deps
 tools/file-to-label

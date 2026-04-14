@@ -1,29 +1,26 @@
 #!/bin/bash
-# aeb — Aether Build runner
-# Scans .build.ae / .tests.ae / .dist.ae files (or takes an explicit .ae file),
-# builds a unified DAG, topo-sorts, compiles each to C, links into one binary,
-# and runs it. One process, one map, no subprocess coordination.
+# aeb — Aether Build runner (thin trampoline)
+#
+# Sets up a few environment values that are awkward to compute from inside
+# Aether (AETHER, AEB_HOME, ROOT, optional Podman socket), then execs the
+# Aether-language entry point in tools/aeb-main. Everything else — argument
+# parsing, scan/target-mode discovery, dep extraction, topo sort, per-file
+# compile, orchestrator generation, gcc link, and final exec of the build
+# binary — lives in tools/aeb-main.ae and the helper tools it shells out to.
 set -eo pipefail
 
 AETHER="${AETHER:-ae}"
 AEB_HOME="$(cd "$(dirname "$0")" && pwd)"
 export AEB_HOME
+ROOT="$(pwd)"
 
 # Auto-detect podman socket for TestContainers
 if [[ -z "${DOCKER_HOST:-}" ]] && [[ -S "/run/user/$(id -u)/podman/podman.sock" ]]; then
     export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
 fi
-ROOT="$(pwd)"
-AEB_LIB=".aeb/lib"
 
-# --- shipped modules (update this list when adding new SDKs) ---
-SHIPPED_MODULES=(build java kotlin go rust ts scala clojure dotnet python aether container maven pnpm jest webpack angular)
-
-# --- argument parsing ---
-TARGET=""
-
+# --- --init: lazy-build and exec the init tool ---
 if [[ "${1:-}" == "--init" ]]; then
-    # Implementation lives in tools/aeb-init.ae (pure Aether, cross-platform).
     AEB_INIT_BIN="$AEB_HOME/tools/aeb-init"
     if [[ ! -x "$AEB_INIT_BIN" ]]; then
         "$AETHER" build "$AEB_HOME/tools/aeb-init.ae" -o "$AEB_INIT_BIN" 2>/dev/null
@@ -31,183 +28,9 @@ if [[ "${1:-}" == "--init" ]]; then
     exec "$AEB_INIT_BIN" "$AEB_HOME"
 fi
 
-# Parse remaining args
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        *) TARGET="$1"; shift ;;
-    esac
-done
-# Strip trailing slash
-TARGET="${TARGET%/}"
-
-# --- Encode file path to C-safe function name ---
-# / → _    _ → __   - → _H_   . → _D_
-# Implementation lives in tools/encode-name.ae (pure Aether, cross-platform).
-ENCODE_NAME_BIN="$AEB_HOME/tools/encode-name"
-if [[ ! -x "$ENCODE_NAME_BIN" ]]; then
-    "$AETHER" build "$AEB_HOME/tools/encode-name.ae" -o "$ENCODE_NAME_BIN" 2>/dev/null
+# --- Normal build: lazy-build and exec the main tool ---
+AEB_MAIN_BIN="$AEB_HOME/tools/aeb-main"
+if [[ ! -x "$AEB_MAIN_BIN" ]]; then
+    "$AETHER" build "$AEB_HOME/tools/aeb-main.ae" -o "$AEB_MAIN_BIN" 2>/dev/null
 fi
-encode_name() {
-    "$ENCODE_NAME_BIN" "$1"
-}
-
-# --- Resolve a dep reference to a file path ---
-# New-style: "path/to/.tests.ae" (ends in .ae) — used as-is
-# Legacy:    "path/to/dir" — resolved to dir/.build.ae (or .tests.ae or .dist.ae)
-# Implementation lives in tools/resolve-dep.ae (pure Aether, cross-platform).
-RESOLVE_DEP_BIN="$AEB_HOME/tools/resolve-dep"
-if [[ ! -x "$RESOLVE_DEP_BIN" ]]; then
-    "$AETHER" build "$AEB_HOME/tools/resolve-dep.ae" -o "$RESOLVE_DEP_BIN" 2>/dev/null
-fi
-resolve_dep() {
-    "$RESOLVE_DEP_BIN" "$1"
-}
-
-# --- Infer file type from filename ---
-# Used to determine the module_dir label prefix (test: / dist: / none)
-# Implementation lives in tools/infer-type.ae (pure Aether, cross-platform).
-INFER_TYPE_BIN="$AEB_HOME/tools/infer-type"
-if [[ ! -x "$INFER_TYPE_BIN" ]]; then
-    "$AETHER" build "$AEB_HOME/tools/infer-type.ae" -o "$INFER_TYPE_BIN" 2>/dev/null
-fi
-infer_type() {
-    "$INFER_TYPE_BIN" "$1"
-}
-
-# --- Derive module_dir from file path ---
-# The runtime's build.begin() expects a directory path, optionally with test:/dist: prefix
-# Implementation lives in tools/file-to-label.ae (pure Aether, cross-platform).
-FILE_TO_LABEL_BIN="$AEB_HOME/tools/file-to-label"
-if [[ ! -x "$FILE_TO_LABEL_BIN" ]]; then
-    "$AETHER" build "$AEB_HOME/tools/file-to-label.ae" -o "$FILE_TO_LABEL_BIN" 2>/dev/null
-fi
-file_to_label() {
-    "$FILE_TO_LABEL_BIN" "$1"
-}
-
-# --- Unified DAG: scan or explicit ---
-declare -A FILE_DEPS     # file_path → space-separated resolved dep file paths
-declare -A FILE_EXISTS   # file_path → 1
-ALL_AE_FILES=()
-
-# Build exclusion list from .aebignore (one directory per line, like .gitignore)
-IGNORE_EXCLUDES=(-not -path './target/*' -not -path './.aeb/*' -not -path './lib/*')
-if [[ -f "$ROOT/.aebignore" ]]; then
-    while IFS= read -r pattern; do
-        [[ -z "$pattern" || "$pattern" == \#* ]] && continue
-        pattern="${pattern%/}"
-        IGNORE_EXCLUDES+=(-not -path "./${pattern}/*")
-    done < "$ROOT/.aebignore"
-fi
-
-# Extract and resolve deps from a .ae file
-# Implementation lives in tools/extract-deps.ae (pure Aether, cross-platform).
-EXTRACT_DEPS_BIN="$AEB_HOME/tools/extract-deps"
-if [[ ! -x "$EXTRACT_DEPS_BIN" ]]; then
-    "$AETHER" build "$AEB_HOME/tools/extract-deps.ae" -o "$EXTRACT_DEPS_BIN" 2>/dev/null
-fi
-extract_deps() {
-    "$EXTRACT_DEPS_BIN" "$1"
-}
-
-if [[ -z "$TARGET" ]]; then
-    # --- Scan mode: discover any dot-prefixed .ae file ---
-    # Matches .build.ae, .tests.ae, .dist.ae, .junit.jar.ae, .serde_json.crate.ae,
-    # .mocha.npm.ae, .Shouldly.nupkg.ae, .pytest.whl.ae, and any other third-party
-    # dep file that follows the .xxx.ae convention.
-    # Implementation lives in tools/scan-ae-files.ae (pure Aether, cross-platform).
-    SCAN_AE_FILES_BIN="$AEB_HOME/tools/scan-ae-files"
-    if [[ ! -x "$SCAN_AE_FILES_BIN" ]]; then
-        "$AETHER" build "$AEB_HOME/tools/scan-ae-files.ae" -o "$SCAN_AE_FILES_BIN" 2>/dev/null
-    fi
-    while IFS= read -r file_path; do
-        [[ -z "$file_path" ]] && continue
-        ALL_AE_FILES+=("$file_path")
-        FILE_EXISTS["$file_path"]=1
-        FILE_DEPS["$file_path"]="$(extract_deps "$file_path")"
-    done < <("$SCAN_AE_FILES_BIN")
-else
-    # --- Explicit target mode ---
-    if [[ "$TARGET" == *.ae ]]; then
-        # Explicit file: aeb path/to/whatever.ae
-        if [[ ! -f "./$TARGET" ]]; then
-            echo "error: $TARGET not found" >&2
-            exit 1
-        fi
-    else
-        # Legacy directory target: resolve to a file
-        if [[ -f "./${TARGET}/.tests.ae" ]]; then
-            TARGET="${TARGET}/.tests.ae"
-        elif [[ -f "./${TARGET}/.build.ae" ]]; then
-            TARGET="${TARGET}/.build.ae"
-        elif [[ -f "./${TARGET}/.dist.ae" ]]; then
-            TARGET="${TARGET}/.dist.ae"
-        else
-            echo "error: no .ae files found in $TARGET" >&2
-            exit 1
-        fi
-    fi
-
-    # BFS to discover the target and all transitive deps
-    declare -a QUEUE=("$TARGET")
-    declare -A SEEN
-    SEEN["$TARGET"]=1
-    local_i=0
-    while (( local_i < ${#QUEUE[@]} )); do
-        file="${QUEUE[$local_i]}"
-        local_i=$(( local_i + 1 ))
-        ALL_AE_FILES+=("$file")
-        FILE_EXISTS["$file"]=1
-        FILE_DEPS["$file"]="$(extract_deps "./$file")"
-        for dep in ${FILE_DEPS[$file]}; do
-            if [[ -z "${SEEN[$dep]+x}" ]] && [[ -f "./$dep" ]]; then
-                SEEN["$dep"]=1
-                QUEUE+=("$dep")
-            fi
-        done
-    done
-fi
-
-if [ ${#ALL_AE_FILES[@]} -eq 0 ]; then
-    echo "No .ae build files found"
-    exit 0
-fi
-
-# --- Topological sort (unified, all file types) ---
-# Implementation lives in tools/topo-sort.ae (pure Aether, cross-platform).
-TOPO_SORT_BIN="$AEB_HOME/tools/topo-sort"
-if [[ ! -x "$TOPO_SORT_BIN" ]]; then
-    "$AETHER" build "$AEB_HOME/tools/topo-sort.ae" -o "$TOPO_SORT_BIN" 2>/dev/null
-fi
-TOPO_EDGES_FILE="$(mktemp)"
-trap 'rm -f "$TOPO_EDGES_FILE"' EXIT
-for f in "${ALL_AE_FILES[@]}"; do
-    echo "$f ${FILE_DEPS[$f]}" >> "$TOPO_EDGES_FILE"
-done
-SORTED_FILES=()
-while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    SORTED_FILES+=("$line")
-done < <("$TOPO_SORT_BIN" "$TOPO_EDGES_FILE")
-
-# --- Compile each .ae file, generate orchestrator, link, and exec ---
-# Implementation lives in tools/aeb-link.ae (pure Aether, cross-platform).
-AEB_LINK_BIN="$AEB_HOME/tools/aeb-link"
-if [[ ! -x "$AEB_LINK_BIN" ]]; then
-    "$AETHER" build "$AEB_HOME/tools/aeb-link.ae" -o "$AEB_LINK_BIN" 2>/dev/null
-fi
-BUILD_DIR="$ROOT/target/_aeb"
-mkdir -p "$BUILD_DIR"
-BUILD_BIN="$ROOT/target/_ae_build_all"
-AETHER_DIR="$(dirname "$(command -v "$AETHER")")"
-
-# Re-emit the sorted files as an edges file (one path per line) so aeb-link
-# can reuse the topo-sort input format. Deps aren't needed here — only the
-# order matters.
-SORTED_EDGES_FILE="$(mktemp)"
-trap 'rm -f "$TOPO_EDGES_FILE" "$SORTED_EDGES_FILE"' EXIT
-for f in "${SORTED_FILES[@]}"; do
-    echo "$f" >> "$SORTED_EDGES_FILE"
-done
-
-exec "$AEB_LINK_BIN" "$SORTED_EDGES_FILE" "$BUILD_DIR" "$ROOT/$AEB_LIB" "$AETHER_DIR" "$AETHER" "$BUILD_BIN" "$ROOT"
+exec "$AEB_MAIN_BIN" "$AETHER" "$AEB_HOME" "$ROOT" "${1:-}"
