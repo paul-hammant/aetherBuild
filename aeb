@@ -222,96 +222,24 @@ while IFS= read -r line; do
     SORTED_FILES+=("$line")
 done < <("$TOPO_SORT_BIN" "$TOPO_EDGES_FILE")
 
-# --- Compile each .ae file separately, then link ---
-AETHERC="${AETHER}therc"
-if ! command -v "$AETHERC" &>/dev/null; then
-    AETHERC="$(dirname "$(command -v "$AETHER")")/aetherc"
+# --- Compile each .ae file, generate orchestrator, link, and exec ---
+# Implementation lives in tools/aeb-link.ae (pure Aether, cross-platform).
+AEB_LINK_BIN="$AEB_HOME/tools/aeb-link"
+if [[ ! -x "$AEB_LINK_BIN" ]]; then
+    "$AETHER" build "$AEB_HOME/tools/aeb-link.ae" -o "$AEB_LINK_BIN" 2>/dev/null
 fi
 BUILD_DIR="$ROOT/target/_aeb"
 mkdir -p "$BUILD_DIR"
-
-declare -A ALL_MODULES   # fname → module_dir
-ALL_C_FILES=()
-
-# Transform a .ae file using the Aether transform-ae tool
-TRANSFORM_AE="$AEB_HOME/tools/transform-ae"
-if [[ ! -x "$TRANSFORM_AE" ]]; then
-    "$AETHER" build "$AEB_HOME/tools/transform-ae.ae" -o "$TRANSFORM_AE" 2>/dev/null
-fi
-transform_ae() {
-    local src="$1" func_name="$2" label="$3" out="$4"
-    "$TRANSFORM_AE" "$src" "$func_name" "$label" "$out" "$ROOT/$AEB_LIB" "$AEB_HOME"
-}
-
-# Count by type for display
-n_build=0; n_test=0; n_dist=0
-for f in "${SORTED_FILES[@]}"; do
-    case "$(infer_type "$f")" in
-        build) n_build=$(( n_build + 1 )) ;;
-        test)  n_test=$(( n_test + 1 )) ;;
-        dist)  n_dist=$(( n_dist + 1 )) ;;
-    esac
-done
-echo "aeb: ${n_build} compile + ${n_dist} dist + ${n_test} test"
-
-# Compile all targets in topo order
-for file_path in "${SORTED_FILES[@]}"; do
-    type=$(infer_type "$file_path")
-    fname="$(encode_name "$file_path")"
-    src="./${file_path}"
-    ae_tmp="$BUILD_DIR/${fname}.ae"
-    c_out="$BUILD_DIR/${fname}.c"
-    label=$(file_to_label "$file_path")
-
-    case "$type" in
-        build) echo "  compile: $(dirname "$file_path")" ;;
-        test)  echo "  test:    $(dirname "$file_path")" ;;
-        dist)  echo "  dist:    $(dirname "$file_path")" ;;
-    esac
-
-    transform_ae "$src" "$fname" "$label" "$ae_tmp"
-    "$AETHERC" --lib "$ROOT/$AEB_LIB" "$ae_tmp" "$c_out" 2>/dev/null
-
-    ALL_C_FILES+=("$c_out")
-    ALL_MODULES["$fname"]="$(dirname "$file_path")"
-done
-
-# --- Generate orchestrator .ae ---
-ORCH_FILE="$BUILD_DIR/_orchestrator.ae"
-GEN_ORCH="$AEB_HOME/tools/gen-orchestrator"
-if [[ ! -x "$GEN_ORCH" ]]; then
-    "$AETHER" build "$AEB_HOME/tools/gen-orchestrator.ae" -o "$GEN_ORCH" 2>/dev/null
-fi
-"$GEN_ORCH" "${SORTED_FILES[@]}" > "$ORCH_FILE"
-
-# --- Compile orchestrator and link ---
-ORCH_C="$BUILD_DIR/_orchestrator.c"
 BUILD_BIN="$ROOT/target/_ae_build_all"
-
-# Compile orchestrator .ae to .c
-"$AETHERC" --lib "$ROOT/$AEB_LIB" "$ORCH_FILE" "$ORCH_C" 2>/dev/null
-
-# Find Aether runtime
 AETHER_DIR="$(dirname "$(command -v "$AETHER")")"
-AETHER_LIB="$AETHER_DIR/libaether.a"
 
-# Link everything: orchestrator + all module .c files + runtime
-if [[ -f "$AETHER_LIB" ]]; then
-    # Precompiled runtime available
-    gcc -O2 -pipe -w "$ORCH_C" "${ALL_C_FILES[@]}" \
-        -L"$AETHER_DIR" -laether \
-        -o "$BUILD_BIN" -pthread -lm \
-        -Wl,--allow-multiple-definition \
-        2>&1 || true
-else
-    # Fall back to compiling runtime from source
-    AETHER_ROOT="$(cd "$AETHER_DIR/.." && pwd)"
-    gcc -O2 -pipe -w "$ORCH_C" "${ALL_C_FILES[@]}" \
-        "$AETHER_ROOT"/runtime/*.c \
-        -I"$AETHER_ROOT/runtime" \
-        -o "$BUILD_BIN" -pthread -lm \
-        -Wl,--allow-multiple-definition \
-        2>&1 || true
-fi
+# Re-emit the sorted files as an edges file (one path per line) so aeb-link
+# can reuse the topo-sort input format. Deps aren't needed here — only the
+# order matters.
+SORTED_EDGES_FILE="$(mktemp)"
+trap 'rm -f "$TOPO_EDGES_FILE" "$SORTED_EDGES_FILE"' EXIT
+for f in "${SORTED_FILES[@]}"; do
+    echo "$f" >> "$SORTED_EDGES_FILE"
+done
 
-exec "$BUILD_BIN" "$ROOT"
+exec "$AEB_LINK_BIN" "$SORTED_EDGES_FILE" "$BUILD_DIR" "$ROOT/$AEB_LIB" "$AETHER_DIR" "$AETHER" "$BUILD_BIN" "$ROOT"
