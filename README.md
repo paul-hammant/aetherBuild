@@ -149,6 +149,29 @@ cd jpa/example && aeb .tests.ae
 aeb auto-detects Podman's socket and sets `DOCKER_HOST` so TestContainers
 works without a daemon.
 
+### Sparse checkout (`aeb gcheckout`)
+
+`aeb gcheckout` walks the `.ae`-file dependency DAG starting from a target
+and adds each visited module's directory to the VCS sparse-checkout, so a
+monorepo consumer can fetch only the modules they actually need.
+
+```bash
+aeb gcheckout --init                      # enable sparse-checkout, add scaffolding
+aeb gcheckout add jpa/example/.tests.ae   # walk DAG from target, sparse-add each dir
+aeb gcheckout add java/components/vowels  # directory form (resolves to .build.ae etc.)
+aeb gcheckout --reset                     # disable sparse-checkout
+```
+
+The walk goes through the same `extract-deps` tool the rest of `aeb` uses,
+so any `.jar.ae` / `.crate.ae` / `.npm.ae` / `.nupkg.ae` / `.whl.ae`
+third-party dep file is followed automatically.
+
+> **Note** — the implementation currently shells out to `git
+> sparse-checkout` and is therefore Git-only. Mercurial support would need
+> a small VCS abstraction layer (`narrowhg` extension on the hg side, or
+> a different command per VCS). The dep-walking logic itself is
+> VCS-agnostic and would be reused unchanged.
+
 ### Typical output
 
 ```
@@ -343,9 +366,17 @@ step; tests always re-run.
 
 ## Project layout
 
+`aeb` itself is a ~36-line bash trampoline. It picks up `AETHER`,
+`AEB_HOME`, and the working directory, optionally exports a Podman
+socket, and dispatches `--init` / `gcheckout` / normal builds to the
+matching Aether-language tool under `tools/`. Everything else —
+argument parsing, scan/target discovery, dep extraction, topo sort,
+per-file compile, orchestrator generation, gcc link, exec — runs in
+Aether.
+
 ```
 aetherBuild/
-├── aeb                        # runner: scan, sort, transform, compile, link, exec
+├── aeb                        # thin bash trampoline → tools/aeb-main
 ├── lib/                       # shipped SDK modules (symlinked into consumer repos)
 │   ├── build/module.ae        # core: session, deps, context, artifact helpers
 │   ├── java/module.ae         # language: javac, junit, junit5, shade, jar_vendored, jar_registry
@@ -357,13 +388,25 @@ aetherBuild/
 │   ├── clojure/module.ae
 │   ├── dotnet/module.ae       # .csproj generation, nuget_vendored, nuget_registry
 │   ├── python/module.ae       # pyproject.toml generation, wheel_vendored, wheel_registry
+│   ├── aether/module.ae       # native Aether programs (program / program_test)
 │   ├── maven/module.ae        # BOM parsing, Maven resolution wrapper
 │   ├── pnpm/module.ae         # pnpm-based npm resolution
 │   ├── jest/module.ae
 │   ├── webpack/module.ae
 │   ├── angular/module.ae
 │   └── container/module.ae    # OCI image builds, LXC
-├── tools/
+├── tools/                     # Aether-language tools that aeb dispatches to
+│   ├── aeb-main.ae            # arg parsing, scan/target discovery, sort, exec aeb-link
+│   ├── aeb-init.ae            # `aeb --init` symlink + .gitignore setup
+│   ├── aeb-link.ae            # per-file compile + orchestrator + gcc link + exec
+│   ├── gcheckout.ae           # `aeb gcheckout` sparse-checkout DAG walker
+│   ├── encode-name.ae         # path → C-safe identifier
+│   ├── infer-type.ae          # filename suffix → build/test/dist
+│   ├── file-to-label.ae       # file path → build.begin() module label
+│   ├── resolve-dep.ae         # dep reference → file path
+│   ├── extract-deps.ae        # parse a .ae file's dep(b, "...") lines
+│   ├── scan-ae-files.ae       # walk cwd for every .*.ae build file
+│   ├── topo-sort.ae           # DFS post-order over the file dep graph
 │   ├── transform-ae.ae        # rewrites user .ae files for linking
 │   ├── gen-orchestrator.ae    # emits the single-binary orchestrator
 │   ├── resolve-imports.sh     # transitive import resolution for transform-ae
