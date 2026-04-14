@@ -147,12 +147,17 @@ if [[ -z "$TARGET" ]]; then
     # Matches .build.ae, .tests.ae, .dist.ae, .junit.jar.ae, .serde_json.crate.ae,
     # .mocha.npm.ae, .Shouldly.nupkg.ae, .pytest.whl.ae, and any other third-party
     # dep file that follows the .xxx.ae convention.
-    for ae_file in $(find . -name '.*.ae' "${IGNORE_EXCLUDES[@]}" | sort); do
-        file_path="${ae_file#./}"
+    # Implementation lives in tools/scan-ae-files.ae (pure Aether, cross-platform).
+    SCAN_AE_FILES_BIN="$AEB_HOME/tools/scan-ae-files"
+    if [[ ! -x "$SCAN_AE_FILES_BIN" ]]; then
+        "$AETHER" build "$AEB_HOME/tools/scan-ae-files.ae" -o "$SCAN_AE_FILES_BIN" 2>/dev/null
+    fi
+    while IFS= read -r file_path; do
+        [[ -z "$file_path" ]] && continue
         ALL_AE_FILES+=("$file_path")
         FILE_EXISTS["$file_path"]=1
-        FILE_DEPS["$file_path"]="$(extract_deps "$ae_file")"
-    done
+        FILE_DEPS["$file_path"]="$(extract_deps "$file_path")"
+    done < <("$SCAN_AE_FILES_BIN")
 else
     # --- Explicit target mode ---
     if [[ "$TARGET" == *.ae ]]; then

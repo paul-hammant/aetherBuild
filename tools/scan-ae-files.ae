@@ -1,0 +1,140 @@
+// scan-ae-files — emit every dot-prefixed .ae build file under cwd.
+//
+// Pure-Aether port of the bash `find . -name '.*.ae' -not -path ...`
+// scan loop in aeb. Uses fs_glob("**/.*.ae") then filters out excluded
+// paths (target/, .aeb/, lib/, plus any user entries in .aebignore).
+// Output is one file path per line, sorted, with no leading "./".
+//
+// Usage: scan-ae-files
+// (No arguments — operates on the current working directory. aeb is
+// expected to chdir to the monorepo root before invoking it.)
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_starts_with(s: string, prefix: string) -> int
+extern fs_glob(pattern: string) -> ptr
+extern dir_list_count(list: ptr) -> int
+extern dir_list_get(list: ptr, index: int) -> string
+extern dir_list_free(list: ptr)
+extern file_exists(path: string) -> int
+extern io_read_file(path: string) -> string
+extern os_exec(cmd: string) -> string
+extern string_trim(s: string) -> string
+extern println(s: string)
+
+// Strip leading "./" from a path so output matches the bash version.
+strip_dot_slash(p: string) {
+    if string_starts_with(p, "./") == 1 {
+        return string_substring(p, 2, string_length(p))
+    }
+    return string_concat(p, "")
+}
+
+// Returns 1 if `path` starts with one of the directory excludes.
+// Each exclude is expected to be plain (e.g. "target", ".aeb", "lib").
+is_excluded(path: string, excludes: string) {
+    rest = excludes
+    ex = ""
+    while string_length(rest) > 0 {
+        nl = string_index_of(rest, "\n")
+        if nl < 0 {
+            ex = string_concat(rest, "")
+            rest = ""
+        } else {
+            ex = string_substring(rest, 0, nl)
+            rest = string_substring(rest, nl + 1, string_length(rest))
+        }
+        if string_length(ex) > 0 {
+            prefix = string_concat(ex, "/")
+            if string_starts_with(path, prefix) == 1 {
+                return 1
+            }
+            if path == ex {
+                return 1
+            }
+        }
+    }
+    return 0
+}
+
+// Read .aebignore if present; return newline-separated list of cleaned
+// directory entries (trailing slash stripped, comments and blanks removed).
+load_extra_excludes() {
+    out = ""
+    if file_exists(".aebignore") == 0 {
+        return string_concat(out, "")
+    }
+    content = io_read_file(".aebignore")
+    rest = content
+    line = ""
+    while string_length(rest) > 0 {
+        nl = string_index_of(rest, "\n")
+        if nl < 0 {
+            line = string_concat(rest, "")
+            rest = ""
+        } else {
+            line = string_substring(rest, 0, nl)
+            rest = string_substring(rest, nl + 1, string_length(rest))
+        }
+        line = string_trim(line)
+        if string_length(line) > 0 {
+            if string_starts_with(line, "#") == 0 {
+                // Strip a single trailing slash if present
+                if string_length(line) > 1 {
+                    last = string_substring(line, string_length(line) - 1, string_length(line))
+                    if last == "/" {
+                        line = string_substring(line, 0, string_length(line) - 1)
+                    }
+                }
+                if string_length(out) > 0 {
+                    out = string_concat(out, "\n")
+                }
+                out = string_concat(out, line)
+            }
+        }
+    }
+    return string_concat(out, "")
+}
+
+main() {
+    excludes = "target\n.aeb\nlib"
+    extra = load_extra_excludes()
+    if string_length(extra) > 0 {
+        excludes = string_concat(excludes, "\n")
+        excludes = string_concat(excludes, extra)
+    }
+
+    // fs_glob recognises "/**/" as a recursive marker; the pattern needs a
+    // leading directory prefix (".") so the marker isn't at the very start.
+    // Results come back ./-prefixed and we strip that below.
+    files = fs_glob("./**/.*.ae")
+    n = dir_list_count(files)
+
+    // Collect into a single newline-separated buffer, filter out excludes,
+    // then sort via the system `sort` command (a tiny shell-out for ordering
+    // only — no logic). This keeps the tool deterministic on every platform
+    // that ships /usr/bin/sort or busybox sort.
+    buf = ""
+    i = 0
+    while i < n {
+        raw = dir_list_get(files, i)
+        clean = strip_dot_slash(raw)
+        if is_excluded(clean, excludes) == 0 {
+            if string_length(buf) > 0 {
+                buf = string_concat(buf, "\n")
+            }
+            buf = string_concat(buf, clean)
+        }
+        i = i + 1
+    }
+    dir_list_free(files)
+
+    if string_length(buf) == 0 {
+        return 0
+    }
+    sorted = string_trim(os_exec("printf '%s' '${buf}' | sort"))
+    println(sorted)
+    return 0
+}
