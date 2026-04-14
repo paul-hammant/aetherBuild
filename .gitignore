@@ -4,4 +4,5 @@ tools/resolver/target
 # Built tool binaries (rebuilt lazily by aeb on first run)
 tools/encode-name
 tools/gen-orchestrator
+tools/infer-type
 tools/transform-ae

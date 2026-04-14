@@ -106,13 +106,13 @@ resolve_dep() {
 
 # --- Infer file type from filename ---
 # Used to determine the module_dir label prefix (test: / dist: / none)
+# Implementation lives in tools/infer-type.ae (pure Aether, cross-platform).
+INFER_TYPE_BIN="$AEB_HOME/tools/infer-type"
+if [[ ! -x "$INFER_TYPE_BIN" ]]; then
+    "$AETHER" build "$AEB_HOME/tools/infer-type.ae" -o "$INFER_TYPE_BIN" 2>/dev/null
+fi
 infer_type() {
-    local file="$1"
-    case "$file" in
-        *.tests.ae) echo "test" ;;
-        *.dist.ae)  echo "dist" ;;
-        *)          echo "build" ;;
-    esac
+    "$INFER_TYPE_BIN" "$1"
 }
 
 # --- Derive module_dir from file path ---
