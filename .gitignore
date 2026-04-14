@@ -2,6 +2,7 @@ tools/aeb-resolve.jar
 tools/resolver/target
 
 # Built tool binaries (rebuilt lazily by aeb on first run)
+tools/aeb-init
 tools/aeb-link
 tools/encode-name
 tools/extract-deps

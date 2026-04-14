@@ -23,44 +23,12 @@ SHIPPED_MODULES=(build java kotlin go rust ts scala clojure dotnet python aether
 TARGET=""
 
 if [[ "${1:-}" == "--init" ]]; then
-    mkdir -p "$ROOT/$AEB_LIB"
-
-    for mod in "${SHIPPED_MODULES[@]}"; do
-        target="$AEB_HOME/lib/$mod"
-        link="$ROOT/$AEB_LIB/$mod"
-        if [[ -L "$link" ]]; then
-            existing="$(readlink "$link")"
-            if [[ "$existing" == "$target" ]]; then
-                echo "  ok: $AEB_LIB/$mod"
-            else
-                rm "$link"
-                ln -s "$target" "$link"
-                echo "  updated: $AEB_LIB/$mod → $target"
-            fi
-        elif [[ -e "$link" ]]; then
-            echo "  skip: $AEB_LIB/$mod (exists and is not a symlink)"
-        else
-            ln -s "$target" "$link"
-            echo "  linked: $AEB_LIB/$mod → $target"
-        fi
-    done
-
-    # update .gitignore
-    gitignore="$ROOT/.gitignore"
-    marker="# aetherBuild modules"
-    if [[ -f "$gitignore" ]] && grep -qF "$marker" "$gitignore"; then
-        echo "  .gitignore already configured"
-    else
-        {
-            echo ""
-            echo "$marker"
-            echo ".aeb/"
-        } >> "$gitignore"
-        echo "  updated .gitignore"
+    # Implementation lives in tools/aeb-init.ae (pure Aether, cross-platform).
+    AEB_INIT_BIN="$AEB_HOME/tools/aeb-init"
+    if [[ ! -x "$AEB_INIT_BIN" ]]; then
+        "$AETHER" build "$AEB_HOME/tools/aeb-init.ae" -o "$AEB_INIT_BIN" 2>/dev/null
     fi
-
-    echo "aetherBuild initialized."
-    exit 0
+    exec "$AEB_INIT_BIN" "$AEB_HOME"
 fi
 
 # Parse remaining args

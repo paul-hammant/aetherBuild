@@ -134,8 +134,8 @@ main() {
         }
         line = string_trim(line)
         if string_length(line) > 0 {
-            file = first_word(line)
-            deps = rest_after_first_word(line)
+            file = string_concat(first_word(line), "")
+            deps = string_concat(rest_after_first_word(line), "")
             // Add the file even if no deps (so it's known to the graph)
             if map_has(file_deps, file) == 0 {
                 list_add(files, file)

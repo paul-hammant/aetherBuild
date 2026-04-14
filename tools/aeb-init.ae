@@ -1,0 +1,154 @@
+// aeb-init — initialise the consuming repo's .aeb/lib symlinks
+//
+// Pure-Aether port of the bash `--init` block in aeb. Walks the shipped
+// SDK module list, ensures each lives at .aeb/lib/<sdk> as a symlink to
+// $AEB_HOME/lib/<sdk>, and (if absent) appends a `.aeb/` line to
+// .gitignore so the symlinks aren't accidentally tracked.
+//
+// Usage:
+//   aeb-init <aeb-home>
+//
+// <aeb-home> is the directory containing the shipped lib/<sdk> trees
+// (i.e. the aetherBuild checkout). Operates on the current working
+// directory; aeb is expected to chdir to the consuming repo root before
+// invoking this tool.
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_trim(s: string) -> string
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern file_exists(path: string) -> int
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern list_size(l: ptr) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern println(s: string)
+extern exit(code: int)
+
+// Shipped SDK modules — must match the SHIPPED_MODULES array in aeb.
+// Space-separated so we don't need an array literal in Aether.
+shipped_modules() {
+    return string_concat("build java kotlin go rust ts scala clojure dotnet python aether container maven pnpm jest webpack angular", "")
+}
+
+// Returns 1 if `path` is a symlink (regardless of validity), 0 otherwise.
+is_symlink(path: string) {
+    cmd = string_concat("test -L \"", path)
+    cmd = string_concat(cmd, "\" && echo yes || echo no")
+    if string_trim(os_exec(cmd)) == "yes" { return 1 }
+    return 0
+}
+
+// Returns the symlink target, or "" if not a symlink.
+readlink_pure(path: string) {
+    cmd = string_concat("readlink \"", path)
+    cmd = string_concat(cmd, "\" 2>/dev/null")
+    return string_trim(os_exec(cmd))
+}
+
+// Append `.gitignore` marker if absent.
+finalize_gitignore() {
+    marker = "# aetherBuild modules"
+    if file_exists(".gitignore") == 1 {
+        check_cmd = string_concat("grep -F '", marker)
+        check_cmd = string_concat(check_cmd, "' .gitignore 2>/dev/null && echo yes || echo no")
+        if string_trim(os_exec(check_cmd)) == "yes" {
+            println("  .gitignore already configured")
+            return 0
+        }
+    }
+    os_system("printf '\\n# aetherBuild modules\\n.aeb/\\n' >> .gitignore")
+    println("  updated .gitignore")
+    return 0
+}
+
+main() {
+    if aether_args_count() < 2 {
+        println("Usage: aeb-init <aeb-home>")
+        exit(1)
+    }
+    aebhome = aether_args_get(1)
+    aeb_lib = string_concat(".aeb/lib", "")
+
+    os_system(string_concat("mkdir -p ", aeb_lib))
+
+    // Split shipped modules on spaces into a list (pure Aether).
+    mods = list_new()
+    rest = shipped_modules()
+    word = string_concat("", "")
+    while string_length(rest) > 0 {
+        sp = string_index_of(rest, " ")
+        if sp < 0 {
+            word = string_concat(rest, "")
+            rest = ""
+        } else {
+            word = string_substring(rest, 0, sp)
+            rest = string_substring(rest, sp + 1, string_length(rest))
+        }
+        if string_length(word) > 0 {
+            // Clone via string_concat — list_add stores raw pointers and
+            // word's underlying buffer may be reused by string_substring.
+            word_copy = string_concat(word, "")
+            list_add(mods, word_copy)
+        }
+    }
+
+    // Pre-seed heap-string vars so the heap-tracker flags are declared at
+    // function scope (works around an aetherc edge case with lazy decls in
+    // nested if/else branches).
+    msg = string_concat("", "")
+    ln_cmd = string_concat("", "")
+    n = list_size(mods)
+    i = 0
+    while i < n {
+        mod = list_get(mods, i)
+        target = string_concat(aebhome, "/lib/")
+        target = string_concat(target, mod)
+        link = string_concat(aeb_lib, "/")
+        link = string_concat(link, mod)
+
+        if is_symlink(link) == 1 {
+            existing = readlink_pure(link)
+            if existing == target {
+                println(string_concat("  ok: .aeb/lib/", mod))
+            } else {
+                os_system(string_concat("rm \"", string_concat(link, "\"")))
+                ln_cmd = string_concat("ln -s \"", target)
+                ln_cmd = string_concat(ln_cmd, "\" \"")
+                ln_cmd = string_concat(ln_cmd, link)
+                ln_cmd = string_concat(ln_cmd, "\"")
+                os_system(ln_cmd)
+                msg = string_concat("  updated: .aeb/lib/", mod)
+                msg = string_concat(msg, " -> ")
+                msg = string_concat(msg, target)
+                println(msg)
+            }
+        } else {
+            if file_exists(link) == 1 {
+                msg = string_concat("  skip: .aeb/lib/", mod)
+                msg = string_concat(msg, " (exists and is not a symlink)")
+                println(msg)
+            } else {
+                ln_cmd = string_concat("ln -s \"", target)
+                ln_cmd = string_concat(ln_cmd, "\" \"")
+                ln_cmd = string_concat(ln_cmd, link)
+                ln_cmd = string_concat(ln_cmd, "\"")
+                os_system(ln_cmd)
+                msg = string_concat("  linked: .aeb/lib/", mod)
+                msg = string_concat(msg, " -> ")
+                msg = string_concat(msg, target)
+                println(msg)
+            }
+        }
+        i = i + 1
+    }
+
+    finalize_gitignore()
+    println("aetherBuild initialized.")
+    return 0
+}
