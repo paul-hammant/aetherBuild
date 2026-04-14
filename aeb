@@ -206,29 +206,21 @@ if [ ${#ALL_AE_FILES[@]} -eq 0 ]; then
 fi
 
 # --- Topological sort (unified, all file types) ---
-declare -A VISITED
-SORTED_FILES=()
-
-visit() {
-    local file="$1"
-    [[ "${VISITED[$file]}" == "done" ]] && return
-    if [[ "${VISITED[$file]}" == "visiting" ]]; then
-        echo "error: circular dependency involving $file" >&2
-        exit 1
-    fi
-    VISITED["$file"]="visiting"
-    for dep in ${FILE_DEPS[$file]}; do
-        if [[ -n "${FILE_EXISTS[$dep]+x}" ]]; then
-            visit "$dep"
-        fi
-    done
-    VISITED["$file"]="done"
-    SORTED_FILES+=("$file")
-}
-
+# Implementation lives in tools/topo-sort.ae (pure Aether, cross-platform).
+TOPO_SORT_BIN="$AEB_HOME/tools/topo-sort"
+if [[ ! -x "$TOPO_SORT_BIN" ]]; then
+    "$AETHER" build "$AEB_HOME/tools/topo-sort.ae" -o "$TOPO_SORT_BIN" 2>/dev/null
+fi
+TOPO_EDGES_FILE="$(mktemp)"
+trap 'rm -f "$TOPO_EDGES_FILE"' EXIT
 for f in "${ALL_AE_FILES[@]}"; do
-    visit "$f"
+    echo "$f ${FILE_DEPS[$f]}" >> "$TOPO_EDGES_FILE"
 done
+SORTED_FILES=()
+while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    SORTED_FILES+=("$line")
+done < <("$TOPO_SORT_BIN" "$TOPO_EDGES_FILE")
 
 # --- Compile each .ae file separately, then link ---
 AETHERC="${AETHER}therc"
