@@ -86,22 +86,13 @@ encode_name() {
 # --- Resolve a dep reference to a file path ---
 # New-style: "path/to/.tests.ae" (ends in .ae) — used as-is
 # Legacy:    "path/to/dir" — resolved to dir/.build.ae (or .tests.ae or .dist.ae)
+# Implementation lives in tools/resolve-dep.ae (pure Aether, cross-platform).
+RESOLVE_DEP_BIN="$AEB_HOME/tools/resolve-dep"
+if [[ ! -x "$RESOLVE_DEP_BIN" ]]; then
+    "$AETHER" build "$AEB_HOME/tools/resolve-dep.ae" -o "$RESOLVE_DEP_BIN" 2>/dev/null
+fi
 resolve_dep() {
-    local dep="$1"
-    if [[ "$dep" == *.ae ]]; then
-        echo "$dep"
-        return
-    fi
-    # Legacy directory dep — find the .build.ae in that dir
-    if [[ -f "./${dep}/.build.ae" ]]; then
-        echo "${dep}/.build.ae"
-    elif [[ -f "./${dep}/.tests.ae" ]]; then
-        echo "${dep}/.tests.ae"
-    elif [[ -f "./${dep}/.dist.ae" ]]; then
-        echo "${dep}/.dist.ae"
-    else
-        echo "${dep}/.build.ae"  # pass through, will fail at compile time
-    fi
+    "$RESOLVE_DEP_BIN" "$1"
 }
 
 # --- Infer file type from filename ---

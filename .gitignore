@@ -6,4 +6,5 @@ tools/encode-name
 tools/file-to-label
 tools/gen-orchestrator
 tools/infer-type
+tools/resolve-dep
 tools/transform-ae
