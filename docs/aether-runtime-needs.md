@@ -1,50 +1,166 @@
-# Aether runtime needs for aeb migration
+# Aether enhancements wanted by `aeb`
 
-## Problem
+`aeb` is now a ~36-line bash trampoline plus thirteen Aether-language tools
+under `tools/`. The bash bit only sets `AETHER` / `AEB_HOME` / `ROOT`,
+auto-detects the Podman socket, and dispatches to `tools/aeb-main`,
+`tools/aeb-init`, or `tools/gcheckout`. Everything else — argument parsing,
+DAG discovery, dep extraction, topo sort, per-file compile, link, exec — is
+Aether.
 
-Migrating `aeb` from bash to Aether is blocked by two runtime issues:
+What's left preventing the trampoline from going away entirely, and what
+would let `aeb` run unmodified on Windows.
 
-1. **String memory leak in loops** — `string_concat` + `string_substring` in loops allocate without freeing. A simple replace-all loop OOMs the machine. This is the root cause of the `this_hangs_pauls_nuc` branch crash.
+## A. Make the bash trampoline disappear
 
-2. **No native string operations** — `string_replace_all`, `string_split`, line iteration all require `os_exec("sed ...")` or `os_exec("echo ... | sed -n Np")` which forks a shell per call. For the DAG discovery phase (scanning files, extracting deps, building topo-sort input), this means O(files * deps) subprocess forks — unusably slow.
+The trampoline exists because of three things Aether can't currently express
+without shelling out:
 
-## What's needed
+1. **Resolve the running binary's directory** — to find the sibling
+   `tools/` folder. Bash does `AEB_HOME="$(cd "$(dirname "$0")" && pwd)"`.
+   Aether equivalent wanted:
+   ```
+   extern aether_argv0() -> string         // path the OS launched us with
+   extern realpath(p: string) -> string    // canonicalize symlinks etc.
+   ```
 
-A single C function in the Aether runtime:
+2. **Replace the current process** — the trampoline finishes with `exec
+   "$AEB_MAIN_BIN" ...`. Without execv, an Aether-language `aeb` would
+   either spawn a child (extra process layer, double signal handling) or
+   inline aeb-main into itself. Neither is bad but a real `execv` is
+   simpler:
+   ```
+   extern os_execv(prog: string, args: ptr) -> int   // returns only on failure
+   ```
 
-```c
-// Replace all occurrences of `from` with `to` in `str`
-// Returns a new string (caller-managed or arena-allocated)
-const char* string_replace_all(const char* str, const char* from, const char* to);
-```
+3. **Read environment variables** — Aether already has `os_getenv`, so this
+   one is solved. Listed for completeness.
 
-Exposed to Aether as:
+If we get (1) and (2), the bash trampoline collapses into a self-bootstrapping
+`aeb.ae` that the user runs directly, and the `#!/bin/bash` line goes away.
 
-```
-extern string_replace_all(s: string, from: string, to: string) -> string
-```
+## B. Reduce per-call subprocess forks inside the tools
 
-This would unblock:
-- `encode_name` — currently uses `os_exec("sed ...")`, could be pure Aether
-- `resolve-dag` — currently abandoned, could be ported if string building doesn't OOM
-- Full `aeb` migration — the remaining bash is mostly string/line processing
+The thirteen tools all live as separate native binaries that the bash
+trampoline (or each other) `exec` into. Inside each tool, several `os_system`
+/ `os_exec` calls remain that could become native:
 
-## Secondary needs
+| Pattern                        | Used in                                     | What's needed                       |
+|--------------------------------|---------------------------------------------|-------------------------------------|
+| `mkdir -p`                     | aeb-init, aeb-link, aeb-main                | `extern fs_mkdir_p(path) -> int`    |
+| `ln -s` / `rm` / `readlink`    | aeb-init                                    | `extern fs_symlink(target, link) -> int`, `fs_readlink(p) -> string`, `fs_unlink(p)` |
+| `dirname $(command -v ...)`    | aeb-link, aeb-main                          | `extern os_which(name) -> string`   |
+| `test -L` / `[[ -L ]]`         | aeb-init                                    | `extern fs_is_symlink(p) -> int`    |
+| `git sparse-checkout add ...`  | gcheckout                                   | unavoidable shell-out, but see (D)  |
+| `gcc -O2 ...` (the link step)  | aeb-link                                    | unavoidable shell-out (gcc/clang)   |
+| `find ...` (already gone)      | scan-ae-files uses fs_glob                  | done                                |
+| `sed`/`grep`/`awk` (gone)      | encode-name, extract-deps, topo-sort, etc.  | done                                |
 
-- `string_split(s, delimiter)` → list — avoids `os_exec("echo ... | sed -n Np")` per-line parsing
-- Arena/pool allocation for strings in loops — or at minimum, free intermediate strings
+Most of these are simple POSIX wrappers and would also benefit any other
+Aether program that touches the filesystem.
 
-## Current workarounds
+## C. Things needed so Windows isn't left behind
 
-- `os_exec("sed ...")` for string transforms (works but forks per call)
-- `os_exec("bash -c '...'")` for complex text processing (works but fragile quoting)
-- Keeping line-oriented processing in bash (scan, topo-sort, dep extraction)
+`aeb` works on Linux and macOS today. For Windows (MinGW / MSYS2 / native)
+the gaps are:
 
-## What's already ported
+1. **Symlink semantics** — `lib/aether/.aeb/lib/<sdk>` is a symlink farm.
+   Windows symlinks need elevation or developer mode. Alternatives Aether
+   could offer:
+   - Junction-point stdlib helper (`fs_junction`) for directories
+   - Or: an "embed mode" where `aeb --init` copies the SDK files instead of
+     symlinking, with a watcher to mirror updates
+   - The current `aeb-init` always uses `ln -s`; would need a runtime
+     branch.
 
-With the workarounds above, two pieces of `aeb` are in Aether:
-- `tools/gen-orchestrator.ae` — generates orchestrator source (bounded os_exec calls)
-- `tools/transform-ae.ae` — transforms .ae files for linking (bounded os_exec calls)
-- `tools/resolve-imports.sh` — BFS import resolution (stays in bash, called by transform-ae)
+2. **Path separator handling** — every tool uses `/` literally in
+   `string_concat` calls. The Aether stdlib's `path_join` already exists
+   but isn't used; auditing every concat to use it would be a one-pass
+   refactor on top of:
+   ```
+   extern path_join(a: string, b: string) -> string
+   extern path_normalize(p: string) -> string
+   extern path_separator() -> string
+   ```
 
-The boundary is: Aether handles per-file transforms, bash handles bulk text scanning.
+3. **Process launching** — `os_system` on Windows runs through `cmd.exe` by
+   default in some runtimes. The current `aeb-link` builds shell command
+   strings with `>/dev/null`, `&&`, `2>&1`, etc. that don't all work in
+   `cmd.exe`. Two fixes:
+   - **Better**: an argv-based launch that doesn't use a shell at all.
+     ```
+     extern os_run(prog: string, argv: ptr, env: ptr) -> int
+     extern os_run_capture(prog: string, argv: ptr, env: ptr) -> string
+     ```
+     This also eliminates a class of quoting bugs on every platform.
+   - **Stopgap**: a portable `os_system_posix` that always invokes
+     `/bin/sh -c` on POSIX and `bash -c` (MSYS2) or `sh -c` (Git Bash) on
+     Windows.
+
+4. **`fs_glob` recursive walker** — already POSIX-only on the C side
+   (uses `dirent`/`fnmatch`). Windows needs the `FindFirstFile` /
+   `FindNextFile` path implemented or a port of fnmatch. This sits in the
+   Aether runtime, not in `aeb`.
+
+5. **Podman/Docker socket detection** — only relevant when a build's tests
+   use TestContainers. The trampoline currently does
+   `[[ -S "/run/user/$(id -u)/podman/podman.sock" ]]` and exports
+   `DOCKER_HOST`. Trivial to port to Aether once `fs_is_socket` /
+   `os_user_id` exist:
+   ```
+   extern fs_is_socket(path: string) -> int
+   extern os_user_id() -> int
+   ```
+
+6. **`gcc` invocation** — the link step assumes a POSIX shell line. On
+   Windows we'd point at `gcc.exe` (MinGW) or `cl.exe` (MSVC). The argv
+   layout is similar; the wrappers and `-L` / `-l` flags differ for MSVC.
+   Out of scope for `aeb` itself but worth noting that Aether's own
+   compiler assumes gcc-compatible flags.
+
+## D. VCS abstraction (so `aeb gcheckout` isn't Git-only)
+
+`aeb gcheckout` shells out directly to `git sparse-checkout`. Mercurial has
+the `narrowhg` extension; Subversion has `svn update --set-depth`; jj has
+its own thing. The dep-walking logic is VCS-agnostic — it produces a list
+of directory paths to include. Wanted:
+
+- Either a runtime `extern vcs_sparse_add(repo, path) -> int` that the
+  Aether stdlib implements per VCS, or
+- A pluggable strategy file (`.aebvcs` at repo root) that names the
+  shell command to run for each directory addition (and the analogues
+  for init / reset).
+
+The first is cleaner; the second is a one-day fix that'd unblock Mercurial
+users immediately.
+
+## E. Already done
+
+These were in the previous iteration of this doc and have since landed:
+
+- ✅ String memory leak in loops fixed (commit on
+  `feature/tinyweb-aeocha`, also in PR
+  `fix/heap-tracker-and-fs-glob-dotfiles`).
+- ✅ `fs_glob` recursive walker matches dot-prefixed files (same PR).
+- ✅ `_heap_<var>` lazy declaration in codegen (same PR).
+- ✅ Pure-Aether string operations are now sufficient: we have
+  `string_index_of`, `string_substring`, `string_concat`, `string_trim`,
+  `string_ends_with`, `string_starts_with`, `string_length`, plus a
+  userland `string_replace_all` in `tools/encode-name.ae` (~12 lines).
+- ✅ `aeb` migration itself — encode-name, infer-type, file-to-label,
+  resolve-dep, extract-deps, scan-ae-files, topo-sort, aeb-link,
+  aeb-init, aeb-main, gcheckout all in Aether.
+
+## Priority
+
+If the goal is "Windows works, bash trampoline gone":
+
+1. **`os_run` argv-based launcher** — fixes Windows quoting and eliminates
+   a class of bugs everywhere. Highest value.
+2. **`fs_glob` Windows backend** — currently the only thing in `tools/`
+   that absolutely won't run on Windows.
+3. **`aether_argv0` + `os_execv`** — lets the bash trampoline disappear.
+4. **`fs_symlink` / `fs_is_symlink` / `fs_readlink`** — lets `aeb-init`
+   stop shelling out to `ln`/`readlink`/`test -L` and gives `--init` a
+   Windows fallback (junctions or copies).
+5. **VCS abstraction for `aeb gcheckout`** — unblocks Mercurial. Lower
+   priority because git is a fine default.
