@@ -74,8 +74,13 @@ TARGET="${TARGET%/}"
 
 # --- Encode file path to C-safe function name ---
 # / → _    _ → __   - → _H_   . → _D_
+# Implementation lives in tools/encode-name.ae (pure Aether, cross-platform).
+ENCODE_NAME_BIN="$AEB_HOME/tools/encode-name"
+if [[ ! -x "$ENCODE_NAME_BIN" ]]; then
+    "$AETHER" build "$AEB_HOME/tools/encode-name.ae" -o "$ENCODE_NAME_BIN" 2>/dev/null
+fi
 encode_name() {
-    echo "$1" | sed 's/__/\x00/g; s|/|_|g; s/-/_H_/g; s/\./_D_/g; s/\x00/__/g'
+    "$ENCODE_NAME_BIN" "$1"
 }
 
 # --- Resolve a dep reference to a file path ---
