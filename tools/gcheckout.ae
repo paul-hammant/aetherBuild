@@ -1,0 +1,196 @@
+// gcheckout — Aether sparse-checkout helper, owned by aeb.
+//
+// `aeb gcheckout` walks the .ae-file DAG starting from a target and
+// adds each visited module directory to git's sparse-checkout, so a
+// monorepo consumer can fetch only the modules they actually need.
+//
+// Modernised port of the standalone gcheckout.ae: uses the same
+// dep-extraction logic as aeb's own scan-mode (any line of the form
+// `dep(b, "...")` is followed). All third-party dep types (.jar.ae,
+// .crate.ae, .npm.ae, .nupkg.ae, .whl.ae) come along automatically
+// because they're plain dep file references in the file-based DAG.
+//
+// Usage:
+//   aeb gcheckout --init
+//   aeb gcheckout add <module-or-file>
+//   aeb gcheckout --reset
+//
+// "module" here is either a directory path (resolved to .build.ae /
+// .tests.ae / .dist.ae the same way as `aeb` proper) or an explicit
+// .ae file path.
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_ends_with(s: string, suffix: string) -> int
+extern string_trim(s: string) -> string
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern os_getenv(name: string) -> string
+extern file_exists(path: string) -> int
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+extern map_new() -> ptr
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_has(m: ptr, key: string) -> int
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern list_size(l: ptr) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern println(s: string)
+extern exit(code: int)
+
+sparse_add(path: string) {
+    cmd = string_concat("git sparse-checkout add ", path)
+    cmd = string_concat(cmd, " 2>/dev/null")
+    os_system(cmd)
+}
+
+// dirname: last '/'-bounded prefix, or "." if no slash.
+dirname_pure(path: string) {
+    n = string_length(path)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string_substring(path, i, i + 1)
+        if ch == "/" { last = i }
+        i = i + 1
+    }
+    if last < 0 { return string_concat(".", "") }
+    if last == 0 { return string_concat("/", "") }
+    return string_substring(path, 0, last)
+}
+
+resolve_target(target: string) {
+    if string_ends_with(target, ".ae") == 1 {
+        if file_exists(target) == 1 {
+            return string_concat(target, "")
+        }
+        return string_concat("", "")
+    }
+    tests = string_concat(target, "/.tests.ae")
+    if file_exists(tests) == 1 { return tests }
+    build = string_concat(target, "/.build.ae")
+    if file_exists(build) == 1 { return build }
+    dist = string_concat(target, "/.dist.ae")
+    if file_exists(dist) == 1 { return dist }
+    return string_concat("", "")
+}
+
+// Walk the dep DAG from `start`, adding each visited file's parent dir
+// to sparse-checkout. Uses the extract-deps tool for parsing so the
+// dep grammar stays in one place.
+walk(start: string, extract_deps_bin: string) {
+    visited = map_new()
+    visited_dirs = map_new()
+    queue = list_new()
+    list_add(queue, string_concat(start, ""))
+    map_put(visited, start, "1")
+
+    head = 0
+    qs = list_size(queue)
+    f = string_concat("", "")
+    d = string_concat("", "")
+    dword = string_concat("", "")
+    dir = string_concat("", "")
+
+    while head < qs {
+        f = list_get(queue, head)
+        head = head + 1
+
+        // Add this file's directory to sparse-checkout (once).
+        dir = dirname_pure(f)
+        if map_has(visited_dirs, dir) == 0 {
+            map_put(visited_dirs, dir, "1")
+            println(string_concat("  module: ", dir))
+            sparse_add(dir)
+        }
+
+        // Read this file's deps and enqueue any unseen ones that exist on disk.
+        d = string_trim(os_exec(string_concat(string_concat(extract_deps_bin, " "), f)))
+        d = string_concat(d, "")
+
+        drest = d
+        while string_length(drest) > 0 {
+            sp = string_index_of(drest, " ")
+            if sp < 0 {
+                dword = string_concat(drest, "")
+                drest = ""
+            } else {
+                dword = string_substring(drest, 0, sp)
+                drest = string_substring(drest, sp + 1, string_length(drest))
+            }
+            if string_length(dword) > 0 {
+                if map_has(visited, dword) == 0 {
+                    if file_exists(dword) == 1 {
+                        map_put(visited, dword, "1")
+                        list_add(queue, string_concat(dword, ""))
+                        qs = qs + 1
+                    }
+                }
+            }
+        }
+    }
+    return 0
+}
+
+main() {
+    if aether_args_count() < 2 {
+        println("Usage: aeb gcheckout --init | add <module> | --reset")
+        exit(1)
+    }
+    aebhome = os_getenv("AEB_HOME")
+    if string_length(aebhome) == 0 {
+        aebhome = string_concat(".", "")
+    }
+    extract_deps_bin = string_concat(aebhome, "/tools/extract-deps")
+
+    arg1 = aether_args_get(1)
+
+    if arg1 == "--reset" {
+        println("Resetting sparse checkout...")
+        os_system("git read-tree --reset -u HEAD")
+        os_system("rm -f .git/info/sparse-checkout")
+        os_system("git sparse-checkout disable")
+        println("Done.")
+        return 0
+    }
+
+    if arg1 == "--init" {
+        println("Initializing sparse checkout...")
+        os_system("git sparse-checkout init --cone")
+        // Always include the aetherBuild SDK symlinks and shared shell helpers
+        // so that any consumer can run `aeb` without further checkout.
+        os_system("git sparse-checkout add shared-build-scripts 2>/dev/null")
+        os_system("git sparse-checkout add lib 2>/dev/null")
+        println("Done. Use: aeb gcheckout add <module-or-file>")
+        return 0
+    }
+
+    if arg1 == "add" {
+        if aether_args_count() < 3 {
+            println("Usage: aeb gcheckout add <module-or-file>")
+            exit(1)
+        }
+        target = aether_args_get(2)
+        resolved = resolve_target(target)
+        if string_length(resolved) == 0 {
+            msg = string_concat("error: ", target)
+            msg = string_concat(msg, " not found and no .build.ae/.tests.ae/.dist.ae under it")
+            println(msg)
+            exit(1)
+        }
+
+        println(string_concat("Sparse checkout: ", string_concat(target, " + deps")))
+        // Always include shared scaffolding, regardless of target.
+        sparse_add("shared-build-scripts")
+        sparse_add("lib")
+        walk(resolved, extract_deps_bin)
+        println("Done.")
+        return 0
+    }
+
+    println("Usage: aeb gcheckout --init | add <module-or-file> | --reset")
+    exit(1)
+}

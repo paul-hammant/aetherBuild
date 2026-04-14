@@ -32,6 +32,18 @@ if [[ "${1:-}" == "--init" ]]; then
     exec "$AEB_INIT_BIN" "$AEB_HOME"
 fi
 
+# --- gcheckout: lazy-build and exec the sparse-checkout tool ---
+# Routes `aeb gcheckout ...` to tools/gcheckout, which walks the .ae-file
+# DAG and adds each visited module's directory to git sparse-checkout.
+if [[ "${1:-}" == "gcheckout" ]]; then
+    GCHECKOUT_BIN="$AEB_HOME/tools/gcheckout"
+    if [[ ! -x "$GCHECKOUT_BIN" ]]; then
+        "$AETHER" build "$AEB_HOME/tools/gcheckout.ae" -o "$GCHECKOUT_BIN" 2>/dev/null
+    fi
+    shift
+    exec "$GCHECKOUT_BIN" "$@"
+fi
+
 # --- Normal build: lazy-build and exec the main tool ---
 AEB_MAIN_BIN="$AEB_HOME/tools/aeb-main"
 if [[ ! -x "$AEB_MAIN_BIN" ]]; then

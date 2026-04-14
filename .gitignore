@@ -8,6 +8,7 @@ tools/aeb-main
 tools/encode-name
 tools/extract-deps
 tools/file-to-label
+tools/gcheckout
 tools/gen-orchestrator
 tools/infer-type
 tools/resolve-dep
