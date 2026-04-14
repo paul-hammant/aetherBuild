@@ -117,17 +117,13 @@ infer_type() {
 
 # --- Derive module_dir from file path ---
 # The runtime's build.begin() expects a directory path, optionally with test:/dist: prefix
+# Implementation lives in tools/file-to-label.ae (pure Aether, cross-platform).
+FILE_TO_LABEL_BIN="$AEB_HOME/tools/file-to-label"
+if [[ ! -x "$FILE_TO_LABEL_BIN" ]]; then
+    "$AETHER" build "$AEB_HOME/tools/file-to-label.ae" -o "$FILE_TO_LABEL_BIN" 2>/dev/null
+fi
 file_to_label() {
-    local file="$1"
-    local type
-    type=$(infer_type "$file")
-    local dir
-    dir=$(dirname "$file")
-    case "$type" in
-        test) echo "test:$dir" ;;
-        dist) echo "dist:$dir" ;;
-        *)    echo "$dir" ;;
-    esac
+    "$FILE_TO_LABEL_BIN" "$1"
 }
 
 # --- Unified DAG: scan or explicit ---
