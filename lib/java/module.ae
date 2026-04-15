@@ -197,7 +197,8 @@ javac_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr) 
 junit_cmd(classpath: string, class_names: string, ld_path: string, opts: ptr) {
     cmd = ""
     if string_length(ld_path) > 0 {
-        cmd = "LD_LIBRARY_PATH=${ld_path} java"
+        dyld_var = build._dyld_env_var()
+        cmd = "${dyld_var}=${ld_path} java"
         cmd = string_concat(cmd, " -Djava.library.path=${ld_path}")
     } else {
         cmd = "java"
@@ -548,7 +549,8 @@ junit5_cmd(classpath: string, test_classes_dir: string, ld_path: string, opts: p
 
     // Detect podman socket for TestContainers support
     if string_length(ld_path) > 0 {
-        cmd = string_concat(cmd, " env LD_LIBRARY_PATH=${ld_path} java")
+        dyld_var = build._dyld_env_var()
+        cmd = string_concat(cmd, " env ${dyld_var}=${ld_path} java")
         cmd = string_concat(cmd, " -Djava.library.path=${ld_path}")
     } else {
         cmd = string_concat(cmd, " java")

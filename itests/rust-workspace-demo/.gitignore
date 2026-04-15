@@ -9,3 +9,6 @@ crates/*/Cargo.toml
 
 # Build artifacts
 target/
+
+# aetherBuild modules
+.aeb/

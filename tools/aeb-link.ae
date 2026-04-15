@@ -38,6 +38,14 @@ extern file_exists(path: string) -> int
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 extern list_new() -> ptr
+
+// Platform detection for OS-specific linker flags. See
+// lib/build/module.ae for the shared version; aeb-link is a standalone
+// tool (no imports) so the helper is inlined here. Called once per
+// link step, no caching needed.
+_is_macos_link() {
+    return string_trim(os_exec("uname -s")) == "Darwin"
+}
 extern list_add(l: ptr, item: ptr)
 extern list_size(l: ptr) -> int
 extern list_get(l: ptr, index: int) -> ptr
@@ -291,7 +299,17 @@ main() {
     }
     cc = string_concat(cc, " -o ")
     cc = string_concat(cc, out_bin)
-    cc = string_concat(cc, " -pthread -lm -Wl,--allow-multiple-definition 2>&1")
+    // Duplicate-symbol tolerance: GNU ld accepts --allow-multiple-definition
+    // to silently dedupe imported module functions that the Aether compiler
+    // currently emits into every translation unit. Apple's ld64 rejects the
+    // flag outright, so on macOS we omit it entirely. Programs with genuine
+    // duplicate symbols will still fail to link on macOS; the permanent fix
+    // is upstream in the Aether compiler (see TODO.md).
+    if _is_macos_link() == 1 {
+        cc = string_concat(cc, " -pthread -lm 2>&1")
+    } else {
+        cc = string_concat(cc, " -pthread -lm -Wl,--allow-multiple-definition 2>&1")
+    }
     os_system(cc)
 
     // --- Run the orchestrator binary (child process) and propagate exit ---

@@ -309,7 +309,8 @@ builder mocha(ctx: ptr, test_file: string) {
 
     run_cmd = ""
     if string_length(ld_path) > 0 {
-        run_cmd = "NODE_PATH=${node_path} LD_LIBRARY_PATH=${ld_path} node ${mocha_bin}${mocha_opts} ${test_file}"
+        dyld_var = build._dyld_env_var()
+        run_cmd = "NODE_PATH=${node_path} ${dyld_var}=${ld_path} node ${mocha_bin}${mocha_opts} ${test_file}"
     } else {
         run_cmd = "NODE_PATH=${node_path} node ${mocha_bin}${mocha_opts} ${test_file}"
     }

@@ -98,7 +98,10 @@ _compile_and_link(ctx: ptr, src_path: string, bin_path: string, c_path: string) 
         rpath_link = string_trim(os_exec(rpath_cmd))
     }
 
-    gcc_cmd = "gcc -O2 -pipe -w ${c_path} -L${ae_dir} -laether ${extra_link} ${rpath_link} -o ${bin_path} -pthread -lm -Wl,--allow-multiple-definition"
+    // Duplicate-symbol link flag — GNU ld uses --allow-multiple-definition,
+    // macOS ld64 rejects that flag outright. See build._dup_symbol_link_flag.
+    dup_flag = build._dup_symbol_link_flag()
+    gcc_cmd = "gcc -O2 -pipe -w ${c_path} -L${ae_dir} -laether ${extra_link} ${rpath_link} -o ${bin_path} -pthread -lm ${dup_flag}"
     rc = os_system(gcc_cmd)
     if rc != 0 {
         println("${mod_dir}: gcc link failed")
@@ -183,7 +186,8 @@ builder program_test(ctx: ptr) {
     println("${mod_dir}: running Aether tests")
     run_cmd = bin_path
     if string_length(ld_path) > 0 {
-        run_cmd = "LD_LIBRARY_PATH=${ld_path} ${bin_path}"
+        dyld_var = build._dyld_env_var()
+        run_cmd = "${dyld_var}=${ld_path} ${bin_path}"
     }
     rc = os_system(run_cmd)
     if rc != 0 {

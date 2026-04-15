@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # aeb — Aether Build runner (thin trampoline)
 #
 # Sets up a few environment values that are awkward to compute from inside
@@ -7,6 +7,10 @@
 # parsing, scan/target-mode discovery, dep extraction, topo sort, per-file
 # compile, orchestrator generation, gcc link, and final exec of the build
 # binary — lives in tools/aeb-main.ae and the helper tools it shells out to.
+#
+# This script uses only POSIX-level bash features (no associative arrays,
+# no `${var^^}` case magic) so it runs on macOS default bash 3.2 as well
+# as on modern Linux bash 4/5.
 set -eo pipefail
 
 AETHER="${AETHER:-ae}"

@@ -200,6 +200,47 @@ dep(ctx: ptr, path: string) {
 
 // --- Internal helpers (used by language modules via build._helper()) ---
 
+// Platform detection. Result is one of "Darwin", "Linux", or whatever
+// else `uname -s` returns (treated as Linux-ish for flag purposes).
+// Called a handful of times per build — fork cost is negligible so we
+// don't bother caching. Language SDKs use this to pick OS-specific
+// linker flags or runtime env vars.
+_uname_s() {
+    return string_trim(os_exec("uname -s"))
+}
+
+_is_macos() {
+    return _uname_s() == "Darwin"
+}
+
+// Linker flag that forces GNU ld to tolerate duplicate symbol
+// definitions. Aether's codegen currently emits imported module
+// functions into every translation unit without `static`, so multi-
+// module programs have the same function defined many times. GNU ld
+// (`--allow-multiple-definition`) silently dedupes; Apple's ld64
+// rejects outright. This helper returns the right flag for the
+// current OS so SDK link commands work on both platforms.
+_dup_symbol_link_flag() {
+    if _is_macos() == 1 {
+        // ld64 has no equivalent of --allow-multiple-definition.
+        // Empty string here; builds with genuine duplicate symbols
+        // will fail to link on macOS until the upstream Aether
+        // compiler stops emitting them. See TODO.md for tracking.
+        return ""
+    }
+    return "-Wl,--allow-multiple-definition"
+}
+
+// Environment variable name used by the dynamic linker to locate
+// shared libraries at runtime. Linux uses LD_LIBRARY_PATH, macOS
+// uses DYLD_LIBRARY_PATH (or DYLD_FALLBACK_LIBRARY_PATH).
+_dyld_env_var() {
+    if _is_macos() == 1 {
+        return "DYLD_LIBRARY_PATH"
+    }
+    return "LD_LIBRARY_PATH"
+}
+
 _mkdirs(dir_path: string) {
     os_system("mkdir -p ${dir_path}")
 }

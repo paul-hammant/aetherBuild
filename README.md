@@ -381,6 +381,26 @@ TypeScript, and Python modules, cross-language FFI, JNI, and per-language
 third-party deps. Everything builds and tests from a single `aeb`
 invocation.
 
+## Unit tests (`tests/`)
+
+Command-string builder tests for every SDK — `javac_cmd()`, `cargo_build_cmd()`,
+`go_build_cmd()`, `kotlinc_cmd()`, `junit_cmd()`, `lxc_cmd()`,
+`image_build_cmd()`, `dockerfile_content()`. Each test constructs a config
+map and asserts the generated command string matches expectations. No
+external tools needed — pure string-builder testing.
+
+Run locally on macOS or Linux:
+
+```bash
+./tests/run.sh              # all tests
+./tests/run.sh cargo        # pattern filter — runs test_cargo_cmd only
+AETHER=/path/to/ae ./tests/run.sh   # override ae binary
+```
+
+Output classifies each test as `BUILD OK / RUN PASS`, `BUILD FAIL`, or
+`RUN FAIL`, so it's obvious whether a failure is a regression in aeb
+or an upstream Aether compiler issue. Exits non-zero on any failure.
+
 ## Integration tests (`itests/`)
 
 Real-world open-source projects converted from their native build systems
@@ -474,6 +494,27 @@ A small Tokio/axum Rust project. Single-crate `Cargo.toml` generation.
   `cargo`, `tsc`/`node`, `scala` (Scala 3 compiler jar), `clojure`,
   `dotnet` SDK, `python3`, `pnpm`.
 - For Java projects with Maven deps: build the resolver jar once —
+
+### macOS notes
+
+`aeb` itself works on macOS — the bash trampoline uses only POSIX-level
+features and the orchestration has been ported to Aether, so nothing in
+the runner path requires GNU bash or GNU coreutils. You can run
+`./tests/run.sh` (the unit-test runner) straight from a vanilla macOS
+install.
+
+There is one known limitation for full multi-module builds: the link
+step in `tools/aeb-link.ae` passes `-Wl,--allow-multiple-definition`,
+which is GNU ld only. Apple's ld64 rejects it, and a full `./aeb` run
+that links more than a handful of modules will fail with duplicate
+symbol errors until that flag is platform-gated or the underlying
+duplicate-symbol emission is fixed upstream in the Aether compiler.
+See `TODO.md` for tracking.
+
+Container-related SDKs also have reduced functionality on macOS:
+Docker Desktop or Podman is required for image builds, and LXC is
+Linux-only. All other SDKs (Java, Kotlin, Go, Rust, TypeScript, Scala,
+Clojure, .NET) work identically to Linux.
 
   ```bash
   mvn -f tools/resolver/pom.xml package

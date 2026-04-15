@@ -263,6 +263,32 @@ between lock file and resolved deps.
        Regression test added: `tests/integration/module_return_types/`)
 - [ ] `const char*` vs `void*` warnings on every `map_put`/`list_add`
       call. The codegen should emit casts for `string` → `ptr` params.
+- [ ] **macOS link step fails with duplicate symbol errors.** Root
+      cause: the Aether compiler emits imported module functions (e.g.
+      `rust_cargo_build`, `build__mkdirs`) into every translation unit
+      without a `static` qualifier. GNU ld silently dedupes them via
+      the `-Wl,--allow-multiple-definition` flag currently hard-coded
+      in `tools/aeb-link.ae:294`. That flag is GNU ld only — Apple's
+      ld64 rejects it, and `-multiply_defined,suppress` was removed in
+      Xcode 15. Consequence: a full `./aeb` multi-module run fails
+      with duplicate-symbol errors on macOS.
+      Two fixes, in order of preference:
+      (1) **Upstream compiler fix** — `compiler/codegen/` should either
+      mark imported module functions `static` so each TU gets a private
+      copy, or emit each function exactly once with `extern` declarations
+      in the callers. This is the root-cause fix and unblocks macOS for
+      every downstream tool, not just aeb.
+      (2) **Local workaround in `aeb-link.ae`** — platform-gate the
+      link flag so Linux keeps `-Wl,--allow-multiple-definition` and
+      macOS drops it. Useful for small builds that happen to not have
+      duplicate symbols, buys time until (1) ships.
+      Until this is fixed, macOS users can run the unit tests
+      (`./tests/run.sh`) but `./aeb` itself cannot link full builds.
+- [ ] `maven.classpath` resolution fails when a test file imports
+      `java` (which imports `maven`). Reproduces on `test_javac_cmd.ae`,
+      `test_junit_cmd.ae`, `test_kotlinc_cmd.ae` via `./tests/run.sh`.
+      Likely a qualified-symbol resolution issue across two levels of
+      module imports.
 
 ## Build environment validation
 
