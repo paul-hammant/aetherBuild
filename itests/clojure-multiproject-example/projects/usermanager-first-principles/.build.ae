@@ -7,7 +7,7 @@ main() {
     b = build.start()
     load_bom_file(b, "../../clojars.bom.ae")
     load_bom_file(b, "../../clojure-dep-patches.bom.ae")
-    build.dep(b, "parts")
+    build.dep(b, "parts/.build.ae")
     dep(b, "org.clojure:clojure:1.11.3")
     dep(b, "ring:ring-jetty-adapter:1.12.1")
     dep(b, "ring:ring:1.12.1")

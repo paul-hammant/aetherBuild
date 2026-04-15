@@ -6,9 +6,9 @@ import angular (skip_lib_check)
 main() {
     b = build.start()
     load_third_party_deps(b, "../../../angular.deps.ae")
-    dep(b, "libs/shared/product/state")
-    dep(b, "libs/shared/product/types")
-    dep(b, "libs/shared/product/ui")
+    dep(b, "libs/shared/product/state/.build.ae")
+    dep(b, "libs/shared/product/types/.build.ae")
+    dep(b, "libs/shared/product/ui/.build.ae")
     angular.ngc(b) {
         skip_lib_check()
     }

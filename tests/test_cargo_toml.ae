@@ -1,0 +1,128 @@
+import build
+// Tests for cargo_toml_content() — Cargo.toml generation from DSL
+
+import rust
+import rust (cargo_toml_content)
+
+_assert_contains(label: string, actual: string, substring: string) {
+    if string_contains(actual, substring) == 1 {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected to contain: ${substring}")
+        println("  actual: ${actual}")
+    }
+}
+
+// Helper to add a crate dep (name=version) to opts
+_add_dep(opts: ptr, name: string, ver: string) {
+    if map_has(opts, "_crate_deps") == 0 {
+        map_put(opts, "_crate_deps", list_new())
+    }
+    deps = map_get(opts, "_crate_deps")
+    entry = string_concat(name, "~")
+    entry = string_concat(entry, ver)
+    list_add(deps, entry)
+}
+
+// Helper to add a dep with features (name=version=feat1,feat2)
+_add_dep_features(opts: ptr, name: string, ver: string, feats: string) {
+    if map_has(opts, "_crate_deps_features") == 0 {
+        map_put(opts, "_crate_deps_features", list_new())
+    }
+    deps = map_get(opts, "_crate_deps_features")
+    entry = string_concat(name, "~")
+    entry = string_concat(entry, ver)
+    entry = string_concat(entry, "~")
+    entry = string_concat(entry, feats)
+    list_add(deps, entry)
+}
+
+// Helper to add a path dep (name=path)
+_add_path_dep(opts: ptr, name: string, path: string) {
+    if map_has(opts, "_path_deps") == 0 {
+        map_put(opts, "_path_deps", list_new())
+    }
+    deps = map_get(opts, "_path_deps")
+    entry = string_concat(name, "~")
+    entry = string_concat(entry, path)
+    list_add(deps, entry)
+}
+
+main() {
+    // --- Test 1: minimal defaults ---
+    toml1 = cargo_toml_content(null)
+    _assert_contains("minimal has [package]", toml1, "[package]")
+    _assert_contains("minimal has version 0.1.0", toml1, "version = \"0.1.0\"")
+    _assert_contains("minimal has edition 2021", toml1, "edition = \"2021\"")
+
+    // --- Test 2: custom name, version, edition ---
+    opts2 = map_new()
+    map_put(opts2, "crate_name", "mylib")
+    map_put(opts2, "version", "1.2.3")
+    map_put(opts2, "edition", "2024")
+    toml2 = cargo_toml_content(opts2)
+    _assert_contains("custom name", toml2, "name = \"mylib\"")
+    _assert_contains("custom version", toml2, "version = \"1.2.3\"")
+    _assert_contains("custom edition", toml2, "edition = \"2024\"")
+
+    // --- Test 3: crate_type generates [lib] ---
+    opts3 = map_new()
+    map_put(opts3, "crate_name", "vowelbase")
+    map_put(opts3, "crate_type", "cdylib")
+    toml3 = cargo_toml_content(opts3)
+    _assert_contains("has [lib]", toml3, "[lib]")
+    _assert_contains("crate-type cdylib", toml3, "crate-type = [\"cdylib\"]")
+
+    // --- Test 4: simple crate deps ---
+    opts4 = map_new()
+    map_put(opts4, "crate_name", "myapp")
+    _add_dep(opts4, "serde", "1.0")
+    _add_dep(opts4, "log", "0.4")
+    toml4 = cargo_toml_content(opts4)
+    _assert_contains("has [dependencies]", toml4, "[dependencies]")
+    _assert_contains("serde dep", toml4, "serde = \"1.0\"")
+    _assert_contains("log dep", toml4, "log = \"0.4\"")
+
+    // --- Test 5: deps with features ---
+    opts5 = map_new()
+    map_put(opts5, "crate_name", "server")
+    _add_dep_features(opts5, "tokio", "1.0", "full,macros")
+    toml5 = cargo_toml_content(opts5)
+    _assert_contains("tokio with features", toml5, "tokio = { version = \"1.0\", features = [\"full\", \"macros\"] }")
+
+    // --- Test 6: path deps ---
+    opts6 = map_new()
+    map_put(opts6, "crate_name", "myapp")
+    _add_path_dep(opts6, "mylib", "../lib")
+    toml6 = cargo_toml_content(opts6)
+    _assert_contains("path dep", toml6, "mylib = { path = \"../lib\" }")
+
+    // --- Test 7: full combo (like vowelbase) ---
+    opts7 = map_new()
+    map_put(opts7, "crate_name", "vowelbase")
+    map_put(opts7, "version", "0.1.0")
+    map_put(opts7, "edition", "2021")
+    map_put(opts7, "crate_type", "cdylib")
+    map_put(opts7, "lib_path", "lib.rs")
+    _add_path_dep(opts7, "jni", "../../../libs/rust/registry/vendor/jni")
+    toml7 = cargo_toml_content(opts7)
+    _assert_contains("combo name", toml7, "name = \"vowelbase\"")
+    _assert_contains("combo edition", toml7, "edition = \"2021\"")
+    _assert_contains("combo lib path", toml7, "path = \"lib.rs\"")
+    _assert_contains("combo crate-type", toml7, "crate-type = [\"cdylib\"]")
+    _assert_contains("combo jni path dep", toml7, "jni = { path = \"../../../libs/rust/registry/vendor/jni\" }")
+
+    // --- Test 8: mixed dep types ---
+    opts8 = map_new()
+    map_put(opts8, "crate_name", "oxen")
+    _add_dep(opts8, "log", "0.4")
+    _add_dep_features(opts8, "serde", "1.0", "derive")
+    _add_path_dep(opts8, "liboxen", "../crates/lib")
+    toml8 = cargo_toml_content(opts8)
+    _assert_contains("mixed: log", toml8, "log = \"0.4\"")
+    _assert_contains("mixed: serde features", toml8, "serde = { version = \"1.0\", features = [\"derive\"] }")
+    _assert_contains("mixed: path dep", toml8, "liboxen = { path = \"../crates/lib\" }")
+
+    println("cargo_toml_content tests done")
+}

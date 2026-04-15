@@ -3,6 +3,10 @@
 **/.aeb/
 **/.scala-build/
 **/.*.generated.csproj
+**/*.egg-info/
+**/.pytest_cache/
+**/.pyproject.generated.toml
+**/build/lib/
 
 # Upstream repos — fetched by fetch-upstream.sh, not committed.
 # Everything inside is ignored, then our aeb files are un-ignored with !
@@ -2895,3 +2899,34 @@ rust-multi-module-oxen/experiments/block-level-dedup/src/chunker/copier.rs
 rust-multi-module-oxen/experiments/block-level-dedup/src/chunker/fixedsize_multithreaded.rs
 rust-multi-module-oxen/experiments/block-level-dedup/makefile
 rust-multi-module-oxen/experiments/block-level-dedup/README.md
+
+# python-monorepo-demo upstream files (fetched by fetch-upstream.sh)
+python-monorepo-demo/python-default.lock
+python-monorepo-demo/.gitignore
+python-monorepo-demo/chatapp/contentbuilder/__pycache__/__init__.cpython-313.pyc
+python-monorepo-demo/chatapp/contentbuilder/__pycache__/builder.cpython-313.pyc
+python-monorepo-demo/chatapp/contentbuilder/__pycache__/builder_test.cpython-313-pytest-7.1.3.pyc
+python-monorepo-demo/chatapp/contentbuilder/__pycache__/builder_test.cpython-313-pytest-9.0.3.pyc
+python-monorepo-demo/chatapp/contentbuilder/builder_test.py
+python-monorepo-demo/chatapp/contentbuilder/__init__.py
+python-monorepo-demo/chatapp/contentbuilder/builder.py
+python-monorepo-demo/chatapp/__pycache__/__init__.cpython-313.pyc
+python-monorepo-demo/chatapp/__init__.py
+python-monorepo-demo/chatapp/profanitymasker/__pycache__/masker_test.cpython-313-pytest-9.0.3.pyc
+python-monorepo-demo/chatapp/profanitymasker/__pycache__/__init__.cpython-313.pyc
+python-monorepo-demo/chatapp/profanitymasker/__pycache__/masker.cpython-313.pyc
+python-monorepo-demo/chatapp/profanitymasker/__pycache__/masker_test.cpython-313-pytest-7.1.3.pyc
+python-monorepo-demo/chatapp/profanitymasker/__init__.py
+python-monorepo-demo/chatapp/profanitymasker/masker.py
+python-monorepo-demo/chatapp/profanitymasker/bad_words.json
+python-monorepo-demo/chatapp/profanitymasker/masker_test.py
+python-monorepo-demo/chatapp/main.py
+python-monorepo-demo/requirements.txt
+python-monorepo-demo/README.md
+python-monorepo-demo/LICENSE
+python-monorepo-demo/.pytest_cache/CACHEDIR.TAG
+python-monorepo-demo/.pytest_cache/.gitignore
+python-monorepo-demo/.pytest_cache/v/cache/nodeids
+python-monorepo-demo/.pytest_cache/v/cache/lastfailed
+python-monorepo-demo/.pytest_cache/v/cache/stepwise
+python-monorepo-demo/.pytest_cache/README.md

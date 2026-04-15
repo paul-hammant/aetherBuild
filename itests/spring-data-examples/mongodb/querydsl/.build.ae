@@ -15,6 +15,7 @@ main() {
         release("25")
         source_layout("maven idiomatic")
         enable_preview()
+        parameters()
         generated_sources("target/mongodb/querydsl/generated-sources")
     }
 }

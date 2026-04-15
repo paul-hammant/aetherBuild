@@ -1,0 +1,16 @@
+import build
+import python
+import python (package_name, version, requires_python, packages_where, packages_include)
+
+main() {
+    b = build.start()
+    build.dep(b, "chatapp/contentbuilder/.build.ae")
+    build.dep(b, "libs/python/setuptools/.setuptools.whl.ae")
+    python.package(b) {
+        package_name("chatapp")
+        version("0.1.0")
+        requires_python(">=3.10")
+        packages_where("..")
+        packages_include("chatapp*")
+    }
+}

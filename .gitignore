@@ -1,2 +1,16 @@
 tools/aeb-resolve.jar
 tools/resolver/target
+
+# Built tool binaries (rebuilt lazily by aeb on first run)
+tools/aeb-init
+tools/aeb-link
+tools/aeb-main
+tools/encode-name
+tools/extract-deps
+tools/file-to-label
+tools/gen-orchestrator
+tools/infer-type
+tools/resolve-dep
+tools/scan-ae-files
+tools/topo-sort
+tools/transform-ae

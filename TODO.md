@@ -120,6 +120,60 @@ aeb javatests/components/vowelbase            # auto-detects test
 aeb --dist java/applications/monorepos_rule   # compile + package
 ```
 
+### `scan()` grammar function — glob-based dep discovery
+
+A DSL function inside a composite `.ae` file that expands to many
+`build.dep()` entries via a glob pattern. Enables named bundles
+composed from globs, without any CLI flag.
+
+```aether
+// .all_tests.ae at the repo root
+import build
+
+main() {
+    b = build.start()
+    build.scan(b, "**/*.tests.ae")
+}
+```
+
+```aether
+// .smoke-tests.ae
+main() {
+    b = build.start()
+    build.scan(b, "javatests/components/**/*.tests.ae")
+    build.scan(b, "csharptests/components/**/*.tests.ae")
+}
+```
+
+```aether
+// .integration.ae — compose scans with explicit deps
+main() {
+    b = build.start()
+    build.dep(b, ".smoke-tests.ae")
+    build.dep(b, ".release-builds.ae")
+    build.dep(b, "end-to-end/.tests.ae")
+}
+```
+
+`aeb .all_tests.ae` runs all matching tests plus their transitive deps.
+Named targets become composable `.ae` files — no CLI flags, same DAG,
+same topo sort, same sparse-checkout story via `gcheckout`.
+
+**Implementation:**
+- Extract `scan()` calls during the same grep pass as `dep()` in
+  `aeb`'s `extract_deps`
+- For each pattern, run `find . -path "./$pattern" -type f` (respecting
+  `.aebignore`)
+- Concatenate matched paths into the file's `FILE_DEPS` list
+- BFS + topo sort handle the rest
+- `build.scan()` is a runtime no-op (like `build.dep()` — both are
+  statically extracted by the runner, not executed)
+
+**Gotchas:**
+- Glob must respect `.aebignore`
+- Zero matches should be an error (typo protection)
+- A file shouldn't match its own `scan()` pattern (self-ref loop)
+
 ### Parallel execution
 
 Independent modules in the DAG can build concurrently. The visited map
@@ -209,6 +263,32 @@ between lock file and resolved deps.
        Regression test added: `tests/integration/module_return_types/`)
 - [ ] `const char*` vs `void*` warnings on every `map_put`/`list_add`
       call. The codegen should emit casts for `string` → `ptr` params.
+- [ ] **macOS link step fails with duplicate symbol errors.** Root
+      cause: the Aether compiler emits imported module functions (e.g.
+      `rust_cargo_build`, `build__mkdirs`) into every translation unit
+      without a `static` qualifier. GNU ld silently dedupes them via
+      the `-Wl,--allow-multiple-definition` flag currently hard-coded
+      in `tools/aeb-link.ae:294`. That flag is GNU ld only — Apple's
+      ld64 rejects it, and `-multiply_defined,suppress` was removed in
+      Xcode 15. Consequence: a full `./aeb` multi-module run fails
+      with duplicate-symbol errors on macOS.
+      Two fixes, in order of preference:
+      (1) **Upstream compiler fix** — `compiler/codegen/` should either
+      mark imported module functions `static` so each TU gets a private
+      copy, or emit each function exactly once with `extern` declarations
+      in the callers. This is the root-cause fix and unblocks macOS for
+      every downstream tool, not just aeb.
+      (2) **Local workaround in `aeb-link.ae`** — platform-gate the
+      link flag so Linux keeps `-Wl,--allow-multiple-definition` and
+      macOS drops it. Useful for small builds that happen to not have
+      duplicate symbols, buys time until (1) ships.
+      Until this is fixed, macOS users can run the unit tests
+      (`./tests/run.sh`) but `./aeb` itself cannot link full builds.
+- [ ] `maven.classpath` resolution fails when a test file imports
+      `java` (which imports `maven`). Reproduces on `test_javac_cmd.ae`,
+      `test_junit_cmd.ae`, `test_kotlinc_cmd.ae` via `./tests/run.sh`.
+      Likely a qualified-symbol resolution issue across two levels of
+      module imports.
 
 ## Build environment validation
 

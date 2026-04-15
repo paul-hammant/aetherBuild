@@ -102,7 +102,8 @@ go_build_cmd(source_dir: string, out_path: string, opts: ptr) {
 go_test_cmd(source_dir: string, ld_path: string, opts: ptr) {
     env_prefix = ""
     if string_length(ld_path) > 0 {
-        env_prefix = "LD_LIBRARY_PATH=${ld_path} "
+        dyld_var = build._dyld_env_var()
+        env_prefix = "${dyld_var}=${ld_path} "
     }
     if opts != null {
         if map_has(opts, "env") == 1 {

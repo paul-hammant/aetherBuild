@@ -1,0 +1,15 @@
+import build
+import rust
+import rust (workspace_member, workspace_dep, workspace_dep_features, workspace_edition)
+
+main() {
+    b = build.start()
+    rust.cargo_workspace(b) {
+        workspace_edition("2021")
+        workspace_member("crates/greeter")
+        workspace_member("crates/cli")
+        workspace_dep("serde_json", "1.0")
+        workspace_dep_features("serde", "1.0", "derive")
+        workspace_dep_features("clap", "4.5", "derive")
+    }
+}

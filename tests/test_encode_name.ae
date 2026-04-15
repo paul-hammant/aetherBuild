@@ -1,0 +1,65 @@
+// Tests for encode_name — converts file paths to C-safe function names
+// Mirrors the bash: / → _    _ → __   - → _H_   . → _D_
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_contains(s: string, sub: string) -> int
+extern os_exec(cmd: string) -> string
+extern string_trim(s: string) -> string
+
+// encode_name via sed (same transform as the bash script)
+// Matches the bash encode_name in aeb and tools/gen-orchestrator.ae:
+//   / → _    __ → __   - → _H_   . → _D_
+// (single _ is NOT doubled; bash preserves it as-is)
+encode_name(input: string) {
+    cmd = "printf '%s' '"
+    cmd = string_concat(cmd, input)
+    cmd = string_concat(cmd, "' | sed 's/__/DBLUND/g; s|/|_|g; s/-/_H_/g; s/\\./_D_/g; s/DBLUND/__/g'")
+    return string_trim(os_exec(cmd))
+}
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    _assert_eq("simple dir",
+        encode_name("java/components/nasal"),
+        "java_components_nasal")
+
+    _assert_eq("hyphen",
+        encode_name("libs/cart/cart-page"),
+        "libs_cart_cart_H_page")
+
+    _assert_eq("build.ae",
+        encode_name("common/.build.ae"),
+        "common__D_build_D_ae")
+
+    _assert_eq("tests.ae",
+        encode_name("javatests/apps/monorepos_rule/.tests.ae"),
+        "javatests_apps_monorepos_rule__D_tests_D_ae")
+
+    _assert_eq("dist.ae",
+        encode_name("java/apps/monorepos_rule/.dist.ae"),
+        "java_apps_monorepos_rule__D_dist_D_ae")
+
+    _assert_eq("multi hyphen",
+        encode_name("libs/shared/product-detail-page/.build.ae"),
+        "libs_shared_product_H_detail_H_page__D_build_D_ae")
+
+    _assert_eq("underscore preserved",
+        encode_name("my_module/.build.ae"),
+        "my_module__D_build_D_ae")
+
+    _assert_eq("simple name",
+        encode_name("common"),
+        "common")
+
+    println("encode_name tests done")
+}

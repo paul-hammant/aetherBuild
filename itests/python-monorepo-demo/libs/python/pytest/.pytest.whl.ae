@@ -1,0 +1,16 @@
+// pytest.whl.ae — Python pytest test framework
+//
+// upstream: https://github.com/pytest-dev/pytest
+// version:  latest (no pin)
+// license:  MIT
+//
+// Consumers that dep on this file get pytest installed into the venv
+// for running unit tests under `python -m pytest`.
+
+import build
+import python
+
+main() {
+    b = build.start()
+    python.wheel_registry(b, "pytest~")
+}

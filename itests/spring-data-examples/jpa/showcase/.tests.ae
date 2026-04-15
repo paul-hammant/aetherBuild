@@ -2,11 +2,11 @@ import build
 import build (dep)
 import maven (load_bom_file)
 import java
-import java (release, source_layout, enable_preview, test_timeout)
+import java (release, source_layout, enable_preview, test_timeout, parameters)
 
 main() {
     b = build.start()
-    dep(b, "jpa/showcase")
+    dep(b, "jpa/showcase/.build.ae")
     load_bom_file(b, "../../spring-boot.bom.ae")
     dep(b, "org.springframework.boot:spring-boot-starter-test")
     dep(b, "org.springframework.boot:spring-boot-data-jpa-test")
@@ -15,6 +15,7 @@ main() {
         release("25")
         source_layout("maven idiomatic")
         enable_preview()
+        parameters()
     }
     java.junit5(b) {
         test_timeout("30")

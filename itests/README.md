@@ -31,6 +31,7 @@ AETHER=/path/to/ae aeb
 | dotnet-architecture-eShopOnWeb | C# | [dotnet-architecture/eShopOnWeb](https://github.com/dotnet-architecture/eShopOnWeb) | .sln + .csproj files (generated from .build.ae) |
 | go-multimodule-fyne | Go | [fyne-io/fyne](https://github.com/fyne-io/fyne) | go test ./... (per-package isolation) |
 | rust-multi-module-oxen | Rust | [Oxen-AI/Oxen](https://github.com/Oxen-AI/Oxen) | Cargo workspace (per-crate targeting) |
+| mrhdias_rust_store | Rust | [mrhdias/store](https://github.com/mrhdias/store) | Cargo.toml (generated from .build.ae) |
 
 ## Results summary
 
@@ -43,6 +44,7 @@ AETHER=/path/to/ae aeb
 | dotnet-eShopOnWeb | 9 | 9 OK | 3/3 pass |
 | go-multimodule-fyne | 1 + 11 test | 1 OK | 11/11 pass |
 | rust-multi-module-oxen | 3 | 0 (env) | — (RocksDB C++ build issue) |
+| mrhdias_rust_store | 1 | 0 (upstream) | — (ord_subset crate incompatible with current rustc) |
 
 ## What gets committed
 
@@ -66,4 +68,4 @@ Build artifacts (`target/`, `.aeb/`, `.generated.csproj`) are also ignored.
 | scala | scala-cli-multi-module-demo |
 | dotnet | dotnet-architecture-eShopOnWeb |
 | go | go-multimodule-fyne |
-| rust | rust-multi-module-oxen |
+| rust | rust-multi-module-oxen, mrhdias_rust_store |

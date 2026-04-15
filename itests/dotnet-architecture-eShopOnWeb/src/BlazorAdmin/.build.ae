@@ -4,7 +4,7 @@ import dotnet (sdk, root_namespace, assembly_name, nuget)
 
 main() {
     b = build.start()
-    build.dep(b, "src/BlazorShared")
+    build.dep(b, "src/BlazorShared/.build.ae")
     dotnet.build_project(b) {
         sdk("Microsoft.NET.Sdk.BlazorWebAssembly")
         root_namespace("BlazorAdmin")

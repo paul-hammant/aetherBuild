@@ -1,0 +1,12 @@
+import build
+import rust
+import rust (crate_name, edition)
+
+main() {
+    b = build.start()
+    build.dep(b, "libs/serde_json/.serde_json.crate.ae")
+    rust.cargo_project(b) {
+        crate_name("rust-registry-crate-demo")
+        edition("2021")
+    }
+}

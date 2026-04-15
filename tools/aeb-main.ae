@@ -1,0 +1,246 @@
+// aeb-main — the Aether-side entry point for `aeb`.
+//
+// Subsumes everything aeb does after --init handling:
+//   1. argument parsing (single optional target)
+//   2. scan mode (no target) — find every .*.ae build file
+//      OR target mode — start from the target file and walk its deps
+//   3. topo sort the resulting file set
+//   4. exec aeb-link, which compiles + links + runs the orchestrator
+//
+// Usage:
+//   aeb-main <aether-bin> <aeb-home> <root> [target]
+//
+// <aether-bin> : path to the `ae` driver (so we can lazy-build helpers)
+// <aeb-home>   : path to the aetherBuild checkout
+// <root>       : monorepo root (cwd at invocation time)
+// [target]     : optional file path or directory; same semantics as aeb
+//
+// Operates on the current working directory; the bash trampoline must
+// chdir to <root> before calling.
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_ends_with(s: string, suffix: string) -> int
+extern string_trim(s: string) -> string
+extern io_read_file(path: string) -> string
+extern io_write_file(path: string, content: string) -> int
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern file_exists(path: string) -> int
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern list_size(l: ptr) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern map_new() -> ptr
+extern map_get(m: ptr, key: string) -> ptr
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_has(m: ptr, key: string) -> int
+extern println(s: string)
+extern exit(code: int)
+
+// Strip trailing slash from a path (cosmetic match with bash's TARGET%/).
+strip_trailing_slash(s: string) {
+    n = string_length(s)
+    if n == 0 { return string_concat(s, "") }
+    last = string_substring(s, n - 1, n)
+    if last == "/" {
+        return string_substring(s, 0, n - 1)
+    }
+    return string_concat(s, "")
+}
+
+// Resolve a directory target to one of .build.ae / .tests.ae / .dist.ae,
+// preferring tests if both exist (matches bash precedence).
+resolve_target_dir(target: string) {
+    tests = string_concat(target, "/.tests.ae")
+    if file_exists(tests) == 1 { return tests }
+    build = string_concat(target, "/.build.ae")
+    if file_exists(build) == 1 { return build }
+    dist = string_concat(target, "/.dist.ae")
+    if file_exists(dist) == 1 { return dist }
+    return string_concat("", "")
+}
+
+main() {
+    if aether_args_count() < 4 {
+        println("Usage: aeb-main <aether-bin> <aeb-home> <root> [target]")
+        exit(1)
+    }
+    aether_bin = aether_args_get(1)
+    aebhome    = aether_args_get(2)
+    root       = aether_args_get(3)
+    target = string_concat("", "")
+    if aether_args_count() >= 5 {
+        target = strip_trailing_slash(aether_args_get(4))
+    }
+
+    // --- Lazy-build helper tools ---
+    extract_deps_bin = string_concat(aebhome, "/tools/extract-deps")
+    if file_exists(extract_deps_bin) == 0 {
+        os_system(string_concat(string_concat(aether_bin, " build "), string_concat(string_concat(aebhome, "/tools/extract-deps.ae -o "), string_concat(extract_deps_bin, " 2>/dev/null"))))
+    }
+    scan_ae_files_bin = string_concat(aebhome, "/tools/scan-ae-files")
+    if file_exists(scan_ae_files_bin) == 0 {
+        os_system(string_concat(string_concat(aether_bin, " build "), string_concat(string_concat(aebhome, "/tools/scan-ae-files.ae -o "), string_concat(scan_ae_files_bin, " 2>/dev/null"))))
+    }
+    topo_sort_bin = string_concat(aebhome, "/tools/topo-sort")
+    if file_exists(topo_sort_bin) == 0 {
+        os_system(string_concat(string_concat(aether_bin, " build "), string_concat(string_concat(aebhome, "/tools/topo-sort.ae -o "), string_concat(topo_sort_bin, " 2>/dev/null"))))
+    }
+    aeb_link_bin = string_concat(aebhome, "/tools/aeb-link")
+    if file_exists(aeb_link_bin) == 0 {
+        os_system(string_concat(string_concat(aether_bin, " build "), string_concat(string_concat(aebhome, "/tools/aeb-link.ae -o "), string_concat(aeb_link_bin, " 2>/dev/null"))))
+    }
+
+    // --- Discover the file set ---
+    files = list_new()
+    file_deps = map_new()
+    seen = map_new()
+    queue = list_new()
+
+    if string_length(target) == 0 {
+        // Scan mode: walk every .*.ae file under cwd via scan-ae-files.
+        scan_out = string_trim(os_exec(scan_ae_files_bin))
+        rest = scan_out
+        line = string_concat("", "")
+        while string_length(rest) > 0 {
+            nl = string_index_of(rest, "\n")
+            if nl < 0 {
+                line = string_concat(rest, "")
+                rest = ""
+            } else {
+                line = string_substring(rest, 0, nl)
+                rest = string_substring(rest, nl + 1, string_length(rest))
+            }
+            if string_length(line) > 0 {
+                copy = string_concat(line, "")
+                list_add(files, copy)
+                map_put(seen, copy, "1")
+            }
+        }
+        // For each file, run extract-deps to populate file_deps.
+        nf = list_size(files)
+        i = 0
+        while i < nf {
+            f = list_get(files, i)
+            d = string_trim(os_exec(string_concat(string_concat(extract_deps_bin, " "), f)))
+            map_put(file_deps, f, string_concat(d, ""))
+            i = i + 1
+        }
+    } else {
+        // Target mode: resolve the target argument to a file if it's a dir.
+        if string_ends_with(target, ".ae") == 1 {
+            check_path = string_concat("./", target)
+            if file_exists(check_path) == 0 {
+                println(string_concat("error: ", string_concat(target, " not found")))
+                exit(1)
+            }
+        } else {
+            resolved = resolve_target_dir(target)
+            if string_length(resolved) == 0 {
+                println(string_concat("error: no .ae files found in ", target))
+                exit(1)
+            }
+            target = resolved
+        }
+
+        // BFS from target through transitive deps.
+        list_add(queue, string_concat(target, ""))
+        map_put(seen, target, "1")
+        head = 0
+        qs = list_size(queue)
+        d = string_concat("", "")
+        dword = string_concat("", "")
+        while head < qs {
+            f = list_get(queue, head)
+            head = head + 1
+            list_add(files, string_concat(f, ""))
+            d = string_trim(os_exec(string_concat(string_concat(extract_deps_bin, " "), f)))
+            d = string_concat(d, "")
+            map_put(file_deps, f, d)
+            // Enqueue any unseen dep that exists on disk.
+            drest = d
+            while string_length(drest) > 0 {
+                sp = string_index_of(drest, " ")
+                if sp < 0 {
+                    dword = string_concat(drest, "")
+                    drest = ""
+                } else {
+                    dword = string_substring(drest, 0, sp)
+                    drest = string_substring(drest, sp + 1, string_length(drest))
+                }
+                if string_length(dword) > 0 {
+                    if map_has(seen, dword) == 0 {
+                        if file_exists(dword) == 1 {
+                            map_put(seen, dword, "1")
+                            list_add(queue, string_concat(dword, ""))
+                            qs = qs + 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if list_size(files) == 0 {
+        println("No .ae build files found")
+        return 0
+    }
+
+    // --- Write edges file for topo-sort ---
+    aeb_lib_dir = string_concat(root, "/.aeb/lib")
+    build_dir = string_concat(root, "/target/_aeb")
+    out_bin = string_concat(root, "/target/_ae_build_all")
+    os_system(string_concat("mkdir -p ", build_dir))
+
+    edges_path = string_concat(build_dir, "/_edges.txt")
+    edges_buf = string_concat("", "")
+    line = string_concat("", "")
+    nfiles = list_size(files)
+    j = 0
+    while j < nfiles {
+        f = list_get(files, j)
+        ds = string_concat("", "")
+        if map_has(file_deps, f) == 1 {
+            ds = map_get(file_deps, f)
+        }
+        line = string_concat(f, " ")
+        line = string_concat(line, ds)
+        edges_buf = string_concat(edges_buf, line)
+        edges_buf = string_concat(edges_buf, "\n")
+        j = j + 1
+    }
+    io_write_file(edges_path, edges_buf)
+
+    // --- Run topo-sort, capture output, write sorted edges file ---
+    sorted_out = os_exec(string_concat(string_concat(topo_sort_bin, " "), edges_path))
+    sorted_path = string_concat(build_dir, "/_sorted.txt")
+    io_write_file(sorted_path, sorted_out)
+
+    // --- Find the aether toolchain dir (where libaether.a lives) ---
+    aether_dir_cmd = string_concat("dirname $(command -v ", string_concat(aether_bin, ")"))
+    aether_dir = string_trim(os_exec(aether_dir_cmd))
+
+    // --- Exec aeb-link to do the build + run ---
+    cmd = string_concat(aeb_link_bin, " ")
+    cmd = string_concat(cmd, sorted_path)
+    cmd = string_concat(cmd, " ")
+    cmd = string_concat(cmd, build_dir)
+    cmd = string_concat(cmd, " ")
+    cmd = string_concat(cmd, aeb_lib_dir)
+    cmd = string_concat(cmd, " ")
+    cmd = string_concat(cmd, aether_dir)
+    cmd = string_concat(cmd, " ")
+    cmd = string_concat(cmd, aether_bin)
+    cmd = string_concat(cmd, " ")
+    cmd = string_concat(cmd, out_bin)
+    cmd = string_concat(cmd, " ")
+    cmd = string_concat(cmd, root)
+    rc = os_system(cmd)
+    exit(rc)
+    return 0
+}

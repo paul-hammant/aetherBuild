@@ -3,6 +3,6 @@ import dotnet
 
 main() {
     b = build.start()
-    build.dep(b, "tests/IntegrationTests")
+    build.dep(b, "tests/IntegrationTests/.build.ae")
     dotnet.test(b)
 }

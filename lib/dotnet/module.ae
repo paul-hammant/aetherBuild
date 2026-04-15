@@ -16,8 +16,12 @@ extern os_system(cmd: string) -> int
 extern os_exec(cmd: string) -> string
 extern file_exists(path: string) -> int
 extern path_join(a: string, b: string) -> string
+extern io_read_file(path: string) -> string
 extern string_concat(a: string, b: string) -> string
 extern string_length(s: string) -> int
+extern string_contains(s: string, sub: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
 extern string_trim(s: string) -> string
 extern io_write_file(path: string, content: string) -> int
 
@@ -61,6 +65,10 @@ nullable(_ctx: ptr) {
     map_put(_ctx, "nullable", "true")
 }
 
+output_type(_ctx: ptr, t: string) {
+    map_put(_ctx, "output_type", t)
+}
+
 implicit_usings(_ctx: ptr) {
     map_put(_ctx, "implicit_usings", "true")
 }
@@ -68,6 +76,57 @@ implicit_usings(_ctx: ptr) {
 // --- SDK functions ---
 
 // Generate .csproj and build a .NET project.
+// nuget_registry — declare a NuGet package as a PackageReference contribution.
+// Use in a .nupkg.ae file so downstream consumers that dep on this file
+// pick up the package in their generated .csproj. Multiple calls append
+// to the artifact so one .nupkg.ae can bundle several related coords
+// (e.g. xunit + xunit.runner.visualstudio + Microsoft.NET.Test.Sdk).
+//
+// Arg format: "name~version" (e.g. "Shouldly~4.3.0")
+builder nuget_registry(ctx: ptr, name_and_ver: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    artifact_path = path_join(target_dir, "dotnet_nuget_deps_including_transitive")
+    existing = ""
+    if file_exists(artifact_path) == 1 {
+        existing = io_read_file(artifact_path)
+    }
+    new_content = name_and_ver
+    if string_length(existing) > 0 {
+        new_content = string_concat(existing, "\n")
+        new_content = string_concat(new_content, name_and_ver)
+    }
+    io_write_file(artifact_path, new_content)
+    println("${mod_dir}: registry nuget ${name_and_ver}")
+    return 0
+}
+
+// nuget_vendored — declare a vendored DLL as a <Reference> contribution.
+// Use in a .nupkg.ae (or .dll.ae) file so consumers pick up the DLL via
+// an msbuild <Reference Include="..." HintPath="..."/> element. Appends
+// to the artifact across multiple calls.
+//
+// Arg format: "name~path" (path relative to project root)
+builder nuget_vendored(ctx: ptr, name_and_path: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    artifact_path = path_join(target_dir, "dotnet_vendored_refs_including_transitive")
+    existing = ""
+    if file_exists(artifact_path) == 1 {
+        existing = io_read_file(artifact_path)
+    }
+    new_content = name_and_path
+    if string_length(existing) > 0 {
+        new_content = string_concat(existing, "\n")
+        new_content = string_concat(new_content, name_and_path)
+    }
+    io_write_file(artifact_path, new_content)
+    println("${mod_dir}: vendored dll ${name_and_path}")
+    return 0
+}
+
 builder build_project(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
@@ -105,6 +164,10 @@ builder build_project(ctx: ptr) {
             an = map_get(_builder, "assembly_name")
             xml = string_concat(xml, "    <AssemblyName>${an}</AssemblyName>\n")
         }
+        if map_has(_builder, "output_type") == 1 {
+            ot = map_get(_builder, "output_type")
+            xml = string_concat(xml, "    <OutputType>${ot}</OutputType>\n")
+        }
         if map_has(_builder, "nullable") == 1 {
             xml = string_concat(xml, "    <Nullable>enable</Nullable>\n")
         }
@@ -118,22 +181,98 @@ builder build_project(ctx: ptr) {
 
     xml = string_concat(xml, "  </PropertyGroup>\n")
 
-    // NuGet PackageReferences
+    // NuGet PackageReferences — inline + from .nupkg.ae dep artifacts
+    has_any_pkgref = 0
+    pkgref_xml = ""
+
+    // Inline nuget() calls (colon-separated "name:version")
     if _builder != null {
         if map_has(_builder, "nuget_deps") == 1 {
             pkgs = map_get(_builder, "nuget_deps")
             count = list_size(pkgs)
-            if count > 0 {
-                xml = string_concat(xml, "\n  <ItemGroup>\n")
-                i = 0
-                while i < count {
-                    pkg = list_get(pkgs, i)
-                    xml = string_concat(xml, "    <PackageReference Include=\"${pkg}\" />\n")
-                    i = i + 1
+            i = 0
+            while i < count {
+                pkg = list_get(pkgs, i)
+                if string_contains(pkg, ":") == 1 {
+                    pkg_name = string_substring(pkg, 0, string_index_of(pkg, ":"))
+                    pkg_ver = string_substring(pkg, string_index_of(pkg, ":") + 1, string_length(pkg))
+                    pkgref_xml = string_concat(pkgref_xml, "    <PackageReference Include=\"${pkg_name}\" Version=\"${pkg_ver}\" />\n")
+                } else {
+                    pkgref_xml = string_concat(pkgref_xml, "    <PackageReference Include=\"${pkg}\" />\n")
                 }
-                xml = string_concat(xml, "  </ItemGroup>\n")
+                has_any_pkgref = 1
+                i = i + 1
             }
         }
+    }
+
+    // Registry nuget deps from .nupkg.ae dep files (tilde-separated "name~version")
+    dep_list = map_get(ctx, "deps")
+    dl_count = list_size(dep_list)
+    dli = 0
+    while dli < dl_count {
+        dp_n = list_get(dep_list, dli)
+        dm_n = build._strip_lang(dp_n)
+        raw_n = build._read_dep_artifact(ctx, dm_n, "dotnet_nuget_deps_including_transitive")
+        if string_length(raw_n) > 0 {
+            ni = 1
+            while ni <= 200 {
+                line_n = string_trim(os_exec("printf '%s\\n' '${raw_n}' | sed -n '${ni}p'"))
+                if string_length(line_n) == 0 {
+                    ni = 999
+                } else {
+                    if string_contains(line_n, "~") == 1 {
+                        n_name = string_substring(line_n, 0, string_index_of(line_n, "~"))
+                        n_ver = string_substring(line_n, string_index_of(line_n, "~") + 1, string_length(line_n))
+                        pkgref_xml = string_concat(pkgref_xml, "    <PackageReference Include=\"${n_name}\" Version=\"${n_ver}\" />\n")
+                        has_any_pkgref = 1
+                    }
+                    ni = ni + 1
+                }
+            }
+        }
+        dli = dli + 1
+    }
+
+    if has_any_pkgref == 1 {
+        xml = string_concat(xml, "\n  <ItemGroup>\n")
+        xml = string_concat(xml, pkgref_xml)
+        xml = string_concat(xml, "  </ItemGroup>\n")
+    }
+
+    // Vendored DLL <Reference> entries from .nupkg.ae dep artifacts
+    has_any_ref = 0
+    ref_xml = ""
+    dli2 = 0
+    while dli2 < dl_count {
+        dp_r = list_get(dep_list, dli2)
+        dm_r = build._strip_lang(dp_r)
+        raw_r = build._read_dep_artifact(ctx, dm_r, "dotnet_vendored_refs_including_transitive")
+        if string_length(raw_r) > 0 {
+            ri = 1
+            while ri <= 200 {
+                line_r = string_trim(os_exec("printf '%s\\n' '${raw_r}' | sed -n '${ri}p'"))
+                if string_length(line_r) == 0 {
+                    ri = 999
+                } else {
+                    if string_contains(line_r, "~") == 1 {
+                        r_name = string_substring(line_r, 0, string_index_of(line_r, "~"))
+                        r_path = string_substring(line_r, string_index_of(line_r, "~") + 1, string_length(line_r))
+                        // HintPath is relative to project dir
+                        hint_rel = string_trim(os_exec("python3 -c \"import os; print(os.path.relpath('${root}/${r_path}', '${source_dir}'))\""))
+                        ref_xml = string_concat(ref_xml, "    <Reference Include=\"${r_name}\"><HintPath>${hint_rel}</HintPath></Reference>\n")
+                        has_any_ref = 1
+                    }
+                    ri = ri + 1
+                }
+            }
+        }
+        dli2 = dli2 + 1
+    }
+    if has_any_ref == 1 {
+        xml = string_concat(xml, "\n  <ItemGroup>\n")
+        xml = string_concat(xml, ref_xml)
+        xml = string_concat(xml, "  </ItemGroup>\n")
     }
 
     // ProjectReferences from build.dep()

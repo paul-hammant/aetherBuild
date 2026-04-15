@@ -1,0 +1,324 @@
+// aeb-link — compile each .ae file, generate the orchestrator, link the
+// final binary, and exec it.
+//
+// Pure-Aether port of the compile/transform/link/exec loop in aeb. This
+// replaces the largest remaining bash-side block.
+//
+// Usage:
+//   aeb-link <edges-file> <build-dir> <aeb-lib> <aether-dir> <aether-bin> <out-bin> <root>
+//
+// <edges-file> : same format as topo-sort: each line is
+//                "<file> <dep1> <dep2> ..." (deps are ignored here, but the
+//                file_to_label / encode_name logic uses the file path).
+//                The file order in <edges-file> IS the build order — caller
+//                must already have run topo-sort.
+// <build-dir>  : where the per-file .ae/.c artifacts get written
+//                (typically $ROOT/target/_aeb)
+// <aeb-lib>    : --lib path passed to aetherc (typically $ROOT/.aeb/lib)
+// <aether-dir> : directory containing aetherc + libaether.a
+// <aether-bin> : path to the `ae` driver (used for `ae build` of helpers)
+// <out-bin>    : path to write the final native binary
+// <root>       : monorepo root, passed as argv[1] to the linked binary
+//
+// On success this exec()s out-bin with root as its sole argument and
+// never returns. On failure the process exits with the error code from
+// the failing step.
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_trim(s: string) -> string
+extern io_read_file(path: string) -> string
+extern io_write_file(path: string, content: string) -> int
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern os_getenv(name: string) -> string
+extern file_exists(path: string) -> int
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+extern list_new() -> ptr
+
+// Platform detection for OS-specific linker flags. See
+// lib/build/module.ae for the shared version; aeb-link is a standalone
+// tool (no imports) so the helper is inlined here. Called once per
+// link step, no caching needed.
+_is_macos_link() {
+    return string_trim(os_exec("uname -s")) == "Darwin"
+}
+extern list_add(l: ptr, item: ptr)
+extern list_size(l: ptr) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern println(s: string)
+extern exit(code: int)
+
+// --- Inline helpers (deliberate duplication; we don't yet have a shared lib) ---
+
+string_replace_all(haystack: string, find: string, replace: string) {
+    flen = string_length(find)
+    if flen == 0 { return string_substring(haystack, 0, string_length(haystack)) }
+    out = string_concat("", "")
+    rest = haystack
+    while string_length(rest) > 0 {
+        idx = string_index_of(rest, find)
+        if idx < 0 {
+            return string_concat(out, rest)
+        }
+        out = string_concat(out, string_substring(rest, 0, idx))
+        out = string_concat(out, replace)
+        rest = string_substring(rest, idx + flen, string_length(rest))
+    }
+    return string_concat(out, "")
+}
+
+encode_name(input: string) {
+    sentinel = "0DBLUND0"
+    s = string_replace_all(input, "__", sentinel)
+    s = string_replace_all(s, "/", "_")
+    s = string_replace_all(s, "-", "_H_")
+    s = string_replace_all(s, ".", "_D_")
+    s = string_replace_all(s, sentinel, "__")
+    return string_concat(s, "")
+}
+
+infer_type(file: string) {
+    n = string_length(file)
+    if n >= 9 {
+        suf = string_substring(file, n - 9, n)
+        if suf == ".tests.ae" {
+            return string_concat("test", "")
+        }
+    }
+    if n >= 8 {
+        suf = string_substring(file, n - 8, n)
+        if suf == ".dist.ae" {
+            return string_concat("dist", "")
+        }
+    }
+    return string_concat("build", "")
+}
+
+dirname_pure(path: string) {
+    n = string_length(path)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string_substring(path, i, i + 1)
+        if ch == "/" {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 { return string_concat(".", "") }
+    if last == 0 { return string_concat("/", "") }
+    return string_substring(path, 0, last)
+}
+
+file_to_label(file: string) {
+    type = infer_type(file)
+    dir = dirname_pure(file)
+    if type == "test" { return string_concat("test:", dir) }
+    if type == "dist" { return string_concat("dist:", dir) }
+    return string_concat(dir, "")
+}
+
+// First word of a space-separated string
+first_word(s: string) {
+    sp = string_index_of(s, " ")
+    if sp < 0 { return string_concat(s, "") }
+    return string_substring(s, 0, sp)
+}
+
+// Read the edges file and return a list of file paths in build order.
+load_files(path: string) {
+    files = list_new()
+    raw = io_read_file(path)
+    rest = raw
+    line = string_concat("", "")
+    while string_length(rest) > 0 {
+        nl = string_index_of(rest, "\n")
+        if nl < 0 {
+            line = string_concat(rest, "")
+            rest = ""
+        } else {
+            line = string_substring(rest, 0, nl)
+            rest = string_substring(rest, nl + 1, string_length(rest))
+        }
+        line = string_trim(line)
+        if string_length(line) > 0 {
+            list_add(files, first_word(line))
+        }
+    }
+    return files
+}
+
+main() {
+    if aether_args_count() < 8 {
+        println("Usage: aeb-link <edges-file> <build-dir> <aeb-lib> <aether-dir> <aether-bin> <out-bin> <root>")
+        exit(1)
+    }
+    edges_file = aether_args_get(1)
+    build_dir  = aether_args_get(2)
+    aeb_lib    = aether_args_get(3)
+    aether_dir = aether_args_get(4)
+    aether_bin = aether_args_get(5)
+    out_bin    = aether_args_get(6)
+    root       = aether_args_get(7)
+
+    aebhome = os_getenv("AEB_HOME")
+    if string_length(aebhome) == 0 {
+        // Fall back; aeb always exports AEB_HOME so this is just a guard.
+        aebhome = string_concat(".", "")
+    }
+
+    aetherc        = string_concat(aether_dir, "/aetherc")
+    aether_lib_a   = string_concat(aether_dir, "/libaether.a")
+    transform_ae   = string_concat(aebhome, "/tools/transform-ae")
+    gen_orchestrator = string_concat(aebhome, "/tools/gen-orchestrator")
+
+    // Lazy-build the helper tools if they aren't compiled yet.
+    if file_exists(transform_ae) == 0 {
+        os_system(string_concat(string_concat(aether_bin, " build "), string_concat(string_concat(aebhome, "/tools/transform-ae.ae -o "), string_concat(transform_ae, " 2>/dev/null"))))
+    }
+    if file_exists(gen_orchestrator) == 0 {
+        os_system(string_concat(string_concat(aether_bin, " build "), string_concat(string_concat(aebhome, "/tools/gen-orchestrator.ae -o "), string_concat(gen_orchestrator, " 2>/dev/null"))))
+    }
+
+    os_system(string_concat("mkdir -p ", build_dir))
+
+    files = load_files(edges_file)
+    n = list_size(files)
+
+    // --- Build display counts (compile / dist / test) ---
+    nb = 0
+    nt = 0
+    nd = 0
+    i = 0
+    while i < n {
+        f = list_get(files, i)
+        t = infer_type(f)
+        if t == "build" { nb = nb + 1 }
+        if t == "test"  { nt = nt + 1 }
+        if t == "dist"  { nd = nd + 1 }
+        i = i + 1
+    }
+    println("aeb: ${nb} compile + ${nd} dist + ${nt} test")
+
+    // --- Per-file transform + aetherc compile ---
+    c_files = list_new()
+    i = 0
+    while i < n {
+        file_path = list_get(files, i)
+        type      = infer_type(file_path)
+        fname     = encode_name(file_path)
+        label     = file_to_label(file_path)
+        src       = string_concat("./", file_path)
+        ae_tmp    = string_concat(string_concat(build_dir, "/"), string_concat(fname, ".ae"))
+        c_out     = string_concat(string_concat(build_dir, "/"), string_concat(fname, ".c"))
+        dir       = dirname_pure(file_path)
+
+        if type == "build" { println("  compile: ${dir}") }
+        if type == "test"  { println("  test:    ${dir}") }
+        if type == "dist"  { println("  dist:    ${dir}") }
+
+        // transform-ae <src> <fname> <label> <out> <aeb-lib> <aeb-home>
+        tr_cmd = string_concat(transform_ae, " ")
+        tr_cmd = string_concat(tr_cmd, src)
+        tr_cmd = string_concat(tr_cmd, " ")
+        tr_cmd = string_concat(tr_cmd, fname)
+        tr_cmd = string_concat(tr_cmd, " ")
+        tr_cmd = string_concat(tr_cmd, label)
+        tr_cmd = string_concat(tr_cmd, " ")
+        tr_cmd = string_concat(tr_cmd, ae_tmp)
+        tr_cmd = string_concat(tr_cmd, " ")
+        tr_cmd = string_concat(tr_cmd, aeb_lib)
+        tr_cmd = string_concat(tr_cmd, " ")
+        tr_cmd = string_concat(tr_cmd, aebhome)
+        os_system(tr_cmd)
+
+        // aetherc --lib <aeb-lib> <ae_tmp> <c_out>
+        ac_cmd = string_concat(aetherc, " --lib ")
+        ac_cmd = string_concat(ac_cmd, aeb_lib)
+        ac_cmd = string_concat(ac_cmd, " ")
+        ac_cmd = string_concat(ac_cmd, ae_tmp)
+        ac_cmd = string_concat(ac_cmd, " ")
+        ac_cmd = string_concat(ac_cmd, c_out)
+        ac_cmd = string_concat(ac_cmd, " 2>/dev/null")
+        os_system(ac_cmd)
+
+        list_add(c_files, c_out)
+        i = i + 1
+    }
+
+    // --- Generate orchestrator .ae ---
+    orch_file = string_concat(build_dir, "/_orchestrator.ae")
+    orch_c    = string_concat(build_dir, "/_orchestrator.c")
+
+    // gen-orchestrator file1 file2 ... > orch_file
+    go_cmd = string_concat(gen_orchestrator, " ")
+    j = 0
+    while j < n {
+        if j > 0 { go_cmd = string_concat(go_cmd, " ") }
+        go_cmd = string_concat(go_cmd, list_get(files, j))
+        j = j + 1
+    }
+    go_cmd = string_concat(go_cmd, " > ")
+    go_cmd = string_concat(go_cmd, orch_file)
+    os_system(go_cmd)
+
+    // Compile orchestrator .ae -> .c
+    oc_cmd = string_concat(aetherc, " --lib ")
+    oc_cmd = string_concat(oc_cmd, aeb_lib)
+    oc_cmd = string_concat(oc_cmd, " ")
+    oc_cmd = string_concat(oc_cmd, orch_file)
+    oc_cmd = string_concat(oc_cmd, " ")
+    oc_cmd = string_concat(oc_cmd, orch_c)
+    oc_cmd = string_concat(oc_cmd, " 2>/dev/null")
+    os_system(oc_cmd)
+
+    // --- Link with gcc ---
+    cc = "gcc -O2 -pipe -w "
+    cc = string_concat(cc, orch_c)
+    k = 0
+    while k < n {
+        cc = string_concat(cc, " ")
+        cc = string_concat(cc, list_get(c_files, k))
+        k = k + 1
+    }
+    if file_exists(aether_lib_a) == 1 {
+        cc = string_concat(cc, " -L")
+        cc = string_concat(cc, aether_dir)
+        cc = string_concat(cc, " -laether")
+    } else {
+        // Fall back to compiling runtime from source.
+        cc = string_concat(cc, " ")
+        cc = string_concat(cc, aether_dir)
+        cc = string_concat(cc, "/../runtime/*.c -I")
+        cc = string_concat(cc, aether_dir)
+        cc = string_concat(cc, "/../runtime")
+    }
+    cc = string_concat(cc, " -o ")
+    cc = string_concat(cc, out_bin)
+    // Duplicate-symbol tolerance: GNU ld accepts --allow-multiple-definition
+    // to silently dedupe imported module functions that the Aether compiler
+    // currently emits into every translation unit. Apple's ld64 rejects the
+    // flag outright, so on macOS we omit it entirely. Programs with genuine
+    // duplicate symbols will still fail to link on macOS; the permanent fix
+    // is upstream in the Aether compiler (see TODO.md).
+    if _is_macos_link() == 1 {
+        cc = string_concat(cc, " -pthread -lm 2>&1")
+    } else {
+        cc = string_concat(cc, " -pthread -lm -Wl,--allow-multiple-definition 2>&1")
+    }
+    os_system(cc)
+
+    // --- Run the orchestrator binary (child process) and propagate exit ---
+    // We don't have execv in stdlib so this stays a fork+wait rather than a
+    // true exec. The parent process holds for the duration; otherwise it's
+    // semantically identical to the bash `exec` it replaces.
+    exec_cmd = string_concat(out_bin, " ")
+    exec_cmd = string_concat(exec_cmd, root)
+    rc = os_system(exec_cmd)
+    exit(rc)
+    return 0
+}

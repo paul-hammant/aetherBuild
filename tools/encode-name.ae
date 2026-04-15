@@ -1,0 +1,73 @@
+// encode-name — encode a file path to a C-safe identifier
+//
+// Pure-Aether port of the bash `encode_name` in aeb. Cross-platform: no
+// shell, no sed, no awk. Each call takes one or more file paths as args
+// and prints the encoded name(s), one per line, to stdout.
+//
+// Encoding (matches aeb exactly):
+//   __  → __        (existing double underscores are preserved)
+//   /   → _
+//   -   → _H_
+//   .   → _D_
+//   _   → _         (single underscores stay single)
+//
+// To preserve `__` while still mapping `_` → `_`, we first replace every
+// `__` with a sentinel that won't collide with any later substitution,
+// then run the other replacements, then put the `__` back.
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+extern println(s: string)
+extern exit(code: int)
+
+// string_replace_all(haystack, find, replace)
+// Pure-Aether scan-and-replace. find must be non-empty.
+string_replace_all(haystack: string, find: string, replace: string) {
+    flen = string_length(find)
+    if flen == 0 { return string_substring(haystack, 0, string_length(haystack)) }
+    out = ""
+    rest = haystack
+    while string_length(rest) > 0 {
+        idx = string_index_of(rest, find)
+        if idx < 0 {
+            return string_concat(out, rest)
+        }
+        out = string_concat(out, string_substring(rest, 0, idx))
+        out = string_concat(out, replace)
+        rest = string_substring(rest, idx + flen, string_length(rest))
+    }
+    return string_concat(out, "")
+}
+
+encode_name(input: string) {
+    // Sentinel chosen so it can't appear in any encoded form: starts with
+    // a digit (no encoded token starts with a digit) and uses characters
+    // that we never substitute. Real input cannot contain this exact run.
+    sentinel = "0DBLUND0"
+    s = string_replace_all(input, "__", sentinel)
+    s = string_replace_all(s, "/", "_")
+    s = string_replace_all(s, "-", "_H_")
+    s = string_replace_all(s, ".", "_D_")
+    s = string_replace_all(s, sentinel, "__")
+    // Wrap final return in an extern string fn so Aether's type inference
+    // sees encode_name as returning string (user-fn return types aren't
+    // chased through to the caller).
+    return string_concat(s, "")
+}
+
+main() {
+    argc = aether_args_count()
+    if argc < 2 {
+        println("Usage: encode-name <path> [<path>...]")
+        exit(1)
+    }
+    i = 1
+    while i < argc {
+        println(encode_name(aether_args_get(i)))
+        i = i + 1
+    }
+}

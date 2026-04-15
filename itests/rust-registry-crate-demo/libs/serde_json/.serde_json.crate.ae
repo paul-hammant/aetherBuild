@@ -1,0 +1,17 @@
+// serde_json.crate.ae — JSON library fetched from crates.io
+//
+// upstream: https://github.com/serde-rs/json
+// version:  1.0
+// license:  MIT OR Apache-2.0
+//
+// Consumers that dep on this file get serde_json registered as a simple
+// version dep in their generated Cargo.toml. Cargo fetches it from
+// crates.io at build time.
+
+import build
+import rust
+
+main() {
+    b = build.start()
+    rust.crate_registry(b, "serde_json~1.0")
+}

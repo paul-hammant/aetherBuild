@@ -2,7 +2,7 @@ import build
 import build (dep)
 import maven (load_bom_file)
 import java
-import java (release, source_layout, enable_preview)
+import java (release, source_layout, enable_preview, parameters)
 
 main() {
     b = build.start()
@@ -17,5 +17,6 @@ main() {
         release("25")
         source_layout("maven idiomatic")
         enable_preview()
+        parameters()
     }
 }

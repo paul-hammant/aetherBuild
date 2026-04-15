@@ -197,7 +197,8 @@ javac_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr) 
 junit_cmd(classpath: string, class_names: string, ld_path: string, opts: ptr) {
     cmd = ""
     if string_length(ld_path) > 0 {
-        cmd = "LD_LIBRARY_PATH=${ld_path} java"
+        dyld_var = build._dyld_env_var()
+        cmd = "${dyld_var}=${ld_path} java"
         cmd = string_concat(cmd, " -Djava.library.path=${ld_path}")
     } else {
         cmd = "java"
@@ -219,6 +220,47 @@ junit_cmd(classpath: string, class_names: string, ld_path: string, opts: ptr) {
 }
 
 // --- SDK functions ---
+
+// jar_vendored — declare a vendored jar as a classpath contribution.
+// Use this in a .jar.ae file so downstream consumers that dep on this
+// file pick up the jar in their classpath artifact.
+builder jar_vendored(ctx: ptr, jar_path: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", jar_path)
+    println("${mod_dir}: vendored jar ${jar_path}")
+    return 0
+}
+
+// jar_registry — declare a jar to fetch from Maven Central. Adds the coord
+// to maven_deps for later resolution. Use jar_registry_finalize(b) as the final builder
+// in a .jar.ae file to actually resolve and write the classpath artifact.
+jar_registry(ctx: ptr, coord: string) {
+    maven_deps = map_get(ctx, "maven_deps")
+    list_add(maven_deps, coord)
+}
+
+// jar_registry_finalize — resolve all previously-declared jar_registry coords and write
+// the jvm_classpath_deps_including_transitive artifact so downstream
+// consumers pick up these jars on their classpath.
+builder jar_registry_finalize(ctx: ptr) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+
+    cp = maven.resolve(ctx)
+    if string_length(cp) == 0 {
+        println("${mod_dir}: no maven deps resolved")
+        return 1
+    }
+
+    // Convert colon-separated to newline-separated for the classpath artifact
+    cp_nl = string_trim(os_exec("echo '${cp}' | tr ':' '\\n'"))
+    build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", cp_nl)
+    println("${mod_dir}: fetched maven deps")
+    return 0
+}
 
 builder javac(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
@@ -507,7 +549,8 @@ junit5_cmd(classpath: string, test_classes_dir: string, ld_path: string, opts: p
 
     // Detect podman socket for TestContainers support
     if string_length(ld_path) > 0 {
-        cmd = string_concat(cmd, " env LD_LIBRARY_PATH=${ld_path} java")
+        dyld_var = build._dyld_env_var()
+        cmd = string_concat(cmd, " env ${dyld_var}=${ld_path} java")
         cmd = string_concat(cmd, " -Djava.library.path=${ld_path}")
     } else {
         cmd = string_concat(cmd, " java")

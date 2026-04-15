@@ -1,0 +1,81 @@
+// file-to-label — derive a build.begin() module label from a file path
+//
+// Pure-Aether port of the bash `file_to_label` in aeb. Cross-platform.
+//
+//   path/to/.build.ae → "path/to"
+//   path/to/.tests.ae → "test:path/to"
+//   path/to/.dist.ae  → "dist:path/to"
+//
+// dirname is computed inline (no shell `dirname` call):
+//   - find last '/'
+//   - everything before it is the parent dir
+//   - if no '/', dirname is "."
+//
+// Usage: file-to-label <file> [<file>...]
+// Prints one label per input on its own line.
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_ends_with(s: string, suffix: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+extern println(s: string)
+extern exit(code: int)
+
+infer_type(file: string) {
+    if string_ends_with(file, ".tests.ae") == 1 {
+        return string_concat("test", "")
+    }
+    if string_ends_with(file, ".dist.ae") == 1 {
+        return string_concat("dist", "")
+    }
+    return string_concat("build", "")
+}
+
+// dirname: last '/'-bounded prefix, or "." if no slash.
+dirname_pure(path: string) {
+    n = string_length(path)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string_substring(path, i, i + 1)
+        if string_index_of(ch, "/") == 0 {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 {
+        return string_concat(".", "")
+    }
+    if last == 0 {
+        return string_concat("/", "")
+    }
+    return string_substring(path, 0, last)
+}
+
+file_to_label(file: string) {
+    type = infer_type(file)
+    dir = dirname_pure(file)
+    if type == "test" {
+        return string_concat("test:", dir)
+    }
+    if type == "dist" {
+        return string_concat("dist:", dir)
+    }
+    return string_concat(dir, "")
+}
+
+main() {
+    argc = aether_args_count()
+    if argc < 2 {
+        println("Usage: file-to-label <file> [<file>...]")
+        exit(1)
+    }
+    i = 1
+    while i < argc {
+        println(file_to_label(aether_args_get(i)))
+        i = i + 1
+    }
+}

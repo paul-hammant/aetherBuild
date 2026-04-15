@@ -1,0 +1,199 @@
+// aether — Aether SDK for aether.build
+//
+// Compiles a .ae source file via aetherc → C, then links with gcc and the
+// Aether runtime to produce a native binary. Optionally links against shared
+// libraries from upstream deps (e.g. Rust cdylibs) via the standard
+// `shared_library_deps_including_transitive` artifact.
+import build
+
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+extern map_has(m: ptr, key: string) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern list_size(l: ptr) -> int
+extern os_system(cmd: string) -> int
+extern os_exec(cmd: string) -> string
+extern os_getenv(name: string) -> string
+extern path_join(a: string, b: string) -> string
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_trim(s: string) -> string
+extern io_write_file(path: string, content: string) -> int
+
+// --- DSL setters ---
+
+source(_ctx: ptr, file_name: string) {
+    map_put(_ctx, "source", file_name)
+}
+
+output(_ctx: ptr, bin_name: string) {
+    map_put(_ctx, "output", bin_name)
+}
+
+// --- Helpers ---
+
+_resolve_aether_dir() {
+    ae = os_getenv("AETHER")
+    if string_length(ae) == 0 {
+        ae = "ae"
+    }
+    raw = os_exec("dirname $(command -v ${ae})")
+    return string_trim(raw)
+}
+
+_collect_shared_libs(ctx: ptr) {
+    // Returns newline-separated list of .so file paths from transitive deps.
+    deps = map_get(ctx, "deps")
+    out = ""
+    n = list_size(deps)
+    i = 0
+    while i < n {
+        dp = list_get(deps, i)
+        dm = build._strip_lang(dp)
+        sh = build._read_dep_artifact(ctx, dm, "shared_library_deps_including_transitive")
+        if string_length(sh) > 0 {
+            if string_length(out) > 0 {
+                out = string_concat(out, "\n")
+            }
+            out = string_concat(out, sh)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+_collect_ld_path(shared_libs_text: string) {
+    // Convert newline-separated .so paths to colon-separated dir list.
+    if string_length(shared_libs_text) == 0 {
+        return ""
+    }
+    cmd = "echo '${shared_libs_text}' | xargs -n1 dirname 2>/dev/null | sort -u | tr '\n' ':' | sed 's/:$//'"
+    return string_trim(os_exec(cmd))
+}
+
+_compile_and_link(ctx: ptr, src_path: string, bin_path: string, c_path: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    ae_dir = _resolve_aether_dir()
+    aetherc = path_join(ae_dir, "aetherc")
+    aether_lib = path_join(ae_dir, "libaether.a")
+
+    // Phase 1: aetherc src.ae → src.c
+    ac_cmd = "${aetherc} ${src_path} ${c_path}"
+    rc = os_system(ac_cmd)
+    if rc != 0 {
+        println("${mod_dir}: aetherc failed")
+        return rc
+    }
+
+    // Phase 2: gcc src.c + runtime → bin, plus any shared library deps.
+    shared_libs = _collect_shared_libs(ctx)
+    extra_link = ""
+    rpath_link = ""
+    if string_length(shared_libs) > 0 {
+        extra_cmd = "echo '${shared_libs}' | tr '\n' ' '"
+        extra_link = string_trim(os_exec(extra_cmd))
+        rpath_cmd = "echo '${shared_libs}' | xargs -n1 dirname 2>/dev/null | sort -u | sed 's|^|-Wl,-rpath,|' | tr '\n' ' '"
+        rpath_link = string_trim(os_exec(rpath_cmd))
+    }
+
+    // Duplicate-symbol link flag — GNU ld uses --allow-multiple-definition,
+    // macOS ld64 rejects that flag outright. See build._dup_symbol_link_flag.
+    dup_flag = build._dup_symbol_link_flag()
+    gcc_cmd = "gcc -O2 -pipe -w ${c_path} -L${ae_dir} -laether ${extra_link} ${rpath_link} -o ${bin_path} -pthread -lm ${dup_flag}"
+    rc = os_system(gcc_cmd)
+    if rc != 0 {
+        println("${mod_dir}: gcc link failed")
+        return rc
+    }
+    return 0
+}
+
+_default_source_name(ctx: ptr) {
+    // Default source file name = last path component of module dir + ".ae"
+    mod_dir = build._get(ctx, "module_dir")
+    cmd = "basename '${mod_dir}'"
+    base = string_trim(os_exec(cmd))
+    return string_concat(base, ".ae")
+}
+
+// --- SDK builders ---
+
+builder program(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    bin_dir = path_join(target_dir, "bin")
+    build._mkdirs(bin_dir)
+
+    src_name = _default_source_name(ctx)
+    if _builder != null {
+        if map_has(_builder, "source") == 1 {
+            src_name = map_get(_builder, "source")
+        }
+    }
+    src_path = path_join(source_dir, src_name)
+
+    out_name = "program"
+    if _builder != null {
+        if map_has(_builder, "output") == 1 {
+            out_name = map_get(_builder, "output")
+        }
+    }
+    bin_path = path_join(bin_dir, out_name)
+    c_path = path_join(target_dir, string_concat(out_name, ".c"))
+
+    println("${mod_dir}: compiling Aether program")
+    rc = _compile_and_link(ctx, src_path, bin_path, c_path)
+    if rc != 0 {
+        return rc
+    }
+
+    build._write_artifact(ctx, "aether_binary", bin_path)
+    return 0
+}
+
+builder program_test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    bin_dir = path_join(target_dir, "bin")
+    build._mkdirs(bin_dir)
+
+    src_name = _default_source_name(ctx)
+    if _builder != null {
+        if map_has(_builder, "source") == 1 {
+            src_name = map_get(_builder, "source")
+        }
+    }
+    src_path = path_join(source_dir, src_name)
+    bin_path = path_join(bin_dir, "test_program")
+    c_path = path_join(target_dir, "test_program.c")
+
+    println("${mod_dir}: compiling Aether test")
+    rc = _compile_and_link(ctx, src_path, bin_path, c_path)
+    if rc != 0 {
+        println("${mod_dir}: tests FAILED (compile)")
+        return rc
+    }
+
+    shared_libs = _collect_shared_libs(ctx)
+    ld_path = _collect_ld_path(shared_libs)
+
+    println("${mod_dir}: running Aether tests")
+    run_cmd = bin_path
+    if string_length(ld_path) > 0 {
+        dyld_var = build._dyld_env_var()
+        run_cmd = "${dyld_var}=${ld_path} ${bin_path}"
+    }
+    rc = os_system(run_cmd)
+    if rc != 0 {
+        println("${mod_dir}: tests FAILED")
+        return rc
+    }
+    println("${mod_dir}: tests PASSED")
+    return 0
+}

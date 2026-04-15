@@ -1,0 +1,95 @@
+// gen-orchestrator — generates the _orchestrator.ae source from a sorted file list
+//
+// Usage: ae run tools/gen-orchestrator.ae -- file1.ae file2.ae ...
+// Output: orchestrator .ae source to stdout
+//
+// Each argument is a sorted .ae file path. The tool generates:
+// - extern declarations for each module function
+// - main() that calls them in order with build_session/build_done
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_contains(s: string, sub: string) -> int
+extern os_exec(cmd: string) -> string
+extern string_trim(s: string) -> string
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+
+// encode_name: path → C-safe identifier
+// Matches the bash encode_name in aeb:
+//   / → _    __ → __   - → _H_   . → _D_
+// (single _ is NOT doubled; bash preserves it as-is)
+encode_name(input: string) {
+    cmd = "printf '%s' '"
+    cmd = string_concat(cmd, input)
+    cmd = string_concat(cmd, "' | sed 's/__/DBLUND/g; s|/|_|g; s/-/_H_/g; s/\\./_D_/g; s/DBLUND/__/g'")
+    return string_trim(os_exec(cmd))
+}
+
+// infer_type: filename → "test" | "dist" | "build"
+infer_type(file: string) {
+    if string_contains(file, ".tests.ae") == 1 {
+        return "test"
+    }
+    if string_contains(file, ".dist.ae") == 1 {
+        return "dist"
+    }
+    return "build"
+}
+
+// file_to_label: file path → module_dir label for build.begin()
+file_to_label(file: string) {
+    type = infer_type(file)
+    // dirname: strip last / component
+    dir = string_trim(os_exec("dirname '${file}'"))
+    if type == "test" {
+        return string_concat("test:", dir)
+    }
+    if type == "dist" {
+        return string_concat("dist:", dir)
+    }
+    return dir
+}
+
+main() {
+    argc = aether_args_count()
+    if argc < 2 {
+        println("Usage: ae run tools/gen-orchestrator.ae -- file1.ae file2.ae ...")
+        exit(1)
+    }
+
+    // Header
+    println("extern build_session(root: string) -> ptr")
+    println("extern build_done(s: ptr, module_dir: string)")
+    println("extern aether_args_get(index: int) -> string")
+    println("")
+
+    // Extern declarations for all module functions
+    file = ""
+    fname = ""
+    label = ""
+    i = 1
+    while i < argc {
+        file = aether_args_get(i)
+        fname = encode_name(file)
+        println("extern ${fname}(s: ptr) -> int")
+        i = i + 1
+    }
+    println("")
+
+    // main() calls everything in topo order
+    println("main() {")
+    println("    s = build_session(aether_args_get(1))")
+
+    i = 1
+    while i < argc {
+        file = aether_args_get(i)
+        fname = encode_name(file)
+        label = file_to_label(file)
+        println("    ${fname}(s)")
+        println("    build_done(s, \"${label}\")")
+        i = i + 1
+    }
+
+    println("}")
+}

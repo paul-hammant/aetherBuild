@@ -1,0 +1,15 @@
+import build
+import rust
+import rust (crate_name, edition, ws_dep, path_dep)
+
+main() {
+    b = build.start()
+    build.dep(b, "crates/greeter/.build.ae")
+    rust.cargo_crate(b) {
+        crate_name("greet-cli")
+        edition("2021")
+        ws_dep("serde_json")
+        ws_dep("clap")
+        path_dep("greeter", "../greeter")
+    }
+}

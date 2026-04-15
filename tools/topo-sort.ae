@@ -1,0 +1,164 @@
+// topo-sort — DFS topological sort of a build-file DAG
+//
+// Pure-Aether port of the bash dfs_visit() in aeb. Cross-platform.
+//
+// Input file: one line per file. Each line is the file path, optionally
+// followed by space-separated dep file paths:
+//
+//     java/components/vowels/.build.ae java/components/vowelbase/.build.ae
+//     java/components/vowelbase/.build.ae rust/components/vowelbase/.build.ae
+//     rust/components/vowelbase/.build.ae
+//
+// Output (stdout): the same files in topological order (deps before
+// dependents), one per line.
+//
+// Deps that aren't in the input set are silently dropped (matches the
+// existing FILE_EXISTS gate in aeb).
+//
+// Cycles abort with exit 1 and a diagnostic on stderr (via os_exec).
+//
+// Usage: topo-sort <edges-file>
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_trim(s: string) -> string
+extern io_read_file(path: string) -> string
+extern os_system(cmd: string) -> int
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+extern map_new() -> ptr
+extern map_get(m: ptr, key: string) -> ptr
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_has(m: ptr, key: string) -> int
+extern list_new() -> ptr
+extern list_add(l: ptr, item: ptr)
+extern list_size(l: ptr) -> int
+extern list_get(l: ptr, index: int) -> ptr
+extern println(s: string)
+extern exit(code: int)
+
+// First word of a space-separated string
+first_word(s: string) {
+    sp = string_index_of(s, " ")
+    if sp < 0 {
+        return string_concat(s, "")
+    }
+    return string_substring(s, 0, sp)
+}
+
+// Everything after the first word and the single space following it
+rest_after_first_word(s: string) {
+    sp = string_index_of(s, " ")
+    if sp < 0 {
+        return string_concat("", "")
+    }
+    return string_substring(s, sp + 1, string_length(s))
+}
+
+// Split a space-separated string into a list of strings (skipping empties).
+split_words(s: string, out: ptr) {
+    rest = string_trim(s)
+    // Initialise `word` with a heap-string-typed value so the heap-tracker
+    // flag is declared at function scope (works around an aetherc edge case
+    // where lazy declarations land in nested C blocks).
+    word = string_concat("", "")
+    while string_length(rest) > 0 {
+        sp = string_index_of(rest, " ")
+        if sp < 0 {
+            word = string_concat(rest, "")
+            rest = ""
+        } else {
+            word = string_substring(rest, 0, sp)
+            rest = string_trim(string_substring(rest, sp + 1, string_length(rest)))
+        }
+        if string_length(word) > 0 {
+            list_add(out, word)
+        }
+    }
+}
+
+// Recursive DFS visit. file_deps maps file -> space-separated dep list.
+// visited_map maps file -> "visiting" or "done". order is the output post-order.
+dfs_visit(file: string, file_deps: ptr, visited_map: ptr, order: ptr) {
+    if map_has(visited_map, file) == 1 {
+        cur = map_get(visited_map, file)
+        if cur == "done" { return 0 }
+        if cur == "visiting" {
+            os_system(string_concat(string_concat("printf 'error: circular dependency involving ", file), "\n' >&2"))
+            exit(1)
+        }
+    }
+    map_put(visited_map, file, "visiting")
+    deps_str = ""
+    if map_has(file_deps, file) == 1 {
+        deps_str = map_get(file_deps, file)
+    }
+    deps_list = list_new()
+    split_words(deps_str, deps_list)
+    n = list_size(deps_list)
+    i = 0
+    while i < n {
+        dep = list_get(deps_list, i)
+        // Only follow deps that are themselves in the input set
+        if map_has(file_deps, dep) == 1 {
+            dfs_visit(dep, file_deps, visited_map, order)
+        }
+        i = i + 1
+    }
+    map_put(visited_map, file, "done")
+    list_add(order, file)
+    return 0
+}
+
+main() {
+    if aether_args_count() < 2 {
+        println("Usage: topo-sort <edges-file>")
+        exit(1)
+    }
+    raw = io_read_file(aether_args_get(1))
+    file_deps = map_new()
+    files = list_new()
+
+    rest = raw
+    line = string_concat("", "")
+    while string_length(rest) > 0 {
+        nl = string_index_of(rest, "\n")
+        if nl < 0 {
+            line = string_concat(rest, "")
+            rest = ""
+        } else {
+            line = string_substring(rest, 0, nl)
+            rest = string_substring(rest, nl + 1, string_length(rest))
+        }
+        line = string_trim(line)
+        if string_length(line) > 0 {
+            file = string_concat(first_word(line), "")
+            deps = string_concat(rest_after_first_word(line), "")
+            // Add the file even if no deps (so it's known to the graph)
+            if map_has(file_deps, file) == 0 {
+                list_add(files, file)
+            }
+            map_put(file_deps, file, deps)
+        }
+    }
+
+    visited_map = map_new()
+    order = list_new()
+    fcount = list_size(files)
+    j = 0
+    while j < fcount {
+        f = list_get(files, j)
+        dfs_visit(f, file_deps, visited_map, order)
+        j = j + 1
+    }
+
+    ocount = list_size(order)
+    k = 0
+    while k < ocount {
+        println(list_get(order, k))
+        k = k + 1
+    }
+    return 0
+}
