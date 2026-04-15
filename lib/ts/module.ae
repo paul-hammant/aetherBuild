@@ -1,52 +1,46 @@
 // ts — TypeScript SDK for aether.build
 import build
 import pnpm
-
-extern map_put(m: ptr, key: string, value: ptr)
-extern map_get(m: ptr, key: string) -> ptr
-extern map_has(m: ptr, key: string) -> int
-extern list_get(l: ptr, index: int) -> ptr
-extern list_size(l: ptr) -> int
-extern os_system(cmd: string) -> int
-extern os_exec(cmd: string) -> string
-extern file_exists(path: string) -> int
-extern path_join(a: string, b: string) -> string
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_trim(s: string) -> string
-extern io_read_file(path: string) -> string
-extern io_write_file(path: string, content: string) -> int
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
 
 // --- TypeScript DSL setters ---
 
 strict(_ctx: ptr) {
-    map_put(_ctx, "strict", "true")
+    _e = map.put(_ctx, "strict", "true")
 }
 
 ts_target(_ctx: ptr, t: string) {
-    map_put(_ctx, "target", t)
+    _e = map.put(_ctx, "target", t)
 }
 
 module_kind(_ctx: ptr, m: string) {
-    map_put(_ctx, "module_kind", m)
+    _e = map.put(_ctx, "module_kind", m)
 }
 
 out_dir(_ctx: ptr, d: string) {
-    map_put(_ctx, "out_dir", d)
+    _e = map.put(_ctx, "out_dir", d)
 }
 
 // --- Mocha DSL setters ---
 
 mocha_timeout(_ctx: ptr, ms: string) {
-    map_put(_ctx, "timeout", ms)
+    _e = map.put(_ctx, "timeout", ms)
 }
 
 reporter(_ctx: ptr, r: string) {
-    map_put(_ctx, "reporter", r)
+    _e = map.put(_ctx, "reporter", r)
 }
 
 mocha_grep(_ctx: ptr, pat: string) {
-    map_put(_ctx, "grep", pat)
+    _e = map.put(_ctx, "grep", pat)
 }
 
 // --- SDK functions ---
@@ -85,24 +79,26 @@ builder npm_registry(ctx: ptr, name_and_ver: string) {
 // inject them into the current module's npm_deps list as "name:version"
 // entries so pnpm.resolve processes them alongside inline declarations.
 _merge_npm_registry_deps(ctx: ptr) {
-    deps = map_get(ctx, "deps")
-    npm_deps_list = map_get(ctx, "npm_deps")
-    dep_count = list_size(deps)
+    deps = map.get(ctx, "deps")
+    npm_deps_list = map.get(ctx, "npm_deps")
+    dep_count = list.size(deps)
     di = 0
     while di < dep_count {
-        dp = list_get(deps, di)
+        dp = list.get(deps, di)
         dm = build._strip_lang(dp)
         raw = build._read_dep_artifact(ctx, dm, "npm_registry_deps_including_transitive")
-        if string_length(raw) > 0 {
+        if string.length(raw) > 0 {
             i = 1
             while i <= 200 {
-                line = string_trim(os_exec("printf '%s\\n' '${raw}' | sed -n '${i}p'"))
-                if string_length(line) == 0 {
+                l_raw, _el = os.exec("printf '%s\\n' '${raw}' | sed -n '${i}p'")
+                line = string.trim(l_raw)
+                if string.length(line) == 0 {
                     i = 999
                 } else {
                     // Translate "name~version" to "name:version" for pnpm.resolve
-                    colonized = string_trim(os_exec("printf '%s' '${line}' | sed 's/~/:/'"))
-                    list_add(npm_deps_list, colonized)
+                    c_raw, _ec = os.exec("printf '%s' '${line}' | sed 's/~/:/'")
+                    colonized = string.trim(c_raw)
+                    _ea = list.add(npm_deps_list, colonized)
                     i = i + 1
                 }
             }
@@ -118,10 +114,10 @@ builder tsc_files(ctx: ptr) {
     target_dir = build._get(ctx, "target_dir")
     mod_name = build._get(ctx, "module")
     mod_dir = build._get(ctx, "module_dir")
-    deps = map_get(ctx, "deps")
+    deps = map.get(ctx, "deps")
 
     build._mkdirs(target_dir)
-    ts_file = path_join(target_dir, ".timestamp")
+    ts_file = path.join(target_dir, ".timestamp")
     if build._needs_rebuild(source_dir, ts_file) == 0 {
         println("${mod_dir}: skipping compilation of prod code (not changed)")
         return 0
@@ -129,15 +125,15 @@ builder tsc_files(ctx: ptr) {
 
     println("${mod_dir}: compiling prod code")
 
-    dep_count = list_size(deps)
-    ts_deps = path_join(target_dir, "js")
+    dep_count = list.size(deps)
+    ts_deps = path.join(target_dir, "js")
     i = 0
     while i < dep_count {
-        dp6 = list_get(deps, i)
+        dp6 = list.get(deps, i)
         dm6 = build._strip_lang(dp6)
         dep_td = build._read_dep_artifact(ctx, dm6, "typescript_module_deps_including_transitive")
-        if string_length(dep_td) > 0 {
-            ts_deps = string_concat(string_concat(ts_deps, "\n"), dep_td)
+        if string.length(dep_td) > 0 {
+            ts_deps = string.concat(string.concat(ts_deps, "\n"), dep_td)
         }
         i = i + 1
     }
@@ -146,27 +142,27 @@ builder tsc_files(ctx: ptr) {
     // Merge registry npm deps from .npm.ae dep files into ctx.npm_deps
     _merge_npm_registry_deps(ctx)
 
-    npm_deps_list = map_get(ctx, "npm_deps")
-    npm_count = list_size(npm_deps_list)
+    npm_deps_list = map.get(ctx, "npm_deps")
+    npm_count = list.size(npm_deps_list)
     npm_out = ""
     i = 0
     while i < npm_count {
-        nd = list_get(npm_deps_list, i)
-        if string_length(npm_out) > 0 {
-            npm_out = string_concat(string_concat(npm_out, "\n"), nd)
+        nd = list.get(npm_deps_list, i)
+        if string.length(npm_out) > 0 {
+            npm_out = string.concat(string.concat(npm_out, "\n"), nd)
         } else {
-            npm_out = string_concat(nd, "")
+            npm_out = string.concat(nd, "")
         }
         i = i + 1
     }
     i = 0
     while i < dep_count {
-        dp7 = list_get(deps, i)
+        dp7 = list.get(deps, i)
         dm7 = build._strip_lang(dp7)
         dep_npm = build._read_dep_artifact(ctx, dm7, "npm_deps_including_transitive")
-        if string_length(dep_npm) > 0 {
-            if string_length(npm_out) > 0 {
-                npm_out = string_concat(string_concat(npm_out, "\n"), dep_npm)
+        if string.length(dep_npm) > 0 {
+            if string.length(npm_out) > 0 {
+                npm_out = string.concat(string.concat(npm_out, "\n"), dep_npm)
             } else {
                 npm_out = dep_npm
             }
@@ -178,12 +174,12 @@ builder tsc_files(ctx: ptr) {
     shared_out = ""
     i = 0
     while i < dep_count {
-        dp8 = list_get(deps, i)
+        dp8 = list.get(deps, i)
         dm8 = build._strip_lang(dp8)
         dep_sh = build._read_dep_artifact(ctx, dm8, "shared_library_deps_including_transitive")
-        if string_length(dep_sh) > 0 {
-            if string_length(shared_out) > 0 {
-                shared_out = string_concat(string_concat(shared_out, "\n"), dep_sh)
+        if string.length(dep_sh) > 0 {
+            if string.length(shared_out) > 0 {
+                shared_out = string.concat(string.concat(shared_out, "\n"), dep_sh)
             } else {
                 shared_out = dep_sh
             }
@@ -193,90 +189,92 @@ builder tsc_files(ctx: ptr) {
     build._write_artifact(ctx, "shared_library_deps_including_transitive", shared_out)
 
     gen_cmd = "${root}/shared-build-scripts/generate-typescript-base-tsconfig-json.sh '${root}' '${source_dir}' '${target_dir}' '${ts_deps}'"
-    os_system(gen_cmd)
+    os.system(gen_cmd)
 
-    npm_file = path_join(target_dir, "npm_deps_including_transitive")
-    if file_exists(npm_file) == 1 {
-        npm_content = io_read_file(npm_file)
-        if string_length(npm_content) > 0 {
-            npm_args = string_trim(os_exec("echo '${npm_content}' | tr '\n' ' '"))
-            tgt_suffix = string_trim(os_exec("echo '${target_dir}' | sed 's|.*/target/||'"))
+    npm_file = path.join(target_dir, "npm_deps_including_transitive")
+    if file.exists(npm_file) == 1 {
+        npm_content, _ernc = io.read_file(npm_file)
+        if string.length(npm_content) > 0 {
+            na_raw, _ena = os.exec("echo '${npm_content}' | tr '\n' ' '")
+            npm_args = string.trim(na_raw)
+            ts_raw, _ets = os.exec("echo '${target_dir}' | sed 's|.*/target/||'")
+            tgt_suffix = string.trim(ts_raw)
             npm_cmd = "${root}/shared-build-scripts/add-npm-deps-to-base-tsconfig-json.sh ${root} ${mod_name} ${tgt_suffix} ${npm_args}"
-            os_system(npm_cmd)
+            os.system(npm_cmd)
         }
     }
 
     tsc_cmd = "cd ${source_dir} && tsc"
     if _builder != null {
-        if map_has(_builder, "strict") == 1 {
-            tsc_cmd = string_concat(tsc_cmd, " --strict")
+        if map.has(_builder, "strict") == 1 {
+            tsc_cmd = string.concat(tsc_cmd, " --strict")
         }
-        if map_has(_builder, "target") == 1 {
-            val = map_get(_builder, "target")
-            tsc_cmd = string_concat(tsc_cmd, " --target ${val}")
+        if map.has(_builder, "target") == 1 {
+            val = map.get(_builder, "target")
+            tsc_cmd = string.concat(tsc_cmd, " --target ${val}")
         }
-        if map_has(_builder, "module_kind") == 1 {
-            val = map_get(_builder, "module_kind")
-            tsc_cmd = string_concat(tsc_cmd, " --module ${val}")
+        if map.has(_builder, "module_kind") == 1 {
+            val = map.get(_builder, "module_kind")
+            tsc_cmd = string.concat(tsc_cmd, " --module ${val}")
         }
-        if map_has(_builder, "out_dir") == 1 {
-            val = map_get(_builder, "out_dir")
-            tsc_cmd = string_concat(tsc_cmd, " --outDir ${val}")
+        if map.has(_builder, "out_dir") == 1 {
+            val = map.get(_builder, "out_dir")
+            tsc_cmd = string.concat(tsc_cmd, " --outDir ${val}")
         }
-        if map_has(_builder, "extra") == 1 {
-            val = map_get(_builder, "extra")
-            tsc_cmd = string_concat(tsc_cmd, " ${val}")
+        if map.has(_builder, "extra") == 1 {
+            val = map.get(_builder, "extra")
+            tsc_cmd = string.concat(tsc_cmd, " ${val}")
         }
     }
-    exit_code = os_system(tsc_cmd)
+    exit_code = os.system(tsc_cmd)
     if exit_code != 0 {
         println("${mod_dir}: tsc failed")
         return exit_code
     }
 
-    io_write_file(ts_file, "")
+    _ewf = io.write_file(ts_file, "")
     return 0
 }
 
 builder mocha(ctx: ptr, test_file: string) {
     root = build._get(ctx, "root")
     target_dir = build._get(ctx, "target_dir")
-    mod_name = build._get(ctx, "module")
     mod_dir = build._get(ctx, "module_dir")
-    deps = map_get(ctx, "deps")
+    deps = map.get(ctx, "deps")
 
-    js_dir = path_join(target_dir, "js")
+    js_dir = path.join(target_dir, "js")
     node_path = js_dir
-    target_base = path_join(root, "target")
-    node_path = string_concat(string_concat(node_path, ":"), target_base)
+    target_base = path.join(root, "target")
+    node_path = string.concat(string.concat(node_path, ":"), target_base)
 
-    dep_count = list_size(deps)
+    dep_count = list.size(deps)
     i = 0
     while i < dep_count {
-        dp9 = list_get(deps, i)
+        dp9 = list.get(deps, i)
         dm9 = build._strip_lang(dp9)
         dep_td = build._read_dep_artifact(ctx, dm9, "typescript_module_deps_including_transitive")
-        if string_length(dep_td) > 0 {
-            dep_td_flat = string_trim(os_exec("echo '${dep_td}' | tr '\n' ':' | sed 's/:$//'"))
-            node_path = string_concat(string_concat(node_path, ":"), dep_td_flat)
+        if string.length(dep_td) > 0 {
+            df_raw, _edf = os.exec("echo '${dep_td}' | tr '\n' ':' | sed 's/:$//'")
+            dep_td_flat = string.trim(df_raw)
+            node_path = string.concat(string.concat(node_path, ":"), dep_td_flat)
         }
         i = i + 1
     }
 
-    npm_vendored = path_join(root, "libs/javascript/npm_vendored/node_modules")
-    node_path = string_concat(string_concat(node_path, ":"), npm_vendored)
+    npm_vendored = path.join(root, "libs/javascript/npm_vendored/node_modules")
+    node_path = string.concat(string.concat(node_path, ":"), npm_vendored)
 
     ld_path = ""
     i = 0
     while i < dep_count {
-        dpA = list_get(deps, i)
+        dpA = list.get(deps, i)
         dmA = build._strip_lang(dpA)
         dep_sh = build._read_dep_artifact(ctx, dmA, "shared_library_deps_including_transitive")
-        if string_length(dep_sh) > 0 {
-            sh_dir = os_exec("dirname ${dep_sh} | head -1")
-            sh_dir = string_trim(sh_dir)
-            if string_length(ld_path) > 0 {
-                ld_path = string_concat(string_concat(ld_path, ":"), sh_dir)
+        if string.length(dep_sh) > 0 {
+            sh_raw, _esh = os.exec("dirname ${dep_sh} | head -1")
+            sh_dir = string.trim(sh_raw)
+            if string.length(ld_path) > 0 {
+                ld_path = string.concat(string.concat(ld_path, ":"), sh_dir)
             } else {
                 ld_path = sh_dir
             }
@@ -284,37 +282,37 @@ builder mocha(ctx: ptr, test_file: string) {
         i = i + 1
     }
 
-    mocha_bin = path_join(root, "libs/javascript/npm_vendored/node_modules/mocha/bin/mocha.js")
+    mocha_bin = path.join(root, "libs/javascript/npm_vendored/node_modules/mocha/bin/mocha.js")
     println("${mod_dir}: running tests")
 
     mocha_opts = ""
     if _builder != null {
-        if map_has(_builder, "timeout") == 1 {
-            val = map_get(_builder, "timeout")
-            mocha_opts = string_concat(mocha_opts, " --timeout ${val}")
+        if map.has(_builder, "timeout") == 1 {
+            val = map.get(_builder, "timeout")
+            mocha_opts = string.concat(mocha_opts, " --timeout ${val}")
         }
-        if map_has(_builder, "reporter") == 1 {
-            val = map_get(_builder, "reporter")
-            mocha_opts = string_concat(mocha_opts, " --reporter ${val}")
+        if map.has(_builder, "reporter") == 1 {
+            val = map.get(_builder, "reporter")
+            mocha_opts = string.concat(mocha_opts, " --reporter ${val}")
         }
-        if map_has(_builder, "grep") == 1 {
-            val = map_get(_builder, "grep")
-            mocha_opts = string_concat(mocha_opts, " --grep '${val}'")
+        if map.has(_builder, "grep") == 1 {
+            val = map.get(_builder, "grep")
+            mocha_opts = string.concat(mocha_opts, " --grep '${val}'")
         }
-        if map_has(_builder, "extra") == 1 {
-            val = map_get(_builder, "extra")
-            mocha_opts = string_concat(mocha_opts, " ${val}")
+        if map.has(_builder, "extra") == 1 {
+            val = map.get(_builder, "extra")
+            mocha_opts = string.concat(mocha_opts, " ${val}")
         }
     }
 
     run_cmd = ""
-    if string_length(ld_path) > 0 {
+    if string.length(ld_path) > 0 {
         dyld_var = build._dyld_env_var()
         run_cmd = "NODE_PATH=${node_path} ${dyld_var}=${ld_path} node ${mocha_bin}${mocha_opts} ${test_file}"
     } else {
         run_cmd = "NODE_PATH=${node_path} node ${mocha_bin}${mocha_opts} ${test_file}"
     }
-    exit_code = os_system(run_cmd)
+    exit_code = os.system(run_cmd)
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")
         return exit_code
@@ -327,11 +325,11 @@ builder mocha(ctx: ptr, test_file: string) {
 
 // DSL setters for project-based compilation
 tsconfig(_ctx: ptr, path: string) {
-    map_put(_ctx, "tsconfig", path)
+    _e = map.put(_ctx, "tsconfig", path)
 }
 
 skip_lib_check(_ctx: ptr) {
-    map_put(_ctx, "skip_lib_check", "true")
+    _e = map.put(_ctx, "skip_lib_check", "true")
 }
 
 // Compile TypeScript using a project's tsconfig.lib.json.
@@ -352,41 +350,40 @@ builder tsc(ctx: ptr) {
     pnpm.resolve(ctx)
 
     // Determine tsconfig path
-    tc = path_join(source_dir, "tsconfig.lib.json")
+    tc = path.join(source_dir, "tsconfig.lib.json")
     if _builder != null {
-        if map_has(_builder, "tsconfig") == 1 {
-            tc_rel = map_get(_builder, "tsconfig")
-            tc = path_join(source_dir, tc_rel)
+        if map.has(_builder, "tsconfig") == 1 {
+            tc_rel = map.get(_builder, "tsconfig")
+            tc = path.join(source_dir, tc_rel)
         }
     }
 
     println("${mod_dir}: compiling (tsc)")
 
-    aeb_dir = path_join(root, ".aeb")
-    tsc_bin = path_join(aeb_dir, "node_modules/.bin/tsc")
+    aeb_dir = path.join(root, ".aeb")
+    tsc_bin = path.join(aeb_dir, "node_modules/.bin/tsc")
     cmd = "${tsc_bin} -p '${tc}'"
 
     if _builder != null {
-        if map_has(_builder, "skip_lib_check") == 1 {
-            cmd = string_concat(cmd, " --skipLibCheck")
+        if map.has(_builder, "skip_lib_check") == 1 {
+            cmd = string.concat(cmd, " --skipLibCheck")
         }
-        if map_has(_builder, "out_dir") == 1 {
-            val = map_get(_builder, "out_dir")
-            cmd = string_concat(cmd, " --outDir '${val}'")
+        if map.has(_builder, "out_dir") == 1 {
+            val = map.get(_builder, "out_dir")
+            cmd = string.concat(cmd, " --outDir '${val}'")
         }
-        if map_has(_builder, "extra") == 1 {
-            val = map_get(_builder, "extra")
-            cmd = string_concat(cmd, " ${val}")
+        if map.has(_builder, "extra") == 1 {
+            val = map.get(_builder, "extra")
+            cmd = string.concat(cmd, " ${val}")
         }
     }
 
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: tsc failed")
         return exit_code
     }
 
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _ewt = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
-

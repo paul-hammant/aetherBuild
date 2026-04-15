@@ -5,49 +5,42 @@
 // via the maven module (Clojure uses Maven coordinates).
 import build
 import maven
-
-extern map_put(m: ptr, key: string, value: ptr)
-extern map_get(m: ptr, key: string) -> ptr
-extern map_has(m: ptr, key: string) -> int
-extern list_new() -> ptr
-extern list_add(l: ptr, item: ptr)
-extern list_get(l: ptr, index: int) -> ptr
-extern list_size(l: ptr) -> int
-extern os_system(cmd: string) -> int
-extern os_exec(cmd: string) -> string
-extern file_exists(path: string) -> int
-extern path_join(a: string, b: string) -> string
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_trim(s: string) -> string
-extern io_write_file(path: string, content: string) -> int
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
 
 // --- DSL setters ---
 
 main_ns(_ctx: ptr, ns: string) {
-    map_put(_ctx, "main_ns", ns)
+    _e = map.put(_ctx, "main_ns", ns)
 }
 
 test_timeout(_ctx: ptr, seconds: string) {
-    map_put(_ctx, "test_timeout", seconds)
+    _e = map.put(_ctx, "test_timeout", seconds)
 }
 
 // --- Internal helpers ---
 
 // Collect source paths from dep modules (Clojure needs source dirs on classpath)
 _dep_src_classpath(ctx: ptr) {
-    deps = map_get(ctx, "deps")
+    deps = map.get(ctx, "deps")
     cp = ""
-    count = list_size(deps)
+    count = list.size(deps)
     i = 0
     while i < count {
-        dp = list_get(deps, i)
+        dp = list.get(deps, i)
         dm = build._strip_lang(dp)
         dep_src = build._read_dep_artifact(ctx, dm, "clojure_src_path")
-        if string_length(dep_src) > 0 {
-            if string_length(cp) > 0 {
-                tmp = string_concat(cp, ":")
-                cp = string_concat(tmp, dep_src)
+        if string.length(dep_src) > 0 {
+            if string.length(cp) > 0 {
+                tmp = string.concat(cp, ":")
+                cp = string.concat(tmp, dep_src)
             } else {
                 cp = dep_src
             }
@@ -67,63 +60,63 @@ builder compile(ctx: ptr) {
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
 
-    classes_dir = path_join(target_dir, "classes")
+    classes_dir = path.join(target_dir, "classes")
     build._mkdirs(classes_dir)
 
     println("${mod_dir}: compiling (clojure)")
 
-    src_root = path_join(source_dir, "src")
+    src_root = path.join(source_dir, "src")
 
     // Write source path artifact for downstream modules (include transitive dep sources)
     all_src = src_root
     dep_src = _dep_src_classpath(ctx)
-    if string_length(dep_src) > 0 {
-        tmp_a = string_concat(all_src, ":")
-        all_src = string_concat(tmp_a, dep_src)
+    if string.length(dep_src) > 0 {
+        tmp_a = string.concat(all_src, ":")
+        all_src = string.concat(tmp_a, dep_src)
     }
     build._write_artifact(ctx, "clojure_src_path", all_src)
 
     // Build classpath: own src + classes + dep src + maven deps
     cp = src_root
-    tmp2 = string_concat(cp, ":")
-    cp = string_concat(tmp2, classes_dir)
+    tmp2 = string.concat(cp, ":")
+    cp = string.concat(tmp2, classes_dir)
 
     dep_src = _dep_src_classpath(ctx)
-    if string_length(dep_src) > 0 {
-        tmp3 = string_concat(cp, ":")
-        cp = string_concat(tmp3, dep_src)
+    if string.length(dep_src) > 0 {
+        tmp3 = string.concat(cp, ":")
+        cp = string.concat(tmp3, dep_src)
     }
 
     maven_cp = maven.classpath(ctx)
-    if string_length(maven_cp) > 0 {
-        tmp4 = string_concat(cp, ":")
-        cp = string_concat(tmp4, maven_cp)
+    if string.length(maven_cp) > 0 {
+        tmp4 = string.concat(cp, ":")
+        cp = string.concat(tmp4, maven_cp)
     }
 
     // AOT compile if main_ns is set
     if _builder != null {
-        if map_has(_builder, "main_ns") == 1 {
-            ns = map_get(_builder, "main_ns")
+        if map.has(_builder, "main_ns") == 1 {
+            ns = map.get(_builder, "main_ns")
             cmd = "java -Dclojure.compile.path='${classes_dir}' -cp '${cp}' clojure.main -e \"(compile '${ns})\""
-            exit_code = os_system(cmd)
+            exit_code = os.system(cmd)
             if exit_code != 0 {
                 println("${mod_dir}: clojure AOT compilation failed")
                 return exit_code
             }
-            io_write_file(path_join(target_dir, ".timestamp"), "")
+            _e1 = io.write_file(path.join(target_dir, ".timestamp"), "")
             return 0
         }
     }
 
     // No main_ns — just verify sources load
     cmd = "java -cp '${cp}' clojure.main -e \"(println :ok)\""
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: clojure load-check failed")
         return exit_code
     }
 
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e2 = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
 
@@ -139,56 +132,58 @@ builder test(ctx: ptr) {
 
     println("${mod_dir}: running tests (clojure)")
 
-    src_root = path_join(source_dir, "src")
-    test_root = path_join(source_dir, "test")
+    src_root = path.join(source_dir, "src")
+    test_root = path.join(source_dir, "test")
 
     // Build classpath: src + test + dep src + maven deps
     cp = src_root
-    tmp2 = string_concat(cp, ":")
-    cp = string_concat(tmp2, test_root)
+    tmp2 = string.concat(cp, ":")
+    cp = string.concat(tmp2, test_root)
 
     dep_src = _dep_src_classpath(ctx)
-    if string_length(dep_src) > 0 {
-        tmp3 = string_concat(cp, ":")
-        cp = string_concat(tmp3, dep_src)
+    if string.length(dep_src) > 0 {
+        tmp3 = string.concat(cp, ":")
+        cp = string.concat(tmp3, dep_src)
     }
 
     maven_cp = maven.classpath(ctx)
-    if string_length(maven_cp) > 0 {
-        tmp4 = string_concat(cp, ":")
-        cp = string_concat(tmp4, maven_cp)
+    if string.length(maven_cp) > 0 {
+        tmp4 = string.concat(cp, ":")
+        cp = string.concat(tmp4, maven_cp)
     }
 
     // Discover test namespaces from *_test.clj files
     discover = "find '${test_root}' -name '*_test.clj' -type f"
-    discover = string_concat(discover, " | sed 's|^${test_root}/||; s|/|.|g; s|_|-|g; s|\\.clj$||'")
+    discover = string.concat(discover, " | sed 's|^${test_root}/||; s|/|.|g; s|_|-|g; s|\\.clj$||'")
 
-    ns_list = string_trim(os_exec(discover))
-    if string_length(ns_list) == 0 {
+    ns_list_raw, _e_disc = os.exec(discover)
+    ns_list = string.trim(ns_list_raw)
+    if string.length(ns_list) == 0 {
         println("${mod_dir}: no test files found")
-        io_write_file(path_join(target_dir, ".timestamp"), "")
+        _e3 = io.write_file(path.join(target_dir, ".timestamp"), "")
         return 0
     }
 
     // Convert newline-separated ns list to space-separated quoted symbols
-    quoted = string_trim(os_exec("echo '${ns_list}' | sed \"s/^/'/; s/$/ /\" | tr -d '\\n'"))
+    quoted_raw, _e_q = os.exec("echo '${ns_list}' | sed \"s/^/'/; s/$/ /\" | tr -d '\\n'")
+    quoted = string.trim(quoted_raw)
 
     clj_expr = "(require ${quoted}) (let [r (clojure.test/run-tests ${quoted})] (System/exit (+ (:fail r) (:error r))))"
     cmd = "java -cp '${cp}' clojure.main -e \"${clj_expr}\""
 
     if _builder != null {
-        if map_has(_builder, "test_timeout") == 1 {
-            timeout = map_get(_builder, "test_timeout")
-            cmd = string_concat("timeout ${timeout} ", cmd)
+        if map.has(_builder, "test_timeout") == 1 {
+            timeout = map.get(_builder, "test_timeout")
+            cmd = string.concat("timeout ${timeout} ", cmd)
         }
     }
 
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")
         return exit_code
     }
     println("${mod_dir}: tests PASSED")
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e4 = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }

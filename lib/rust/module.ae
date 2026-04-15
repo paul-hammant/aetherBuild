@@ -1,129 +1,118 @@
 // rust — Rust/Cargo SDK for aether.build
 import build
-
-extern map_put(m: ptr, key: string, value: ptr)
-extern map_get(m: ptr, key: string) -> ptr
-extern map_has(m: ptr, key: string) -> int
-extern list_get(l: ptr, index: int) -> ptr
-extern list_size(l: ptr) -> int
-extern os_system(cmd: string) -> int
-extern path_join(a: string, b: string) -> string
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern io_write_file(path: string, content: string) -> int
-
-extern os_exec(cmd: string) -> string
-extern string_trim(s: string) -> string
-extern file_exists(path: string) -> int
-extern list_new() -> ptr
-extern list_add(l: ptr, item: ptr)
-extern string_contains(s: string, sub: string) -> int
-extern string_index_of(s: string, sub: string) -> int
-extern string_substring(s: string, start: int, end: int) -> string
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
 
 // --- Rust DSL setters ---
 
 lib_name(_ctx: ptr, name: string) {
-    map_put(_ctx, "lib_name", name)
+    _e = map.put(_ctx, "lib_name", name)
 }
 
 profile(_ctx: ptr, p: string) {
-    map_put(_ctx, "profile", p)
+    _e = map.put(_ctx, "profile", p)
 }
 
 features(_ctx: ptr, f: string) {
-    map_put(_ctx, "features", f)
+    _e = map.put(_ctx, "features", f)
 }
 
 jobs(_ctx: ptr, n: string) {
-    map_put(_ctx, "jobs", n)
+    _e = map.put(_ctx, "jobs", n)
 }
 
 // Set the crate/package name for -p flag (workspace member)
 crate_name(_ctx: ptr, name: string) {
-    map_put(_ctx, "crate_name", name)
+    _e = map.put(_ctx, "crate_name", name)
 }
 
 // --- Cargo.toml generation DSL setters ---
 
 edition(_ctx: ptr, e: string) {
-    map_put(_ctx, "edition", e)
+    _e = map.put(_ctx, "edition", e)
 }
 
 version(_ctx: ptr, v: string) {
-    map_put(_ctx, "version", v)
+    _e = map.put(_ctx, "version", v)
 }
 
 crate_type(_ctx: ptr, t: string) {
-    map_put(_ctx, "crate_type", t)
+    _e = map.put(_ctx, "crate_type", t)
 }
 
 lib_path(_ctx: ptr, p: string) {
-    map_put(_ctx, "lib_path", p)
+    _e = map.put(_ctx, "lib_path", p)
 }
 
 // Declare a binary target: bin("oxen", "src/main.rs")
 // Emits [[bin]] name = "..." path = "..."
 bin(_ctx: ptr, name: string, path: string) {
-    if map_has(_ctx, "_bins") == 0 {
-        map_put(_ctx, "_bins", list_new())
+    if map.has(_ctx, "_bins") == 0 {
+        _e = map.put(_ctx, "_bins", list.new())
     }
-    bins = map_get(_ctx, "_bins")
-    entry = string_concat(name, "~")
-    entry = string_concat(entry, path)
-    list_add(bins, entry)
+    bins = map.get(_ctx, "_bins")
+    entry = string.concat(name, "~")
+    entry = string.concat(entry, path)
+    _e = list.add(bins, entry)
 }
 
 // Add a crate dependency: name and version
 crate_dep(_ctx: ptr, name: string, ver: string) {
-    if map_has(_ctx, "_crate_deps") == 0 {
-        map_put(_ctx, "_crate_deps", list_new())
+    if map.has(_ctx, "_crate_deps") == 0 {
+        _e = map.put(_ctx, "_crate_deps", list.new())
     }
-    deps = map_get(_ctx, "_crate_deps")
-    entry = string_concat(name, "~")
-    entry = string_concat(entry, ver)
-    list_add(deps, entry)
+    deps = map.get(_ctx, "_crate_deps")
+    entry = string.concat(name, "~")
+    entry = string.concat(entry, ver)
+    _e = list.add(deps, entry)
 }
 
 // Add a crate dependency with features: "name", "version", "feat1,feat2"
 crate_dep_features(_ctx: ptr, name: string, ver: string, feats: string) {
-    if map_has(_ctx, "_crate_deps_features") == 0 {
-        map_put(_ctx, "_crate_deps_features", list_new())
+    if map.has(_ctx, "_crate_deps_features") == 0 {
+        _e = map.put(_ctx, "_crate_deps_features", list.new())
     }
-    deps = map_get(_ctx, "_crate_deps_features")
-    entry = string_concat(name, "~")
-    entry = string_concat(entry, ver)
-    entry = string_concat(entry, "~")
-    entry = string_concat(entry, feats)
-    list_add(deps, entry)
+    deps = map.get(_ctx, "_crate_deps_features")
+    entry = string.concat(name, "~")
+    entry = string.concat(entry, ver)
+    entry = string.concat(entry, "~")
+    entry = string.concat(entry, feats)
+    _e = list.add(deps, entry)
 }
 
 // Add a path dependency (inter-module)
 path_dep(_ctx: ptr, name: string, path: string) {
-    if map_has(_ctx, "_path_deps") == 0 {
-        map_put(_ctx, "_path_deps", list_new())
+    if map.has(_ctx, "_path_deps") == 0 {
+        _e = map.put(_ctx, "_path_deps", list.new())
     }
-    deps = map_get(_ctx, "_path_deps")
-    entry = string_concat(name, "~")
-    entry = string_concat(entry, path)
-    list_add(deps, entry)
+    deps = map.get(_ctx, "_path_deps")
+    entry = string.concat(name, "~")
+    entry = string.concat(entry, path)
+    _e = list.add(deps, entry)
 }
 
 // Declare a feature: feature("otel", "dep:opentelemetry,dep:tracing-opentelemetry")
 // Use "" for an empty feature flag (feature_name = [])
 feature(_ctx: ptr, name: string, deps_csv: string) {
-    if map_has(_ctx, "_features") == 0 {
-        map_put(_ctx, "_features", list_new())
+    if map.has(_ctx, "_features") == 0 {
+        _e = map.put(_ctx, "_features", list.new())
     }
-    feats = map_get(_ctx, "_features")
-    entry = string_concat(name, "~")
-    entry = string_concat(entry, deps_csv)
-    list_add(feats, entry)
+    feats = map.get(_ctx, "_features")
+    entry = string.concat(name, "~")
+    entry = string.concat(entry, deps_csv)
+    _e = list.add(feats, entry)
 }
 
 // Set the default features list (comma-separated)
 default_features(_ctx: ptr, feats_csv: string) {
-    map_put(_ctx, "_default_features", feats_csv)
+    _e = map.put(_ctx, "_default_features", feats_csv)
 }
 
 // --- Cargo.toml content generator ---
@@ -131,13 +120,13 @@ default_features(_ctx: ptr, feats_csv: string) {
 // Split "name=value" entries using string_index_of/string_substring.
 
 _split_first(entry: string, sep: string) {
-    idx = string_index_of(entry, sep)
-    return string_substring(entry, 0, idx)
+    idx = string.index_of(entry, sep)
+    return string.substring(entry, 0, idx)
 }
 
 _split_second(entry: string, sep: string) {
-    idx = string_index_of(entry, sep)
-    return string_substring(entry, idx + 1, string_length(entry))
+    idx = string.index_of(entry, sep)
+    return string.substring(entry, idx + 1, string.length(entry))
 }
 
 cargo_toml_content(opts: ptr) {
@@ -145,108 +134,109 @@ cargo_toml_content(opts: ptr) {
 
     // name
     if opts != null {
-        if map_has(opts, "crate_name") == 1 {
-            name = map_get(opts, "crate_name")
-            toml = string_concat(toml, "name = \"${name}\"\n")
+        if map.has(opts, "crate_name") == 1 {
+            name = map.get(opts, "crate_name")
+            toml = string.concat(toml, "name = \"${name}\"\n")
         }
     }
 
     // version
     ver = "0.1.0"
     if opts != null {
-        if map_has(opts, "version") == 1 {
-            ver = map_get(opts, "version")
+        if map.has(opts, "version") == 1 {
+            ver = map.get(opts, "version")
         }
     }
-    toml = string_concat(toml, "version = \"${ver}\"\n")
+    toml = string.concat(toml, "version = \"${ver}\"\n")
 
     // edition
     ed = "2021"
     if opts != null {
-        if map_has(opts, "edition") == 1 {
-            ed = map_get(opts, "edition")
+        if map.has(opts, "edition") == 1 {
+            ed = map.get(opts, "edition")
         }
     }
-    toml = string_concat(toml, "edition = \"${ed}\"\n")
+    toml = string.concat(toml, "edition = \"${ed}\"\n")
 
     // [lib] section if crate_type or lib_path is set
     has_lib = 0
     if opts != null {
-        if map_has(opts, "crate_type") == 1 { has_lib = 1 }
-        if map_has(opts, "lib_path") == 1 { has_lib = 1 }
+        if map.has(opts, "crate_type") == 1 { has_lib = 1 }
+        if map.has(opts, "lib_path") == 1 { has_lib = 1 }
     }
     if has_lib == 1 {
-        toml = string_concat(toml, "\n[lib]\n")
-        if map_has(opts, "lib_path") == 1 {
-            lp = map_get(opts, "lib_path")
-            toml = string_concat(toml, "path = \"${lp}\"\n")
+        toml = string.concat(toml, "\n[lib]\n")
+        if map.has(opts, "lib_path") == 1 {
+            lp = map.get(opts, "lib_path")
+            toml = string.concat(toml, "path = \"${lp}\"\n")
         }
-        if map_has(opts, "crate_type") == 1 {
-            ct = map_get(opts, "crate_type")
-            toml = string_concat(toml, "crate-type = [\"${ct}\"]\n")
+        if map.has(opts, "crate_type") == 1 {
+            ct = map.get(opts, "crate_type")
+            toml = string.concat(toml, "crate-type = [\"${ct}\"]\n")
         }
     }
 
     // [dependencies]
     has_deps = 0
     if opts != null {
-        if map_has(opts, "_crate_deps") == 1 {
+        if map.has(opts, "_crate_deps") == 1 {
             has_deps = 1
         }
-        if map_has(opts, "_crate_deps_features") == 1 {
+        if map.has(opts, "_crate_deps_features") == 1 {
             has_deps = 1
         }
-        if map_has(opts, "_path_deps") == 1 {
+        if map.has(opts, "_path_deps") == 1 {
             has_deps = 1
         }
     }
 
     if has_deps == 1 {
-        toml = string_concat(toml, "\n[dependencies]\n")
+        toml = string.concat(toml, "\n[dependencies]\n")
 
         // Simple version deps: name = "version"
-        if map_has(opts, "_crate_deps") == 1 {
-            deps = map_get(opts, "_crate_deps")
-            count = list_size(deps)
+        if map.has(opts, "_crate_deps") == 1 {
+            deps = map.get(opts, "_crate_deps")
+            count = list.size(deps)
             i = 0
             while i < count {
-                entry = list_get(deps, i)
+                entry = list.get(deps, i)
                 name = _split_first(entry, "~")
                 ver = _split_second(entry, "~")
-                toml = string_concat(toml, "${name} = \"${ver}\"\n")
+                toml = string.concat(toml, "${name} = \"${ver}\"\n")
                 i = i + 1
             }
         }
 
         // Deps with features: name = { version = "ver", features = ["f1", "f2"] }
-        if map_has(opts, "_crate_deps_features") == 1 {
-            deps = map_get(opts, "_crate_deps_features")
-            count = list_size(deps)
+        if map.has(opts, "_crate_deps_features") == 1 {
+            deps = map.get(opts, "_crate_deps_features")
+            count = list.size(deps)
             i = 0
             while i < count {
-                entry = list_get(deps, i)
+                entry = list.get(deps, i)
                 // format: name=version=feat1,feat2
                 name = _split_first(entry, "~")
                 rest = _split_second(entry, "~")
                 ver = _split_first(rest, "~")
                 feats = _split_second(rest, "~")
                 // Convert comma-separated to ["f1", "f2"]
-                feat_toml = string_trim(os_exec("echo '${feats}' | sed 's/,/\", \"/g'"))
-                toml = string_concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
+                _feat_toml_raw, _efeat_toml = os.exec("echo '${feats}' | sed 's/,/\", \"/g'")
+                feat_toml = string.trim(_feat_toml_raw)
+                toml = string.concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
                 i = i + 1
             }
         }
 
         // Path deps: name = { path = "..." }
-        if map_has(opts, "_path_deps") == 1 {
-            deps = map_get(opts, "_path_deps")
-            count = list_size(deps)
+        if map.has(opts, "_path_deps") == 1 {
+            deps = map.get(opts, "_path_deps")
+            count = list.size(deps)
             i = 0
             while i < count {
-                entry = list_get(deps, i)
+                entry = list.get(deps, i)
                 name = _split_first(entry, "~")
                 p = _split_second(entry, "~")
-                toml = string_concat(toml, "${name} = { path = \"${p}\" }\n")
+                toml = string.concat(toml, "${name} = { path = \"${p}\" }\n")
                 i = i + 1
             }
         }
@@ -261,33 +251,33 @@ cargo_toml_content(opts: ptr) {
 
 // DSL setters for workspace builder
 workspace_member(_ctx: ptr, path: string) {
-    if map_has(_ctx, "_ws_members") == 0 {
-        map_put(_ctx, "_ws_members", list_new())
+    if map.has(_ctx, "_ws_members") == 0 {
+        _e = map.put(_ctx, "_ws_members", list.new())
     }
-    members = map_get(_ctx, "_ws_members")
-    list_add(members, path)
+    members = map.get(_ctx, "_ws_members")
+    _e = list.add(members, path)
 }
 
 workspace_dep(_ctx: ptr, name: string, ver: string) {
-    if map_has(_ctx, "_ws_deps") == 0 {
-        map_put(_ctx, "_ws_deps", list_new())
+    if map.has(_ctx, "_ws_deps") == 0 {
+        _e = map.put(_ctx, "_ws_deps", list.new())
     }
-    deps = map_get(_ctx, "_ws_deps")
-    entry = string_concat(name, "~")
-    entry = string_concat(entry, ver)
-    list_add(deps, entry)
+    deps = map.get(_ctx, "_ws_deps")
+    entry = string.concat(name, "~")
+    entry = string.concat(entry, ver)
+    _e = list.add(deps, entry)
 }
 
 workspace_dep_features(_ctx: ptr, name: string, ver: string, feats: string) {
-    if map_has(_ctx, "_ws_deps_features") == 0 {
-        map_put(_ctx, "_ws_deps_features", list_new())
+    if map.has(_ctx, "_ws_deps_features") == 0 {
+        _e = map.put(_ctx, "_ws_deps_features", list.new())
     }
-    deps = map_get(_ctx, "_ws_deps_features")
-    entry = string_concat(name, "~")
-    entry = string_concat(entry, ver)
-    entry = string_concat(entry, "~")
-    entry = string_concat(entry, feats)
-    list_add(deps, entry)
+    deps = map.get(_ctx, "_ws_deps_features")
+    entry = string.concat(name, "~")
+    entry = string.concat(entry, ver)
+    entry = string.concat(entry, "~")
+    entry = string.concat(entry, feats)
+    _e = list.add(deps, entry)
 }
 
 // Advanced workspace dep with full control:
@@ -295,47 +285,45 @@ workspace_dep_features(_ctx: ptr, name: string, ver: string, feats: string) {
 // Pass "" for any field to omit it.
 // Emits: name = { version = "ver", features = [..], package = "..", default-features = false }
 workspace_dep_full(_ctx: ptr, name: string, ver: string, feats: string, pkg: string, no_default: string) {
-    if map_has(_ctx, "_ws_deps_full") == 0 {
-        map_put(_ctx, "_ws_deps_full", list_new())
+    if map.has(_ctx, "_ws_deps_full") == 0 {
+        _e = map.put(_ctx, "_ws_deps_full", list.new())
     }
-    deps = map_get(_ctx, "_ws_deps_full")
-    entry = string_concat(name, "~")
-    entry = string_concat(entry, ver)
-    entry = string_concat(entry, "~")
-    entry = string_concat(entry, feats)
-    entry = string_concat(entry, "~")
-    entry = string_concat(entry, pkg)
-    entry = string_concat(entry, "~")
-    entry = string_concat(entry, no_default)
-    list_add(deps, entry)
+    deps = map.get(_ctx, "_ws_deps_full")
+    entry = string.concat(name, "~")
+    entry = string.concat(entry, ver)
+    entry = string.concat(entry, "~")
+    entry = string.concat(entry, feats)
+    entry = string.concat(entry, "~")
+    entry = string.concat(entry, pkg)
+    entry = string.concat(entry, "~")
+    entry = string.concat(entry, no_default)
+    _e = list.add(deps, entry)
 }
 
 workspace_resolver(_ctx: ptr, r: string) {
-    map_put(_ctx, "resolver", r)
+    _e = map.put(_ctx, "resolver", r)
 }
 
 workspace_edition(_ctx: ptr, e: string) {
-    map_put(_ctx, "edition", e)
+    _e = map.put(_ctx, "edition", e)
 }
 
 workspace_version(_ctx: ptr, v: string) {
-    map_put(_ctx, "version", v)
+    _e = map.put(_ctx, "version", v)
 }
 
 // Additional [workspace.package] fields
-workspace_license_file(_ctx: ptr, v: string) { map_put(_ctx, "license_file", v) }
-workspace_license(_ctx: ptr, v: string) { map_put(_ctx, "license", v) }
-workspace_description(_ctx: ptr, v: string) { map_put(_ctx, "description", v) }
-workspace_homepage(_ctx: ptr, v: string) { map_put(_ctx, "homepage", v) }
-workspace_repository(_ctx: ptr, v: string) { map_put(_ctx, "repository", v) }
-workspace_readme(_ctx: ptr, v: string) { map_put(_ctx, "readme", v) }
-workspace_rust_version(_ctx: ptr, v: string) { map_put(_ctx, "rust_version", v) }
-workspace_keywords(_ctx: ptr, csv: string) { map_put(_ctx, "keywords", csv) }
-workspace_categories(_ctx: ptr, csv: string) { map_put(_ctx, "categories", csv) }
-
+workspace_license_file(_ctx: ptr, v: string)  { _e = map.put(_ctx, "license_file", v) }
+workspace_license(_ctx: ptr, v: string)  { _e = map.put(_ctx, "license", v) }
+workspace_description(_ctx: ptr, v: string)  { _e = map.put(_ctx, "description", v) }
+workspace_homepage(_ctx: ptr, v: string)  { _e = map.put(_ctx, "homepage", v) }
+workspace_repository(_ctx: ptr, v: string)  { _e = map.put(_ctx, "repository", v) }
+workspace_readme(_ctx: ptr, v: string)  { _e = map.put(_ctx, "readme", v) }
+workspace_rust_version(_ctx: ptr, v: string)  { _e = map.put(_ctx, "rust_version", v) }
+workspace_keywords(_ctx: ptr, csv: string)  { _e = map.put(_ctx, "keywords", csv) }
+workspace_categories(_ctx: ptr, csv: string)  { _e = map.put(_ctx, "categories", csv) }
 // Workspace exclude globs: workspace_exclude("crates/data,experiments/*")
-workspace_exclude(_ctx: ptr, csv: string) { map_put(_ctx, "exclude", csv) }
-
+workspace_exclude(_ctx: ptr, csv: string)  { _e = map.put(_ctx, "exclude", csv) }
 // Pure function: opts map → workspace Cargo.toml string
 cargo_workspace_toml_content(opts: ptr) {
     toml = "[workspace]\n"
@@ -343,153 +331,157 @@ cargo_workspace_toml_content(opts: ptr) {
     // resolver
     res = "2"
     if opts != null {
-        if map_has(opts, "resolver") == 1 {
-            res = map_get(opts, "resolver")
+        if map.has(opts, "resolver") == 1 {
+            res = map.get(opts, "resolver")
         }
     }
-    toml = string_concat(toml, "resolver = \"${res}\"\n")
+    toml = string.concat(toml, "resolver = \"${res}\"\n")
 
     // members
     if opts != null {
-        if map_has(opts, "_ws_members") == 1 {
-            members = map_get(opts, "_ws_members")
-            count = list_size(members)
+        if map.has(opts, "_ws_members") == 1 {
+            members = map.get(opts, "_ws_members")
+            count = list.size(members)
             if count > 0 {
-                toml = string_concat(toml, "members = [\n")
+                toml = string.concat(toml, "members = [\n")
                 i = 0
                 while i < count {
-                    m = list_get(members, i)
-                    toml = string_concat(toml, "    \"${m}\",\n")
+                    m = list.get(members, i)
+                    toml = string.concat(toml, "    \"${m}\",\n")
                     i = i + 1
                 }
-                toml = string_concat(toml, "]\n")
+                toml = string.concat(toml, "]\n")
             }
         }
     }
 
     // exclude globs
     if opts != null {
-        if map_has(opts, "exclude") == 1 {
-            exc = map_get(opts, "exclude")
-            exc_toml = string_trim(os_exec("echo '${exc}' | sed 's/,/\", \"/g'"))
-            toml = string_concat(toml, "exclude = [\"${exc_toml}\"]\n")
+        if map.has(opts, "exclude") == 1 {
+            exc = map.get(opts, "exclude")
+            _exc_toml_raw, _eexc_toml = os.exec("echo '${exc}' | sed 's/,/\", \"/g'")
+            exc_toml = string.trim(_exc_toml_raw)
+            toml = string.concat(toml, "exclude = [\"${exc_toml}\"]\n")
         }
     }
 
     // [workspace.package] — optional, emitted if any field is set
     has_pkg = 0
     if opts != null {
-        if map_has(opts, "edition") == 1 { has_pkg = 1 }
-        if map_has(opts, "version") == 1 { has_pkg = 1 }
-        if map_has(opts, "license_file") == 1 { has_pkg = 1 }
-        if map_has(opts, "license") == 1 { has_pkg = 1 }
-        if map_has(opts, "description") == 1 { has_pkg = 1 }
-        if map_has(opts, "homepage") == 1 { has_pkg = 1 }
-        if map_has(opts, "repository") == 1 { has_pkg = 1 }
-        if map_has(opts, "readme") == 1 { has_pkg = 1 }
-        if map_has(opts, "rust_version") == 1 { has_pkg = 1 }
-        if map_has(opts, "keywords") == 1 { has_pkg = 1 }
-        if map_has(opts, "categories") == 1 { has_pkg = 1 }
+        if map.has(opts, "edition") == 1 { has_pkg = 1 }
+        if map.has(opts, "version") == 1 { has_pkg = 1 }
+        if map.has(opts, "license_file") == 1 { has_pkg = 1 }
+        if map.has(opts, "license") == 1 { has_pkg = 1 }
+        if map.has(opts, "description") == 1 { has_pkg = 1 }
+        if map.has(opts, "homepage") == 1 { has_pkg = 1 }
+        if map.has(opts, "repository") == 1 { has_pkg = 1 }
+        if map.has(opts, "readme") == 1 { has_pkg = 1 }
+        if map.has(opts, "rust_version") == 1 { has_pkg = 1 }
+        if map.has(opts, "keywords") == 1 { has_pkg = 1 }
+        if map.has(opts, "categories") == 1 { has_pkg = 1 }
     }
     if has_pkg == 1 {
-        toml = string_concat(toml, "\n[workspace.package]\n")
-        if map_has(opts, "version") == 1 {
-            wv = map_get(opts, "version")
-            toml = string_concat(toml, "version = \"${wv}\"\n")
+        toml = string.concat(toml, "\n[workspace.package]\n")
+        if map.has(opts, "version") == 1 {
+            wv = map.get(opts, "version")
+            toml = string.concat(toml, "version = \"${wv}\"\n")
         }
-        if map_has(opts, "edition") == 1 {
-            ed = map_get(opts, "edition")
-            toml = string_concat(toml, "edition = \"${ed}\"\n")
+        if map.has(opts, "edition") == 1 {
+            ed = map.get(opts, "edition")
+            toml = string.concat(toml, "edition = \"${ed}\"\n")
         }
-        if map_has(opts, "license_file") == 1 {
-            lf = map_get(opts, "license_file")
-            toml = string_concat(toml, "license-file = \"${lf}\"\n")
+        if map.has(opts, "license_file") == 1 {
+            lf = map.get(opts, "license_file")
+            toml = string.concat(toml, "license-file = \"${lf}\"\n")
         }
-        if map_has(opts, "license") == 1 {
-            lic = map_get(opts, "license")
-            toml = string_concat(toml, "license = \"${lic}\"\n")
+        if map.has(opts, "license") == 1 {
+            lic = map.get(opts, "license")
+            toml = string.concat(toml, "license = \"${lic}\"\n")
         }
-        if map_has(opts, "description") == 1 {
-            desc = map_get(opts, "description")
-            toml = string_concat(toml, "description = \"${desc}\"\n")
+        if map.has(opts, "description") == 1 {
+            desc = map.get(opts, "description")
+            toml = string.concat(toml, "description = \"${desc}\"\n")
         }
-        if map_has(opts, "homepage") == 1 {
-            hp = map_get(opts, "homepage")
-            toml = string_concat(toml, "homepage = \"${hp}\"\n")
+        if map.has(opts, "homepage") == 1 {
+            hp = map.get(opts, "homepage")
+            toml = string.concat(toml, "homepage = \"${hp}\"\n")
         }
-        if map_has(opts, "repository") == 1 {
-            repo = map_get(opts, "repository")
-            toml = string_concat(toml, "repository = \"${repo}\"\n")
+        if map.has(opts, "repository") == 1 {
+            repo = map.get(opts, "repository")
+            toml = string.concat(toml, "repository = \"${repo}\"\n")
         }
-        if map_has(opts, "readme") == 1 {
-            rm = map_get(opts, "readme")
-            toml = string_concat(toml, "readme = \"${rm}\"\n")
+        if map.has(opts, "readme") == 1 {
+            rm = map.get(opts, "readme")
+            toml = string.concat(toml, "readme = \"${rm}\"\n")
         }
-        if map_has(opts, "rust_version") == 1 {
-            rv = map_get(opts, "rust_version")
-            toml = string_concat(toml, "rust-version = \"${rv}\"\n")
+        if map.has(opts, "rust_version") == 1 {
+            rv = map.get(opts, "rust_version")
+            toml = string.concat(toml, "rust-version = \"${rv}\"\n")
         }
-        if map_has(opts, "keywords") == 1 {
-            kw = map_get(opts, "keywords")
-            kw_toml = string_trim(os_exec("echo '${kw}' | sed 's/,/\", \"/g'"))
-            toml = string_concat(toml, "keywords = [\"${kw_toml}\"]\n")
+        if map.has(opts, "keywords") == 1 {
+            kw = map.get(opts, "keywords")
+            _kw_toml_raw, _ekw_toml = os.exec("echo '${kw}' | sed 's/,/\", \"/g'")
+            kw_toml = string.trim(_kw_toml_raw)
+            toml = string.concat(toml, "keywords = [\"${kw_toml}\"]\n")
         }
-        if map_has(opts, "categories") == 1 {
-            cats = map_get(opts, "categories")
-            cats_toml = string_trim(os_exec("echo '${cats}' | sed 's/,/\", \"/g'"))
-            toml = string_concat(toml, "categories = [\"${cats_toml}\"]\n")
+        if map.has(opts, "categories") == 1 {
+            cats = map.get(opts, "categories")
+            _cats_toml_raw, _ecats_toml = os.exec("echo '${cats}' | sed 's/,/\", \"/g'")
+            cats_toml = string.trim(_cats_toml_raw)
+            toml = string.concat(toml, "categories = [\"${cats_toml}\"]\n")
         }
     }
 
     // [workspace.dependencies]
     has_ws_deps = 0
     if opts != null {
-        if map_has(opts, "_ws_deps") == 1 { has_ws_deps = 1 }
-        if map_has(opts, "_ws_deps_features") == 1 { has_ws_deps = 1 }
-        if map_has(opts, "_ws_deps_full") == 1 { has_ws_deps = 1 }
+        if map.has(opts, "_ws_deps") == 1 { has_ws_deps = 1 }
+        if map.has(opts, "_ws_deps_features") == 1 { has_ws_deps = 1 }
+        if map.has(opts, "_ws_deps_full") == 1 { has_ws_deps = 1 }
     }
 
     if has_ws_deps == 1 {
-        toml = string_concat(toml, "\n[workspace.dependencies]\n")
+        toml = string.concat(toml, "\n[workspace.dependencies]\n")
 
         // Simple version deps
-        if map_has(opts, "_ws_deps") == 1 {
-            deps = map_get(opts, "_ws_deps")
-            count = list_size(deps)
+        if map.has(opts, "_ws_deps") == 1 {
+            deps = map.get(opts, "_ws_deps")
+            count = list.size(deps)
             i = 0
             while i < count {
-                entry = list_get(deps, i)
+                entry = list.get(deps, i)
                 name = _split_first(entry, "~")
                 ver = _split_second(entry, "~")
-                toml = string_concat(toml, "${name} = \"${ver}\"\n")
+                toml = string.concat(toml, "${name} = \"${ver}\"\n")
                 i = i + 1
             }
         }
 
         // Deps with features
-        if map_has(opts, "_ws_deps_features") == 1 {
-            deps = map_get(opts, "_ws_deps_features")
-            count = list_size(deps)
+        if map.has(opts, "_ws_deps_features") == 1 {
+            deps = map.get(opts, "_ws_deps_features")
+            count = list.size(deps)
             i = 0
             while i < count {
-                entry = list_get(deps, i)
+                entry = list.get(deps, i)
                 name = _split_first(entry, "~")
                 rest = _split_second(entry, "~")
                 ver = _split_first(rest, "~")
                 feats = _split_second(rest, "~")
-                feat_toml = string_trim(os_exec("echo '${feats}' | sed 's/,/\", \"/g'"))
-                toml = string_concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
+                _feat_toml_raw, _efeat_toml = os.exec("echo '${feats}' | sed 's/,/\", \"/g'")
+                feat_toml = string.trim(_feat_toml_raw)
+                toml = string.concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
                 i = i + 1
             }
         }
 
         // Full deps: name~version~features~package~no_default
-        if map_has(opts, "_ws_deps_full") == 1 {
-            deps = map_get(opts, "_ws_deps_full")
-            count = list_size(deps)
+        if map.has(opts, "_ws_deps_full") == 1 {
+            deps = map.get(opts, "_ws_deps_full")
+            count = list.size(deps)
             i = 0
             while i < count {
-                entry = list_get(deps, i)
+                entry = list.get(deps, i)
                 // Parse 5-field entry via progressive splits
                 f_name = _split_first(entry, "~")
                 r1 = _split_second(entry, "~")
@@ -502,33 +494,34 @@ cargo_workspace_toml_content(opts: ptr) {
 
                 line = "${f_name} = { "
                 first_field = 1
-                if string_length(f_pkg) > 0 {
-                    line = string_concat(line, "package = \"${f_pkg}\"")
+                if string.length(f_pkg) > 0 {
+                    line = string.concat(line, "package = \"${f_pkg}\"")
                     first_field = 0
                 }
-                if string_length(f_ver) > 0 {
+                if string.length(f_ver) > 0 {
                     if first_field == 0 {
-                        line = string_concat(line, ", ")
+                        line = string.concat(line, ", ")
                     }
-                    line = string_concat(line, "version = \"${f_ver}\"")
+                    line = string.concat(line, "version = \"${f_ver}\"")
                     first_field = 0
                 }
-                if string_length(f_feats) > 0 {
+                if string.length(f_feats) > 0 {
                     if first_field == 0 {
-                        line = string_concat(line, ", ")
+                        line = string.concat(line, ", ")
                     }
-                    f_feat_toml = string_trim(os_exec("echo '${f_feats}' | sed 's/,/\", \"/g'"))
-                    line = string_concat(line, "features = [\"${f_feat_toml}\"]")
+                    _f_feat_toml_raw, _ef_feat_toml = os.exec("echo '${f_feats}' | sed 's/,/\", \"/g'")
+                    f_feat_toml = string.trim(_f_feat_toml_raw)
+                    line = string.concat(line, "features = [\"${f_feat_toml}\"]")
                     first_field = 0
                 }
                 if f_nodef == "true" {
                     if first_field == 0 {
-                        line = string_concat(line, ", ")
+                        line = string.concat(line, ", ")
                     }
-                    line = string_concat(line, "default-features = false")
+                    line = string.concat(line, "default-features = false")
                 }
-                line = string_concat(line, " }\n")
-                toml = string_concat(toml, line)
+                line = string.concat(line, " }\n")
+                toml = string.concat(toml, line)
                 i = i + 1
             }
         }
@@ -542,20 +535,20 @@ cargo_workspace_toml_content(opts: ptr) {
 
 // DSL setter: reference a workspace dep by name
 ws_dep(_ctx: ptr, name: string) {
-    if map_has(_ctx, "_ws_refs") == 0 {
-        map_put(_ctx, "_ws_refs", list_new())
+    if map.has(_ctx, "_ws_refs") == 0 {
+        _e = map.put(_ctx, "_ws_refs", list.new())
     }
-    refs = map_get(_ctx, "_ws_refs")
-    list_add(refs, name)
+    refs = map.get(_ctx, "_ws_refs")
+    _e = list.add(refs, name)
 }
 
 // DSL setter: reference a workspace dep in [dev-dependencies]
 dev_ws_dep(_ctx: ptr, name: string) {
-    if map_has(_ctx, "_dev_ws_refs") == 0 {
-        map_put(_ctx, "_dev_ws_refs", list_new())
+    if map.has(_ctx, "_dev_ws_refs") == 0 {
+        _e = map.put(_ctx, "_dev_ws_refs", list.new())
     }
-    refs = map_get(_ctx, "_dev_ws_refs")
-    list_add(refs, name)
+    refs = map.get(_ctx, "_dev_ws_refs")
+    _e = list.add(refs, name)
 }
 
 // Pure function: opts map → member Cargo.toml string
@@ -564,40 +557,40 @@ cargo_crate_toml_content(opts: ptr) {
 
     // name
     if opts != null {
-        if map_has(opts, "crate_name") == 1 {
-            name = map_get(opts, "crate_name")
-            toml = string_concat(toml, "name = \"${name}\"\n")
+        if map.has(opts, "crate_name") == 1 {
+            name = map.get(opts, "crate_name")
+            toml = string.concat(toml, "name = \"${name}\"\n")
         }
     }
 
     // edition — inherit from workspace
     if opts != null {
-        if map_has(opts, "edition") == 1 {
-            toml = string_concat(toml, "edition.workspace = true\n")
+        if map.has(opts, "edition") == 1 {
+            toml = string.concat(toml, "edition.workspace = true\n")
         }
     }
 
     // version — inherit from workspace if not explicitly set
     if opts != null {
-        if map_has(opts, "version") == 1 {
-            ver = map_get(opts, "version")
-            toml = string_concat(toml, "version = \"${ver}\"\n")
+        if map.has(opts, "version") == 1 {
+            ver = map.get(opts, "version")
+            toml = string.concat(toml, "version = \"${ver}\"\n")
         }
     }
 
     // [[bin]] sections
     if opts != null {
-        if map_has(opts, "_bins") == 1 {
-            bins = map_get(opts, "_bins")
-            bcount = list_size(bins)
+        if map.has(opts, "_bins") == 1 {
+            bins = map.get(opts, "_bins")
+            bcount = list.size(bins)
             bi = 0
             while bi < bcount {
-                bentry = list_get(bins, bi)
+                bentry = list.get(bins, bi)
                 bname = _split_first(bentry, "~")
                 bpath = _split_second(bentry, "~")
-                toml = string_concat(toml, "\n[[bin]]\n")
-                toml = string_concat(toml, "name = \"${bname}\"\n")
-                toml = string_concat(toml, "path = \"${bpath}\"\n")
+                toml = string.concat(toml, "\n[[bin]]\n")
+                toml = string.concat(toml, "name = \"${bname}\"\n")
+                toml = string.concat(toml, "path = \"${bpath}\"\n")
                 bi = bi + 1
             }
         }
@@ -606,86 +599,87 @@ cargo_crate_toml_content(opts: ptr) {
     // [lib] section
     has_lib = 0
     if opts != null {
-        if map_has(opts, "crate_type") == 1 { has_lib = 1 }
-        if map_has(opts, "lib_path") == 1 { has_lib = 1 }
+        if map.has(opts, "crate_type") == 1 { has_lib = 1 }
+        if map.has(opts, "lib_path") == 1 { has_lib = 1 }
     }
     if has_lib == 1 {
-        toml = string_concat(toml, "\n[lib]\n")
-        if map_has(opts, "lib_path") == 1 {
-            lp = map_get(opts, "lib_path")
-            toml = string_concat(toml, "path = \"${lp}\"\n")
+        toml = string.concat(toml, "\n[lib]\n")
+        if map.has(opts, "lib_path") == 1 {
+            lp = map.get(opts, "lib_path")
+            toml = string.concat(toml, "path = \"${lp}\"\n")
         }
-        if map_has(opts, "crate_type") == 1 {
-            ct = map_get(opts, "crate_type")
-            toml = string_concat(toml, "crate-type = [\"${ct}\"]\n")
+        if map.has(opts, "crate_type") == 1 {
+            ct = map.get(opts, "crate_type")
+            toml = string.concat(toml, "crate-type = [\"${ct}\"]\n")
         }
     }
 
     // [dependencies]
     has_deps = 0
     if opts != null {
-        if map_has(opts, "_ws_refs") == 1 { has_deps = 1 }
-        if map_has(opts, "_crate_deps") == 1 { has_deps = 1 }
-        if map_has(opts, "_crate_deps_features") == 1 { has_deps = 1 }
-        if map_has(opts, "_path_deps") == 1 { has_deps = 1 }
+        if map.has(opts, "_ws_refs") == 1 { has_deps = 1 }
+        if map.has(opts, "_crate_deps") == 1 { has_deps = 1 }
+        if map.has(opts, "_crate_deps_features") == 1 { has_deps = 1 }
+        if map.has(opts, "_path_deps") == 1 { has_deps = 1 }
     }
 
     if has_deps == 1 {
-        toml = string_concat(toml, "\n[dependencies]\n")
+        toml = string.concat(toml, "\n[dependencies]\n")
 
         // Workspace refs: dep.workspace = true
-        if map_has(opts, "_ws_refs") == 1 {
-            refs = map_get(opts, "_ws_refs")
-            count = list_size(refs)
+        if map.has(opts, "_ws_refs") == 1 {
+            refs = map.get(opts, "_ws_refs")
+            count = list.size(refs)
             i = 0
             while i < count {
-                name = list_get(refs, i)
-                toml = string_concat(toml, "${name}.workspace = true\n")
+                name = list.get(refs, i)
+                toml = string.concat(toml, "${name}.workspace = true\n")
                 i = i + 1
             }
         }
 
         // Direct version deps (non-workspace)
-        if map_has(opts, "_crate_deps") == 1 {
-            deps = map_get(opts, "_crate_deps")
-            count = list_size(deps)
+        if map.has(opts, "_crate_deps") == 1 {
+            deps = map.get(opts, "_crate_deps")
+            count = list.size(deps)
             i = 0
             while i < count {
-                entry = list_get(deps, i)
+                entry = list.get(deps, i)
                 name = _split_first(entry, "~")
                 ver = _split_second(entry, "~")
-                toml = string_concat(toml, "${name} = \"${ver}\"\n")
+                toml = string.concat(toml, "${name} = \"${ver}\"\n")
                 i = i + 1
             }
         }
 
         // Deps with features (non-workspace)
-        if map_has(opts, "_crate_deps_features") == 1 {
-            deps = map_get(opts, "_crate_deps_features")
-            count = list_size(deps)
+        if map.has(opts, "_crate_deps_features") == 1 {
+            deps = map.get(opts, "_crate_deps_features")
+            count = list.size(deps)
             i = 0
             while i < count {
-                entry = list_get(deps, i)
+                entry = list.get(deps, i)
                 name = _split_first(entry, "~")
                 rest = _split_second(entry, "~")
                 ver = _split_first(rest, "~")
                 feats = _split_second(rest, "~")
-                feat_toml = string_trim(os_exec("echo '${feats}' | sed 's/,/\", \"/g'"))
-                toml = string_concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
+                _feat_toml_raw, _efeat_toml = os.exec("echo '${feats}' | sed 's/,/\", \"/g'")
+                feat_toml = string.trim(_feat_toml_raw)
+                toml = string.concat(toml, "${name} = { version = \"${ver}\", features = [\"${feat_toml}\"] }\n")
                 i = i + 1
             }
         }
 
         // Path deps
-        if map_has(opts, "_path_deps") == 1 {
-            deps = map_get(opts, "_path_deps")
-            count = list_size(deps)
+        if map.has(opts, "_path_deps") == 1 {
+            deps = map.get(opts, "_path_deps")
+            count = list.size(deps)
             i = 0
             while i < count {
-                entry = list_get(deps, i)
+                entry = list.get(deps, i)
                 name = _split_first(entry, "~")
                 p = _split_second(entry, "~")
-                toml = string_concat(toml, "${name} = { path = \"${p}\" }\n")
+                toml = string.concat(toml, "${name} = { path = \"${p}\" }\n")
                 i = i + 1
             }
         }
@@ -693,14 +687,14 @@ cargo_crate_toml_content(opts: ptr) {
 
     // [dev-dependencies] section
     if opts != null {
-        if map_has(opts, "_dev_ws_refs") == 1 {
-            toml = string_concat(toml, "\n[dev-dependencies]\n")
-            dev_refs = map_get(opts, "_dev_ws_refs")
-            dcount = list_size(dev_refs)
+        if map.has(opts, "_dev_ws_refs") == 1 {
+            toml = string.concat(toml, "\n[dev-dependencies]\n")
+            dev_refs = map.get(opts, "_dev_ws_refs")
+            dcount = list.size(dev_refs)
             di = 0
             while di < dcount {
-                dname = list_get(dev_refs, di)
-                toml = string_concat(toml, "${dname}.workspace = true\n")
+                dname = list.get(dev_refs, di)
+                toml = string.concat(toml, "${dname}.workspace = true\n")
                 di = di + 1
             }
         }
@@ -709,32 +703,34 @@ cargo_crate_toml_content(opts: ptr) {
     // [features] section
     has_features = 0
     if opts != null {
-        if map_has(opts, "_features") == 1 { has_features = 1 }
-        if map_has(opts, "_default_features") == 1 { has_features = 1 }
+        if map.has(opts, "_features") == 1 { has_features = 1 }
+        if map.has(opts, "_default_features") == 1 { has_features = 1 }
     }
     if has_features == 1 {
-        toml = string_concat(toml, "\n[features]\n")
+        toml = string.concat(toml, "\n[features]\n")
         // default = [...]
-        if map_has(opts, "_default_features") == 1 {
-            df = map_get(opts, "_default_features")
+        if map.has(opts, "_default_features") == 1 {
+            df = map.get(opts, "_default_features")
             // Convert comma-separated to "a", "b", "c"
-            df_toml = string_trim(os_exec("echo '${df}' | sed 's/,/\", \"/g'"))
-            toml = string_concat(toml, "default = [\"${df_toml}\"]\n")
+            _df_toml_raw, _edf_toml = os.exec("echo '${df}' | sed 's/,/\", \"/g'")
+            df_toml = string.trim(_df_toml_raw)
+            toml = string.concat(toml, "default = [\"${df_toml}\"]\n")
         }
         // Individual feature declarations
-        if map_has(opts, "_features") == 1 {
-            feats = map_get(opts, "_features")
-            fcount = list_size(feats)
+        if map.has(opts, "_features") == 1 {
+            feats = map.get(opts, "_features")
+            fcount = list.size(feats)
             fi = 0
             while fi < fcount {
-                fentry = list_get(feats, fi)
+                fentry = list.get(feats, fi)
                 fname = _split_first(fentry, "~")
                 fdeps_csv = _split_second(fentry, "~")
-                if string_length(fdeps_csv) == 0 {
-                    toml = string_concat(toml, "${fname} = []\n")
+                if string.length(fdeps_csv) == 0 {
+                    toml = string.concat(toml, "${fname} = []\n")
                 } else {
-                    fdeps_toml = string_trim(os_exec("echo '${fdeps_csv}' | sed 's/,/\", \"/g'"))
-                    toml = string_concat(toml, "${fname} = [\"${fdeps_toml}\"]\n")
+                    _fdeps_toml_raw, _efdeps_toml = os.exec("echo '${fdeps_csv}' | sed 's/,/\", \"/g'")
+                    fdeps_toml = string.trim(_fdeps_toml_raw)
+                    toml = string.concat(toml, "${fname} = [\"${fdeps_toml}\"]\n")
                 }
                 fi = fi + 1
             }
@@ -752,66 +748,72 @@ cargo_crate_toml_content(opts: ptr) {
 load_workspace_deps(_ctx: ptr, rel_path: string) {
     // rel_path is relative to source_dir or absolute
     full_path = rel_path
-    if file_exists(full_path) == 0 {
+    if file.exists(full_path) == 0 {
         println("warning: workspace deps file not found: ${full_path}")
         return 0
     }
 
     // Extract simple deps: workspace_dep("name", "ver")
-    simple = string_trim(os_exec("grep 'workspace_dep(' '${full_path}' | grep -v 'workspace_dep_features' | grep -v 'workspace_dep_full' | sed 's/.*workspace_dep(\"//; s/\", \"/~/; s/\").*//'"))
-    if string_length(simple) > 0 {
-        if map_has(_ctx, "_ws_deps") == 0 {
-            map_put(_ctx, "_ws_deps", list_new())
+    _simple_raw, _esimple = os.exec("grep 'workspace_dep(' '${full_path}' | grep -v 'workspace_dep_features' | grep -v 'workspace_dep_full' | sed 's/.*workspace_dep(\"//; s/\", \"/~/; s/\").*//'")
+    simple = string.trim(_simple_raw)
+    if string.length(simple) > 0 {
+        if map.has(_ctx, "_ws_deps") == 0 {
+            _e = map.put(_ctx, "_ws_deps", list.new())
         }
-        deps = map_get(_ctx, "_ws_deps")
+        deps = map.get(_ctx, "_ws_deps")
         si = 1
         sline = ""
         while si <= 500 {
-            sline = string_trim(os_exec("echo '${simple}' | sed -n '${si}p'"))
-            if string_length(sline) == 0 {
+            _sline_raw, _esline = os.exec("echo '${simple}' | sed -n '${si}p'")
+            sline = string.trim(_sline_raw)
+            if string.length(sline) == 0 {
                 si = 999
             } else {
-                list_add(deps, sline)
+                _e = list.add(deps, sline)
                 si = si + 1
             }
         }
     }
 
     // Extract feature deps: workspace_dep_features("name", "ver", "feat1,feat2")
-    featured = string_trim(os_exec("grep 'workspace_dep_features(' '${full_path}' | sed 's/.*workspace_dep_features(\"//; s/\", \"/~/g; s/\").*//'"))
-    if string_length(featured) > 0 {
-        if map_has(_ctx, "_ws_deps_features") == 0 {
-            map_put(_ctx, "_ws_deps_features", list_new())
+    _featured_raw, _efeatured = os.exec("grep 'workspace_dep_features(' '${full_path}' | sed 's/.*workspace_dep_features(\"//; s/\", \"/~/g; s/\").*//'")
+    featured = string.trim(_featured_raw)
+    if string.length(featured) > 0 {
+        if map.has(_ctx, "_ws_deps_features") == 0 {
+            _e = map.put(_ctx, "_ws_deps_features", list.new())
         }
-        fdeps = map_get(_ctx, "_ws_deps_features")
+        fdeps = map.get(_ctx, "_ws_deps_features")
         fi = 1
         fline = ""
         while fi <= 500 {
-            fline = string_trim(os_exec("echo '${featured}' | sed -n '${fi}p'"))
-            if string_length(fline) == 0 {
+            _fline_raw, _efline = os.exec("echo '${featured}' | sed -n '${fi}p'")
+            fline = string.trim(_fline_raw)
+            if string.length(fline) == 0 {
                 fi = 999
             } else {
-                list_add(fdeps, fline)
+                _e = list.add(fdeps, fline)
                 fi = fi + 1
             }
         }
     }
 
     // Extract full deps: workspace_dep_full("name", "ver", "feats", "pkg", "nodef")
-    full = string_trim(os_exec("grep 'workspace_dep_full(' '${full_path}' | sed 's/.*workspace_dep_full(\"//; s/\", \"/~/g; s/\").*//'"))
-    if string_length(full) > 0 {
-        if map_has(_ctx, "_ws_deps_full") == 0 {
-            map_put(_ctx, "_ws_deps_full", list_new())
+    _full_raw, _efull = os.exec("grep 'workspace_dep_full(' '${full_path}' | sed 's/.*workspace_dep_full(\"//; s/\", \"/~/g; s/\").*//'")
+    full = string.trim(_full_raw)
+    if string.length(full) > 0 {
+        if map.has(_ctx, "_ws_deps_full") == 0 {
+            _e = map.put(_ctx, "_ws_deps_full", list.new())
         }
-        full_deps = map_get(_ctx, "_ws_deps_full")
+        full_deps = map.get(_ctx, "_ws_deps_full")
         fui = 1
         fuline = ""
         while fui <= 500 {
-            fuline = string_trim(os_exec("echo '${full}' | sed -n '${fui}p'"))
-            if string_length(fuline) == 0 {
+            _fuline_raw, _efuline = os.exec("echo '${full}' | sed -n '${fui}p'")
+            fuline = string.trim(_fuline_raw)
+            if string.length(fuline) == 0 {
                 fui = 999
             } else {
-                list_add(full_deps, fuline)
+                _e = list.add(full_deps, fuline)
                 fui = fui + 1
             }
         }
@@ -822,7 +824,6 @@ load_workspace_deps(_ctx: ptr, rel_path: string) {
 // --- cargo_workspace builder: generate root Cargo.toml for a workspace ---
 
 builder cargo_workspace(ctx: ptr) {
-    root = build._get(ctx, "root")
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
@@ -831,8 +832,8 @@ builder cargo_workspace(ctx: ptr) {
 
     // Generate workspace Cargo.toml
     toml = cargo_workspace_toml_content(_builder)
-    cargo_toml = path_join(source_dir, "Cargo.toml")
-    io_write_file(cargo_toml, toml)
+    cargo_toml = path.join(source_dir, "Cargo.toml")
+    _e = io.write_file(cargo_toml, toml)
     println("${mod_dir}: generated workspace Cargo.toml")
 
     // Also generate member Cargo.tomls from their .build.ae files
@@ -840,7 +841,7 @@ builder cargo_workspace(ctx: ptr) {
     // via the member_tomls map during aeb's topo-sorted execution.
     // For now, we just generate the workspace root.
 
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
 
@@ -855,12 +856,12 @@ builder check_workspace(ctx: ptr) {
 
     println("${mod_dir}: cargo check --workspace")
     cmd = "cd '${source_dir}' && cargo check --workspace"
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: cargo check --workspace failed")
         return exit_code
     }
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
 
@@ -874,12 +875,12 @@ builder test_workspace(ctx: ptr) {
 
     println("${mod_dir}: cargo test --workspace")
     cmd = "cd '${source_dir}' && cargo test --workspace"
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: cargo test --workspace failed")
         return exit_code
     }
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
 
@@ -889,17 +890,16 @@ builder cargo_crate(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
-    root = build._get(ctx, "root")
 
     build._mkdirs(target_dir)
 
     // Generate member Cargo.toml only — use rust.check() separately for compilation
     toml = cargo_crate_toml_content(_builder)
-    cargo_toml = path_join(source_dir, "Cargo.toml")
-    io_write_file(cargo_toml, toml)
+    cargo_toml = path.join(source_dir, "Cargo.toml")
+    _e = io.write_file(cargo_toml, toml)
     println("${mod_dir}: generated member Cargo.toml")
 
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
 
@@ -958,27 +958,28 @@ builder crate_registry_features(ctx: ptr, name_ver_feats: string) {
 //   rust_registry_features_deps_including_transitive → _crate_deps_features (name~ver~feats)
 _merge_rust_dep_artifacts(ctx: ptr, bld: ptr) {
     if bld == null { return 0 }
-    deps = map_get(ctx, "deps")
-    dep_count = list_size(deps)
+    deps = map.get(ctx, "deps")
+    dep_count = list.size(deps)
     di = 0
     while di < dep_count {
-        dp = list_get(deps, di)
+        dp = list.get(deps, di)
         dm = build._strip_lang(dp)
 
         // --- path deps ---
         raw_path = build._read_dep_artifact(ctx, dm, "rust_path_deps_including_transitive")
-        if string_length(raw_path) > 0 {
-            if map_has(bld, "_path_deps") == 0 {
-                map_put(bld, "_path_deps", list_new())
+        if string.length(raw_path) > 0 {
+            if map.has(bld, "_path_deps") == 0 {
+                _e = map.put(bld, "_path_deps", list.new())
             }
-            pd_list = map_get(bld, "_path_deps")
+            pd_list = map.get(bld, "_path_deps")
             i = 1
             while i <= 200 {
-                line = string_trim(os_exec("printf '%s\\n' '${raw_path}' | sed -n '${i}p'"))
-                if string_length(line) == 0 {
+                _line_raw, _eline = os.exec("printf '%s\\n' '${raw_path}' | sed -n '${i}p'")
+                line = string.trim(_line_raw)
+                if string.length(line) == 0 {
                     i = 999
                 } else {
-                    list_add(pd_list, line)
+                    _e = list.add(pd_list, line)
                     i = i + 1
                 }
             }
@@ -986,18 +987,19 @@ _merge_rust_dep_artifacts(ctx: ptr, bld: ptr) {
 
         // --- simple registry deps ---
         raw_reg = build._read_dep_artifact(ctx, dm, "rust_registry_deps_including_transitive")
-        if string_length(raw_reg) > 0 {
-            if map_has(bld, "_crate_deps") == 0 {
-                map_put(bld, "_crate_deps", list_new())
+        if string.length(raw_reg) > 0 {
+            if map.has(bld, "_crate_deps") == 0 {
+                _e = map.put(bld, "_crate_deps", list.new())
             }
-            cd_list = map_get(bld, "_crate_deps")
+            cd_list = map.get(bld, "_crate_deps")
             j = 1
             while j <= 200 {
-                rline = string_trim(os_exec("printf '%s\\n' '${raw_reg}' | sed -n '${j}p'"))
-                if string_length(rline) == 0 {
+                _rline_raw, _erline = os.exec("printf '%s\\n' '${raw_reg}' | sed -n '${j}p'")
+                rline = string.trim(_rline_raw)
+                if string.length(rline) == 0 {
                     j = 999
                 } else {
-                    list_add(cd_list, rline)
+                    _e = list.add(cd_list, rline)
                     j = j + 1
                 }
             }
@@ -1005,18 +1007,19 @@ _merge_rust_dep_artifacts(ctx: ptr, bld: ptr) {
 
         // --- feature registry deps ---
         raw_feat = build._read_dep_artifact(ctx, dm, "rust_registry_features_deps_including_transitive")
-        if string_length(raw_feat) > 0 {
-            if map_has(bld, "_crate_deps_features") == 0 {
-                map_put(bld, "_crate_deps_features", list_new())
+        if string.length(raw_feat) > 0 {
+            if map.has(bld, "_crate_deps_features") == 0 {
+                _e = map.put(bld, "_crate_deps_features", list.new())
             }
-            fd_list = map_get(bld, "_crate_deps_features")
+            fd_list = map.get(bld, "_crate_deps_features")
             k = 1
             while k <= 200 {
-                fline = string_trim(os_exec("printf '%s\\n' '${raw_feat}' | sed -n '${k}p'"))
-                if string_length(fline) == 0 {
+                _fline_raw, _efline = os.exec("printf '%s\\n' '${raw_feat}' | sed -n '${k}p'")
+                fline = string.trim(_fline_raw)
+                if string.length(fline) == 0 {
                     k = 999
                 } else {
-                    list_add(fd_list, fline)
+                    _e = list.add(fd_list, fline)
                     k = k + 1
                 }
             }
@@ -1028,17 +1031,16 @@ _merge_rust_dep_artifacts(ctx: ptr, bld: ptr) {
 }
 
 builder cargo_project(ctx: ptr) {
-    root = build._get(ctx, "root")
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
 
     build._mkdirs(target_dir)
 
-    lib_dir = path_join(target_dir, "lib")
+    lib_dir = path.join(target_dir, "lib")
     build._mkdirs(lib_dir)
 
-    ts_file = path_join(lib_dir, ".timestamp")
+    ts_file = path.join(lib_dir, ".timestamp")
     if build._needs_rebuild(source_dir, ts_file) == 0 {
         println("${mod_dir}: skipping compilation of prod code (not changed)")
         return 0
@@ -1049,14 +1051,14 @@ builder cargo_project(ctx: ptr) {
 
     // Generate Cargo.toml from DSL (cargo requires this exact filename)
     toml = cargo_toml_content(_builder)
-    cargo_toml = path_join(source_dir, "Cargo.toml")
-    io_write_file(cargo_toml, toml)
+    cargo_toml = path.join(source_dir, "Cargo.toml")
+    _e = io.write_file(cargo_toml, toml)
     println("${mod_dir}: generated Cargo.toml")
 
     // Build
     println("${mod_dir}: compiling prod code (cargo build)")
     cargo_cmd = cargo_build_cmd(source_dir, target_dir, _builder)
-    exit_code = os_system(cargo_cmd)
+    exit_code = os.system(cargo_cmd)
     if exit_code != 0 {
         println("${mod_dir}: cargo build failed")
         return exit_code
@@ -1064,16 +1066,16 @@ builder cargo_project(ctx: ptr) {
 
     // Write shared library artifact if lib_name is set
     if _builder != null {
-        if map_has(_builder, "lib_name") == 1 {
-            cb_lib_name = map_get(_builder, "lib_name")
-            release_dir = path_join(lib_dir, "release")
-            full_so = path_join(release_dir, cb_lib_name)
+        if map.has(_builder, "lib_name") == 1 {
+            cb_lib_name = map.get(_builder, "lib_name")
+            release_dir = path.join(lib_dir, "release")
+            full_so = path.join(release_dir, cb_lib_name)
             build._write_artifact(ctx, "ldlibdeps", full_so)
             build._write_artifact(ctx, "shared_library_deps_including_transitive", full_so)
         }
     }
 
-    io_write_file(ts_file, "")
+    _e = io.write_file(ts_file, "")
     return 0
 }
 
@@ -1084,33 +1086,33 @@ cargo_build_cmd(source_dir: string, target_dir: string, opts: ptr) {
 
     has_profile = 0
     if opts != null {
-        if map_has(opts, "profile") == 1 {
-            val = map_get(opts, "profile")
-            cmd = string_concat(cmd, " --profile ${val}")
+        if map.has(opts, "profile") == 1 {
+            val = map.get(opts, "profile")
+            cmd = string.concat(cmd, " --profile ${val}")
             has_profile = 1
         }
     }
     if has_profile == 0 {
-        cmd = string_concat(cmd, " --release")
+        cmd = string.concat(cmd, " --release")
     }
 
     if opts != null {
-        if map_has(opts, "features") == 1 {
-            val = map_get(opts, "features")
-            cmd = string_concat(cmd, " --features ${val}")
+        if map.has(opts, "features") == 1 {
+            val = map.get(opts, "features")
+            cmd = string.concat(cmd, " --features ${val}")
         }
-        if map_has(opts, "jobs") == 1 {
-            val = map_get(opts, "jobs")
-            cmd = string_concat(cmd, " --jobs ${val}")
+        if map.has(opts, "jobs") == 1 {
+            val = map.get(opts, "jobs")
+            cmd = string.concat(cmd, " --jobs ${val}")
         }
-        if map_has(opts, "extra") == 1 {
-            val = map_get(opts, "extra")
-            cmd = string_concat(cmd, " ${val}")
+        if map.has(opts, "extra") == 1 {
+            val = map.get(opts, "extra")
+            cmd = string.concat(cmd, " ${val}")
         }
     }
 
-    lib_dir = path_join(target_dir, "lib")
-    cmd = string_concat(cmd, " --target-dir=${lib_dir}")
+    lib_dir = path.join(target_dir, "lib")
+    cmd = string.concat(cmd, " --target-dir=${lib_dir}")
     return cmd
 }
 
@@ -1121,30 +1123,28 @@ _write_cargo_config(config_path: string) {
     line2 = "replace-with = 'local-registry'"
     line3 = "[source.local-registry]"
     line4 = "local-registry = '../../../libs/rust/registry'"
-    cfg = string_concat(line1, "\n")
-    cfg = string_concat(cfg, line2)
-    cfg = string_concat(cfg, "\n\n")
-    cfg = string_concat(cfg, line3)
-    cfg = string_concat(cfg, "\n")
-    cfg = string_concat(cfg, line4)
-    cfg = string_concat(cfg, "\n")
-    io_write_file(config_path, cfg)
+    cfg = string.concat(line1, "\n")
+    cfg = string.concat(cfg, line2)
+    cfg = string.concat(cfg, "\n\n")
+    cfg = string.concat(cfg, line3)
+    cfg = string.concat(cfg, "\n")
+    cfg = string.concat(cfg, line4)
+    cfg = string.concat(cfg, "\n")
+    _e = io.write_file(config_path, cfg)
 }
 
 // --- SDK functions ---
 
 builder cargo_build(ctx: ptr) {
-    root = build._get(ctx, "root")
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
-    mod_name = build._get(ctx, "module")
     mod_dir = build._get(ctx, "module_dir")
-    cdeps = map_get(ctx, "cargo_deps")
+    cdeps = map.get(ctx, "cargo_deps")
 
-    lib_dir = path_join(target_dir, "lib")
+    lib_dir = path.join(target_dir, "lib")
     build._mkdirs(lib_dir)
 
-    ts_file = path_join(lib_dir, ".timestamp")
+    ts_file = path.join(lib_dir, ".timestamp")
     if build._needs_rebuild(source_dir, ts_file) == 0 {
         println("${mod_dir}: skipping compilation of prod code (not changed)")
         return 0
@@ -1152,29 +1152,29 @@ builder cargo_build(ctx: ptr) {
 
     println("${mod_dir}: compiling prod code")
 
-    cdep_count = list_size(cdeps)
+    cdep_count = list.size(cdeps)
     cdep_content = ""
     i = 0
     while i < cdep_count {
-        cd = list_get(cdeps, i)
+        cd = list.get(cdeps, i)
         if i == 0 {
-            cdep_content = string_concat(cd, "")
+            cdep_content = string.concat(cd, "")
         } else {
-            nl = string_concat(cdep_content, "\n")
-            cdep_content = string_concat(nl, cd)
+            nl = string.concat(cdep_content, "\n")
+            cdep_content = string.concat(nl, cd)
         }
         i = i + 1
     }
     build._write_artifact(ctx, "cargo_deps_including_transitive", cdep_content)
 
-    cargo_dir = path_join(target_dir, ".cargo")
+    cargo_dir = path.join(target_dir, ".cargo")
     build._mkdirs(cargo_dir)
-    cargo_config = path_join(cargo_dir, "config.toml")
-    os_system("mkdir -p ${cargo_dir}")
+    cargo_config = path.join(cargo_dir, "config.toml")
+    os.system("mkdir -p ${cargo_dir}")
     _write_cargo_config(cargo_config)
 
     cargo_cmd = cargo_build_cmd(source_dir, target_dir, _builder)
-    exit_code = os_system(cargo_cmd)
+    exit_code = os.system(cargo_cmd)
     if exit_code != 0 {
         println("${mod_dir}: cargo build failed")
         return exit_code
@@ -1182,26 +1182,25 @@ builder cargo_build(ctx: ptr) {
 
     cb_lib_name = ""
     if _builder != null {
-        if map_has(_builder, "lib_name") == 1 {
-            cb_lib_name = map_get(_builder, "lib_name")
+        if map.has(_builder, "lib_name") == 1 {
+            cb_lib_name = map.get(_builder, "lib_name")
         }
     }
-    if string_length(cb_lib_name) == 0 {
+    if string.length(cb_lib_name) == 0 {
         println("${mod_dir}: lib_name() is required for cargo_build")
         return 1
     }
-    release_dir = path_join(lib_dir, "release")
-    full_so = path_join(release_dir, cb_lib_name)
+    release_dir = path.join(lib_dir, "release")
+    full_so = path.join(release_dir, cb_lib_name)
     build._write_artifact(ctx, "ldlibdeps", full_so)
     build._write_artifact(ctx, "shared_library_deps_including_transitive", full_so)
-    io_write_file(ts_file, "")
+    _e = io.write_file(ts_file, "")
     return 0
 }
 
 // Compile-check a workspace crate via cargo check -p <name>.
 // Runs from the workspace root (where Cargo.toml [workspace] lives).
 builder check(ctx: ptr) {
-    source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
     root = build._get(ctx, "root")
@@ -1211,11 +1210,11 @@ builder check(ctx: ptr) {
     // Derive crate name from Cargo.toml or DSL
     crate = ""
     if _builder != null {
-        if map_has(_builder, "crate_name") == 1 {
-            crate = map_get(_builder, "crate_name")
+        if map.has(_builder, "crate_name") == 1 {
+            crate = map.get(_builder, "crate_name")
         }
     }
-    if string_length(crate) == 0 {
+    if string.length(crate) == 0 {
         println("${mod_dir}: crate_name() is required")
         return 1
     }
@@ -1224,25 +1223,24 @@ builder check(ctx: ptr) {
 
     cmd = "cd '${root}' && cargo check -p ${crate}"
     if _builder != null {
-        if map_has(_builder, "features") == 1 {
-            val = map_get(_builder, "features")
-            cmd = string_concat(cmd, " --features ${val}")
+        if map.has(_builder, "features") == 1 {
+            val = map.get(_builder, "features")
+            cmd = string.concat(cmd, " --features ${val}")
         }
     }
 
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: cargo check failed")
         return exit_code
     }
 
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
 
 // Run tests for a workspace crate via cargo test -p <name>.
 builder test(ctx: ptr) {
-    source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
     root = build._get(ctx, "root")
@@ -1251,11 +1249,11 @@ builder test(ctx: ptr) {
 
     crate = ""
     if _builder != null {
-        if map_has(_builder, "crate_name") == 1 {
-            crate = map_get(_builder, "crate_name")
+        if map.has(_builder, "crate_name") == 1 {
+            crate = map.get(_builder, "crate_name")
         }
     }
-    if string_length(crate) == 0 {
+    if string.length(crate) == 0 {
         println("${mod_dir}: crate_name() is required")
         return 1
     }
@@ -1264,25 +1262,24 @@ builder test(ctx: ptr) {
 
     cmd = "cd '${root}' && cargo test -p ${crate}"
     if _builder != null {
-        if map_has(_builder, "features") == 1 {
-            val = map_get(_builder, "features")
-            cmd = string_concat(cmd, " --features ${val}")
+        if map.has(_builder, "features") == 1 {
+            val = map.get(_builder, "features")
+            cmd = string.concat(cmd, " --features ${val}")
         }
     }
 
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")
         return exit_code
     }
     println("${mod_dir}: tests PASSED")
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
 
 // Build a workspace crate binary via cargo build -p <name> --release.
 builder build_crate(ctx: ptr) {
-    source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
     root = build._get(ctx, "root")
@@ -1291,11 +1288,11 @@ builder build_crate(ctx: ptr) {
 
     crate = ""
     if _builder != null {
-        if map_has(_builder, "crate_name") == 1 {
-            crate = map_get(_builder, "crate_name")
+        if map.has(_builder, "crate_name") == 1 {
+            crate = map.get(_builder, "crate_name")
         }
     }
-    if string_length(crate) == 0 {
+    if string.length(crate) == 0 {
         println("${mod_dir}: crate_name() is required")
         return 1
     }
@@ -1304,22 +1301,22 @@ builder build_crate(ctx: ptr) {
 
     cmd = "cd '${root}' && cargo build -p ${crate} --release"
     if _builder != null {
-        if map_has(_builder, "features") == 1 {
-            val = map_get(_builder, "features")
-            cmd = string_concat(cmd, " --features ${val}")
+        if map.has(_builder, "features") == 1 {
+            val = map.get(_builder, "features")
+            cmd = string.concat(cmd, " --features ${val}")
         }
-        if map_has(_builder, "jobs") == 1 {
-            val = map_get(_builder, "jobs")
-            cmd = string_concat(cmd, " --jobs ${val}")
+        if map.has(_builder, "jobs") == 1 {
+            val = map.get(_builder, "jobs")
+            cmd = string.concat(cmd, " --jobs ${val}")
         }
     }
 
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: cargo build failed")
         return exit_code
     }
 
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }

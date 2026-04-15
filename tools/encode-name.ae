@@ -15,32 +15,29 @@
 // `__` with a sentinel that won't collide with any later substitution,
 // then run the other replacements, then put the `__` back.
 
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_index_of(s: string, sub: string) -> int
-extern string_substring(s: string, start: int, end: int) -> string
-extern aether_args_count() -> int
-extern aether_args_get(index: int) -> string
+import std.string
+import std.os
+
 extern println(s: string)
 extern exit(code: int)
 
 // string_replace_all(haystack, find, replace)
 // Pure-Aether scan-and-replace. find must be non-empty.
 string_replace_all(haystack: string, find: string, replace: string) {
-    flen = string_length(find)
-    if flen == 0 { return string_substring(haystack, 0, string_length(haystack)) }
+    flen = string.length(find)
+    if flen == 0 { return string.substring(haystack, 0, string.length(haystack)) }
     out = ""
     rest = haystack
-    while string_length(rest) > 0 {
-        idx = string_index_of(rest, find)
+    while string.length(rest) > 0 {
+        idx = string.index_of(rest, find)
         if idx < 0 {
-            return string_concat(out, rest)
+            return string.concat(out, rest)
         }
-        out = string_concat(out, string_substring(rest, 0, idx))
-        out = string_concat(out, replace)
-        rest = string_substring(rest, idx + flen, string_length(rest))
+        out = string.concat(out, string.substring(rest, 0, idx))
+        out = string.concat(out, replace)
+        rest = string.substring(rest, idx + flen, string.length(rest))
     }
-    return string_concat(out, "")
+    return string.concat(out, "")
 }
 
 encode_name(input: string) {
@@ -56,7 +53,7 @@ encode_name(input: string) {
     // Wrap final return in an extern string fn so Aether's type inference
     // sees encode_name as returning string (user-fn return types aren't
     // chased through to the caller).
-    return string_concat(s, "")
+    return string.concat(s, "")
 }
 
 main() {

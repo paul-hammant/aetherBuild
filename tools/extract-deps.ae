@@ -11,36 +11,31 @@
 //
 // Usage: extract-deps <ae-file>
 
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_index_of(s: string, sub: string) -> int
-extern string_substring(s: string, start: int, end: int) -> string
-extern string_ends_with(s: string, suffix: string) -> int
-extern io_read_file(path: string) -> string
-extern file_exists(path: string) -> int
-extern aether_args_count() -> int
-extern aether_args_get(index: int) -> string
-extern print(s: string)
+import std.string
+import std.file
+import std.io
+import std.os
+
 extern println(s: string)
 extern exit(code: int)
 
 resolve_dep(dep: string) {
-    if string_ends_with(dep, ".ae") == 1 {
-        return string_concat(dep, "")
+    if string.ends_with(dep, ".ae") == 1 {
+        return string.concat(dep, "")
     }
-    build_path = string_concat(dep, "/.build.ae")
-    if file_exists(build_path) == 1 {
+    build_path = string.concat(dep, "/.build.ae")
+    if file.exists(build_path) == 1 {
         return build_path
     }
-    tests_path = string_concat(dep, "/.tests.ae")
-    if file_exists(tests_path) == 1 {
+    tests_path = string.concat(dep, "/.tests.ae")
+    if file.exists(tests_path) == 1 {
         return tests_path
     }
-    dist_path = string_concat(dep, "/.dist.ae")
-    if file_exists(dist_path) == 1 {
+    dist_path = string.concat(dep, "/.dist.ae")
+    if file.exists(dist_path) == 1 {
         return dist_path
     }
-    return string_concat(build_path, "")
+    return string.concat(build_path, "")
 }
 
 main() {
@@ -49,36 +44,40 @@ main() {
         println("Usage: extract-deps <ae-file>")
         exit(1)
     }
-    file = aether_args_get(1)
-    if file_exists(file) == 0 {
+    path = aether_args_get(1)
+    if file.exists(path) == 0 {
         // Match bash's `2>/dev/null || true` — silent on missing file.
         return 0
     }
 
-    content = io_read_file(file)
+    content, rerr = io.read_file(path)
+    if rerr != "" {
+        // Silent on read failure — same as bash's `|| true` behavior.
+        return 0
+    }
     needle = "dep(b, \""
-    nlen = string_length(needle)
+    nlen = string.length(needle)
 
     rest = content
     out = ""
-    while string_length(rest) > 0 {
-        idx = string_index_of(rest, needle)
+    while string.length(rest) > 0 {
+        idx = string.index_of(rest, needle)
         if idx < 0 {
             rest = ""
         } else {
             after_open = idx + nlen
-            tail = string_substring(rest, after_open, string_length(rest))
-            close = string_index_of(tail, "\"")
+            tail = string.substring(rest, after_open, string.length(rest))
+            close = string.index_of(tail, "\"")
             if close < 0 {
                 rest = ""
             } else {
-                dep = string_substring(tail, 0, close)
+                dep = string.substring(tail, 0, close)
                 resolved = resolve_dep(dep)
-                if string_length(out) > 0 {
-                    out = string_concat(out, " ")
+                if string.length(out) > 0 {
+                    out = string.concat(out, " ")
                 }
-                out = string_concat(out, resolved)
-                rest = string_substring(tail, close + 1, string_length(tail))
+                out = string.concat(out, resolved)
+                rest = string.substring(tail, close + 1, string.length(tail))
             }
         }
     }
@@ -86,7 +85,7 @@ main() {
     // Bash version emits a trailing space and then echo adds a newline;
     // we emit a single trailing space too for byte-exact compat with
     // anything that trimmed it.
-    if string_length(out) > 0 {
+    if string.length(out) > 0 {
         print(out)
         print(" ")
     }

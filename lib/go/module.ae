@@ -1,63 +1,59 @@
 // go — Go SDK for aether.build
 import build
-
-extern map_put(m: ptr, key: string, value: ptr)
-extern map_get(m: ptr, key: string) -> ptr
-extern map_has(m: ptr, key: string) -> int
-extern list_get(l: ptr, index: int) -> ptr
-extern list_size(l: ptr) -> int
-extern os_system(cmd: string) -> int
-extern os_exec(cmd: string) -> string
-extern path_join(a: string, b: string) -> string
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_trim(s: string) -> string
-extern io_write_file(path: string, content: string) -> int
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
 
 // --- Go DSL setters ---
 
 build_mode(_ctx: ptr, m: string) {
-    map_put(_ctx, "mode", m)
+    _e = map.put(_ctx, "mode", m)
 }
 
 output_file(_ctx: ptr, f: string) {
-    map_put(_ctx, "output", f)
+    _e = map.put(_ctx, "output", f)
 }
 
 tags(_ctx: ptr, t: string) {
-    map_put(_ctx, "tags", t)
+    _e = map.put(_ctx, "tags", t)
 }
 
 ldflags(_ctx: ptr, f: string) {
-    map_put(_ctx, "ldflags", f)
+    _e = map.put(_ctx, "ldflags", f)
 }
 
 race(_ctx: ptr) {
-    map_put(_ctx, "race", "true")
+    _e = map.put(_ctx, "race", "true")
 }
 
 // Set the Go package pattern (e.g. "./app/..." for subtree, "./..." for all)
 pkg(_ctx: ptr, pattern: string) {
-    map_put(_ctx, "pkg_pattern", pattern)
+    _e = map.put(_ctx, "pkg_pattern", pattern)
 }
 
 env_var(_ctx: ptr, kv: string) {
-    if map_has(_ctx, "env") == 1 {
-        prev = map_get(_ctx, "env")
-        combined = string_concat(prev, " ")
-        combined = string_concat(combined, kv)
-        map_put(_ctx, "env", combined)
+    if map.has(_ctx, "env") == 1 {
+        prev = map.get(_ctx, "env")
+        combined = string.concat(prev, " ")
+        combined = string.concat(combined, kv)
+        _e1 = map.put(_ctx, "env", combined)
     } else {
-        map_put(_ctx, "env", kv)
+        _e2 = map.put(_ctx, "env", kv)
     }
 }
 
 run_filter(_ctx: ptr, pat: string) {
-    map_put(_ctx, "run", pat)
+    _e = map.put(_ctx, "run", pat)
 }
 
 timeout(_ctx: ptr, dur: string) {
-    map_put(_ctx, "timeout", dur)
+    _e = map.put(_ctx, "timeout", dur)
 }
 
 // --- Command builders ---
@@ -65,87 +61,87 @@ timeout(_ctx: ptr, dur: string) {
 go_build_cmd(source_dir: string, out_path: string, opts: ptr) {
     env_prefix = ""
     if opts != null {
-        if map_has(opts, "env") == 1 {
-            env_prefix = map_get(opts, "env")
-            env_prefix = string_concat(env_prefix, " ")
+        if map.has(opts, "env") == 1 {
+            env_prefix = map.get(opts, "env")
+            env_prefix = string.concat(env_prefix, " ")
         }
     }
 
     cmd = "cd ${source_dir} && ${env_prefix}go build"
 
     if opts != null {
-        if map_has(opts, "mode") == 1 {
-            val = map_get(opts, "mode")
-            cmd = string_concat(cmd, " -buildmode=${val}")
+        if map.has(opts, "mode") == 1 {
+            val = map.get(opts, "mode")
+            cmd = string.concat(cmd, " -buildmode=${val}")
         }
-        if map_has(opts, "tags") == 1 {
-            val = map_get(opts, "tags")
-            cmd = string_concat(cmd, " -tags ${val}")
+        if map.has(opts, "tags") == 1 {
+            val = map.get(opts, "tags")
+            cmd = string.concat(cmd, " -tags ${val}")
         }
-        if map_has(opts, "ldflags") == 1 {
-            val = map_get(opts, "ldflags")
-            cmd = string_concat(cmd, " -ldflags \"${val}\"")
+        if map.has(opts, "ldflags") == 1 {
+            val = map.get(opts, "ldflags")
+            cmd = string.concat(cmd, " -ldflags \"${val}\"")
         }
-        if map_has(opts, "race") == 1 {
-            cmd = string_concat(cmd, " -race")
+        if map.has(opts, "race") == 1 {
+            cmd = string.concat(cmd, " -race")
         }
-        if map_has(opts, "extra") == 1 {
-            val = map_get(opts, "extra")
-            cmd = string_concat(cmd, " ${val}")
+        if map.has(opts, "extra") == 1 {
+            val = map.get(opts, "extra")
+            cmd = string.concat(cmd, " ${val}")
         }
     }
 
-    cmd = string_concat(cmd, " -o ${out_path}")
+    cmd = string.concat(cmd, " -o ${out_path}")
     return cmd
 }
 
 go_test_cmd(source_dir: string, ld_path: string, opts: ptr) {
     env_prefix = ""
-    if string_length(ld_path) > 0 {
+    if string.length(ld_path) > 0 {
         dyld_var = build._dyld_env_var()
         env_prefix = "${dyld_var}=${ld_path} "
     }
     if opts != null {
-        if map_has(opts, "env") == 1 {
-            val = map_get(opts, "env")
-            env_prefix = string_concat(env_prefix, val)
-            env_prefix = string_concat(env_prefix, " ")
+        if map.has(opts, "env") == 1 {
+            val = map.get(opts, "env")
+            env_prefix = string.concat(env_prefix, val)
+            env_prefix = string.concat(env_prefix, " ")
         }
     }
 
     cmd = "cd ${source_dir} && ${env_prefix}go test"
 
     if opts != null {
-        if map_has(opts, "verbose") == 1 {
-            cmd = string_concat(cmd, " -v")
+        if map.has(opts, "verbose") == 1 {
+            cmd = string.concat(cmd, " -v")
         }
-        if map_has(opts, "race") == 1 {
-            cmd = string_concat(cmd, " -race")
+        if map.has(opts, "race") == 1 {
+            cmd = string.concat(cmd, " -race")
         }
-        if map_has(opts, "run") == 1 {
-            val = map_get(opts, "run")
-            cmd = string_concat(cmd, " -run ${val}")
+        if map.has(opts, "run") == 1 {
+            val = map.get(opts, "run")
+            cmd = string.concat(cmd, " -run ${val}")
         }
-        if map_has(opts, "timeout") == 1 {
-            val = map_get(opts, "timeout")
-            cmd = string_concat(cmd, " -timeout ${val}")
+        if map.has(opts, "timeout") == 1 {
+            val = map.get(opts, "timeout")
+            cmd = string.concat(cmd, " -timeout ${val}")
         }
-        if map_has(opts, "extra") == 1 {
-            val = map_get(opts, "extra")
-            cmd = string_concat(cmd, " ${val}")
+        if map.has(opts, "extra") == 1 {
+            val = map.get(opts, "extra")
+            cmd = string.concat(cmd, " ${val}")
         }
     } else {
-        cmd = string_concat(cmd, " -v")
+        cmd = string.concat(cmd, " -v")
     }
 
     // Package pattern: default "." (current dir only)
     pkg_pat = "."
     if opts != null {
-        if map_has(opts, "pkg_pattern") == 1 {
-            pkg_pat = map_get(opts, "pkg_pattern")
+        if map.has(opts, "pkg_pattern") == 1 {
+            pkg_pat = map.get(opts, "pkg_pattern")
         }
     }
-    cmd = string_concat(cmd, " ${pkg_pat}")
+    cmd = string.concat(cmd, " ${pkg_pat}")
     return cmd
 }
 
@@ -161,7 +157,7 @@ builder check(ctx: ptr) {
 
     build._mkdirs(target_dir)
 
-    ts_file = path_join(target_dir, ".timestamp")
+    ts_file = path.join(target_dir, ".timestamp")
     if build._needs_rebuild(source_dir, ts_file) == 0 {
         println("${mod_dir}: skipping Go compile check (not changed)")
         return 0
@@ -172,32 +168,31 @@ builder check(ctx: ptr) {
     // Determine package pattern
     pkg_pat = "./..."
     if _builder != null {
-        if map_has(_builder, "pkg_pattern") == 1 {
-            pkg_pat = map_get(_builder, "pkg_pattern")
+        if map.has(_builder, "pkg_pattern") == 1 {
+            pkg_pat = map.get(_builder, "pkg_pattern")
         }
     }
 
     cmd = "cd '${root}' && go build ${pkg_pat}"
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: go build failed")
         return exit_code
     }
 
-    io_write_file(ts_file, "")
+    _e = io.write_file(ts_file, "")
     return 0
 }
 
 builder go_build(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
-    mod_name = build._get(ctx, "module")
     mod_dir = build._get(ctx, "module_dir")
 
-    lib_dir = path_join(target_dir, "lib")
+    lib_dir = path.join(target_dir, "lib")
     build._mkdirs(lib_dir)
 
-    ts_file = path_join(lib_dir, ".timestamp")
+    ts_file = path.join(lib_dir, ".timestamp")
     if build._needs_rebuild(source_dir, ts_file) == 0 {
         println("${mod_dir}: skipping compilation of Go prod & test code (not changed)")
         return 0
@@ -205,21 +200,21 @@ builder go_build(ctx: ptr) {
 
     println("${mod_dir}: compiling Go prod & test code")
 
-    os_system("cd ${source_dir} && go mod tidy")
+    os.system("cd ${source_dir} && go mod tidy")
 
     out_name = ""
     if _builder != null {
-        if map_has(_builder, "output") == 1 {
-            out_name = map_get(_builder, "output")
+        if map.has(_builder, "output") == 1 {
+            out_name = map.get(_builder, "output")
         }
     }
-    if string_length(out_name) == 0 {
+    if string.length(out_name) == 0 {
         println("${mod_dir}: output_file() is required for go_build")
         return 1
     }
-    out_path = path_join(lib_dir, out_name)
+    out_path = path.join(lib_dir, out_name)
     bld_cmd = go_build_cmd(source_dir, out_path, _builder)
-    exit_code = os_system(bld_cmd)
+    exit_code = os.system(bld_cmd)
     if exit_code != 0 {
         println("${mod_dir}: go build failed")
         return exit_code
@@ -227,43 +222,42 @@ builder go_build(ctx: ptr) {
 
     build._write_artifact(ctx, "ldlibdeps", out_path)
 
-    deps = map_get(ctx, "deps")
-    shared_libs = string_concat(out_path, "")
-    dep_count = list_size(deps)
+    deps = map.get(ctx, "deps")
+    shared_libs = string.concat(out_path, "")
+    dep_count = list.size(deps)
     n = 0
     while n < dep_count {
-        dp4 = list_get(deps, n)
+        dp4 = list.get(deps, n)
         dm4 = build._strip_lang(dp4)
         dep_sh = build._read_dep_artifact(ctx, dm4, "shared_library_deps_including_transitive")
-        if string_length(dep_sh) > 0 {
-            shared_libs = string_concat(string_concat(shared_libs, "\n"), dep_sh)
+        if string.length(dep_sh) > 0 {
+            shared_libs = string.concat(string.concat(shared_libs, "\n"), dep_sh)
         }
         n = n + 1
     }
     build._write_artifact(ctx, "shared_library_deps_including_transitive", shared_libs)
 
-    io_write_file(ts_file, "")
+    _ets = io.write_file(ts_file, "")
     return 0
 }
 
 builder go_test(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
-    target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
-    deps = map_get(ctx, "deps")
+    deps = map.get(ctx, "deps")
 
     ld_path = ""
-    dep_count = list_size(deps)
+    dep_count = list.size(deps)
     g = 0
     while g < dep_count {
-        dp5 = list_get(deps, g)
+        dp5 = list.get(deps, g)
         dm5 = build._strip_lang(dp5)
         dep_sh = build._read_dep_artifact(ctx, dm5, "shared_library_deps_including_transitive")
-        if string_length(dep_sh) > 0 {
-            sh_dir = os_exec("dirname ${dep_sh} | head -1")
-            sh_dir = string_trim(sh_dir)
-            if string_length(ld_path) > 0 {
-                ld_path = string_concat(string_concat(ld_path, ":"), sh_dir)
+        if string.length(dep_sh) > 0 {
+            sh_raw, _esh = os.exec("dirname ${dep_sh} | head -1")
+            sh_dir = string.trim(sh_raw)
+            if string.length(ld_path) > 0 {
+                ld_path = string.concat(string.concat(ld_path, ":"), sh_dir)
             } else {
                 ld_path = sh_dir
             }
@@ -275,12 +269,12 @@ builder go_test(ctx: ptr) {
     // For mono-module repos with pkg(), run tests from root so go.mod is found
     test_cmd = go_test_cmd(source_dir, ld_path, _builder)
     if _builder != null {
-        if map_has(_builder, "pkg_pattern") == 1 {
+        if map.has(_builder, "pkg_pattern") == 1 {
             root = build._get(ctx, "root")
             test_cmd = go_test_cmd(root, ld_path, _builder)
         }
     }
-    exit_code = os_system(test_cmd)
+    exit_code = os.system(test_cmd)
     if exit_code != 0 {
         println("${mod_dir}: Go tests FAILED")
         return exit_code

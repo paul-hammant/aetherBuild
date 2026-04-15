@@ -14,57 +14,53 @@
 // Usage: file-to-label <file> [<file>...]
 // Prints one label per input on its own line.
 
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_ends_with(s: string, suffix: string) -> int
-extern string_index_of(s: string, sub: string) -> int
-extern string_substring(s: string, start: int, end: int) -> string
-extern aether_args_count() -> int
-extern aether_args_get(index: int) -> string
+import std.string
+import std.os
+
 extern println(s: string)
 extern exit(code: int)
 
 infer_type(file: string) {
-    if string_ends_with(file, ".tests.ae") == 1 {
-        return string_concat("test", "")
+    if string.ends_with(file, ".tests.ae") == 1 {
+        return string.concat("test", "")
     }
-    if string_ends_with(file, ".dist.ae") == 1 {
-        return string_concat("dist", "")
+    if string.ends_with(file, ".dist.ae") == 1 {
+        return string.concat("dist", "")
     }
-    return string_concat("build", "")
+    return string.concat("build", "")
 }
 
 // dirname: last '/'-bounded prefix, or "." if no slash.
 dirname_pure(path: string) {
-    n = string_length(path)
+    n = string.length(path)
     last = -1
     i = 0
     while i < n {
-        ch = string_substring(path, i, i + 1)
-        if string_index_of(ch, "/") == 0 {
+        ch = string.substring(path, i, i + 1)
+        if string.index_of(ch, "/") == 0 {
             last = i
         }
         i = i + 1
     }
     if last < 0 {
-        return string_concat(".", "")
+        return string.concat(".", "")
     }
     if last == 0 {
-        return string_concat("/", "")
+        return string.concat("/", "")
     }
-    return string_substring(path, 0, last)
+    return string.substring(path, 0, last)
 }
 
 file_to_label(file: string) {
     type = infer_type(file)
     dir = dirname_pure(file)
     if type == "test" {
-        return string_concat("test:", dir)
+        return string.concat("test:", dir)
     }
     if type == "dist" {
-        return string_concat("dist:", dir)
+        return string.concat("dist:", dir)
     }
-    return string_concat(dir, "")
+    return string.concat(dir, "")
 }
 
 main() {

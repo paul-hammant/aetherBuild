@@ -5,19 +5,15 @@
 // Separate from the TypeScript language SDK — a TS project might use
 // yarn or npm instead of pnpm.
 import build
-
-extern map_put(m: ptr, key: string, value: ptr)
-extern map_get(m: ptr, key: string) -> ptr
-extern map_has(m: ptr, key: string) -> int
-extern list_get(l: ptr, index: int) -> ptr
-extern list_size(l: ptr) -> int
-extern os_system(cmd: string) -> int
-extern file_exists(path: string) -> int
-extern path_join(a: string, b: string) -> string
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_substring(s: string, start: int, end: int) -> string
-extern io_write_file(path: string, content: string) -> int
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
 
 // --- npm dependency resolution ---
 //
@@ -25,38 +21,38 @@ extern io_write_file(path: string, content: string) -> int
 // and resolved in one pnpm add call.
 
 resolve(ctx: ptr) {
-    if map_has(ctx, "_npm_resolved") == 1 {
-        return map_get(ctx, "_npm_resolved")
+    if map.has(ctx, "_npm_resolved") == 1 {
+        return map.get(ctx, "_npm_resolved")
     }
 
-    npm_deps = map_get(ctx, "npm_deps")
-    dep_count = list_size(npm_deps)
+    npm_deps = map.get(ctx, "npm_deps")
+    dep_count = list.size(npm_deps)
     if dep_count == 0 {
-        map_put(ctx, "_npm_resolved", "")
+        _e1 = map.put(ctx, "_npm_resolved", "")
         return ""
     }
 
     root = build._get(ctx, "root")
-    aeb_dir = path_join(root, ".aeb")
-    nm_dir = path_join(aeb_dir, "node_modules")
+    aeb_dir = path.join(root, ".aeb")
+    nm_dir = path.join(aeb_dir, "node_modules")
     mod_dir = build._get(ctx, "module_dir")
 
     // Check if node_modules already exists and has content
-    if file_exists(nm_dir) == 1 {
-        map_put(ctx, "_npm_resolved", nm_dir)
+    if file.exists(nm_dir) == 1 {
+        _e2 = map.put(ctx, "_npm_resolved", nm_dir)
         return nm_dir
     }
 
     println("${mod_dir}: resolving npm dependencies via pnpm")
 
     // Ensure .aeb has a package.json and hoisted layout config
-    aeb_pkg = path_join(aeb_dir, "package.json")
-    if file_exists(aeb_pkg) == 0 {
-        io_write_file(aeb_pkg, "{}")
+    aeb_pkg = path.join(aeb_dir, "package.json")
+    if file.exists(aeb_pkg) == 0 {
+        _e3 = io.write_file(aeb_pkg, "{}")
     }
-    aeb_npmrc = path_join(aeb_dir, ".npmrc")
-    if file_exists(aeb_npmrc) == 0 {
-        io_write_file(aeb_npmrc, "node-linker=hoisted")
+    aeb_npmrc = path.join(aeb_dir, ".npmrc")
+    if file.exists(aeb_npmrc) == 0 {
+        _e4 = io.write_file(aeb_npmrc, "node-linker=hoisted")
     }
 
     // Build pnpm add command with all deps
@@ -65,15 +61,15 @@ resolve(ctx: ptr) {
     cmd = "COREPACK_ENABLE_STRICT=0 pnpm add --prefix '${aeb_dir}'"
     di = 0
     while di < dep_count {
-        pkg = list_get(npm_deps, di)
+        pkg = list.get(npm_deps, di)
         // pkg is "name:version" — convert to "name@version" for pnpm
         // Handle scoped packages: @angular/core:11.2.4 → @angular/core@11.2.4
         // Find last colon (the version separator)
-        pkg_len = string_length(pkg)
+        pkg_len = string.length(pkg)
         last_colon = -1
         ci = 0
         while ci < pkg_len {
-            ch = string_substring(pkg, ci, ci + 1)
+            ch = string.substring(pkg, ci, ci + 1)
             if ch == ":" {
                 last_colon = ci
             }
@@ -81,21 +77,21 @@ resolve(ctx: ptr) {
         }
         pnpm_spec = pkg
         if last_colon > 0 {
-            pkg_name = string_substring(pkg, 0, last_colon)
-            pkg_ver = string_substring(pkg, last_colon + 1, pkg_len)
-            pnpm_spec = string_concat(pkg_name, "@")
-            pnpm_spec = string_concat(pnpm_spec, pkg_ver)
+            pkg_name = string.substring(pkg, 0, last_colon)
+            pkg_ver = string.substring(pkg, last_colon + 1, pkg_len)
+            pnpm_spec = string.concat(pkg_name, "@")
+            pnpm_spec = string.concat(pnpm_spec, pkg_ver)
         }
-        cmd = string_concat(cmd, " '${pnpm_spec}'")
+        cmd = string.concat(cmd, " '${pnpm_spec}'")
         di = di + 1
     }
 
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: warning: pnpm add failed")
     }
 
-    map_put(ctx, "_npm_resolved", nm_dir)
+    _e5 = map.put(ctx, "_npm_resolved", nm_dir)
     build._write_artifact(ctx, "npm_node_modules", nm_dir)
     return nm_dir
 }
