@@ -1,25 +1,24 @@
 // angular — Angular compiler and build SDK for aether.build
 import build
 import pnpm
-
-extern map_put(m: ptr, key: string, value: ptr)
-extern map_get(m: ptr, key: string) -> ptr
-extern map_has(m: ptr, key: string) -> int
-extern os_system(cmd: string) -> int
-extern os_exec(cmd: string) -> string
-extern path_join(a: string, b: string) -> string
-extern string_concat(a: string, b: string) -> string
-extern string_trim(s: string) -> string
-extern io_write_file(path: string, content: string) -> int
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
 
 // --- Angular DSL setters (reuse ts setters where applicable) ---
 
 tsconfig(_ctx: ptr, path: string) {
-    map_put(_ctx, "tsconfig", path)
+    _e = map.put(_ctx, "tsconfig", path)
 }
 
 skip_lib_check(_ctx: ptr) {
-    map_put(_ctx, "skip_lib_check", "true")
+    _e = map.put(_ctx, "skip_lib_check", "true")
 }
 
 // --- SDK functions ---
@@ -37,37 +36,37 @@ builder ngc(ctx: ptr) {
     pnpm.resolve(ctx)
 
     // Determine tsconfig path
-    tc = path_join(source_dir, "tsconfig.lib.json")
+    tc = path.join(source_dir, "tsconfig.lib.json")
     if _builder != null {
-        if map_has(_builder, "tsconfig") == 1 {
-            tc_rel = map_get(_builder, "tsconfig")
-            tc = path_join(source_dir, tc_rel)
+        if map.has(_builder, "tsconfig") == 1 {
+            tc_rel = map.get(_builder, "tsconfig")
+            tc = path.join(source_dir, tc_rel)
         }
     }
 
     println("${mod_dir}: compiling (ngc)")
 
-    aeb_dir = path_join(root, ".aeb")
-    ngc_bin = path_join(aeb_dir, "node_modules/.bin/ngc")
+    aeb_dir = path.join(root, ".aeb")
+    ngc_bin = path.join(aeb_dir, "node_modules/.bin/ngc")
     cmd = "${ngc_bin} -p '${tc}'"
 
     if _builder != null {
-        if map_has(_builder, "skip_lib_check") == 1 {
-            cmd = string_concat(cmd, " --skipLibCheck")
+        if map.has(_builder, "skip_lib_check") == 1 {
+            cmd = string.concat(cmd, " --skipLibCheck")
         }
-        if map_has(_builder, "extra") == 1 {
-            val = map_get(_builder, "extra")
-            cmd = string_concat(cmd, " ${val}")
+        if map.has(_builder, "extra") == 1 {
+            val = map.get(_builder, "extra")
+            cmd = string.concat(cmd, " ${val}")
         }
     }
 
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: ngc failed")
         return exit_code
     }
 
-    io_write_file(path_join(target_dir, ".timestamp"), "")
+    _e_ts = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
 
@@ -82,15 +81,16 @@ builder ng_build(ctx: ptr) {
     pnpm.resolve(ctx)
 
     // Extract app name from source_dir (e.g. .../apps/products → products)
-    app_name = string_trim(os_exec("basename '${source_dir}'"))
+    app_name_raw, _eerr = os.exec("basename '${source_dir}'")
+    app_name = string.trim(app_name_raw)
 
     println("${mod_dir}: building (ng build)")
 
-    aeb_dir = path_join(root, ".aeb")
-    ng_bin = path_join(aeb_dir, "node_modules/.bin/ng")
+    aeb_dir = path.join(root, ".aeb")
+    ng_bin = path.join(aeb_dir, "node_modules/.bin/ng")
     cmd = "${ng_bin} build ${app_name} --configuration production"
 
-    exit_code = os_system(cmd)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: ng build failed")
         return exit_code

@@ -9,27 +9,20 @@
 // (No arguments — operates on the current working directory. aeb is
 // expected to chdir to the monorepo root before invoking it.)
 
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_index_of(s: string, sub: string) -> int
-extern string_substring(s: string, start: int, end: int) -> string
-extern string_starts_with(s: string, prefix: string) -> int
-extern fs_glob(pattern: string) -> ptr
-extern dir_list_count(list: ptr) -> int
-extern dir_list_get(list: ptr, index: int) -> string
-extern dir_list_free(list: ptr)
-extern file_exists(path: string) -> int
-extern io_read_file(path: string) -> string
-extern os_exec(cmd: string) -> string
-extern string_trim(s: string) -> string
+import std.string
+import std.file
+import std.fs
+import std.io
+import std.os
+
 extern println(s: string)
 
 // Strip leading "./" from a path so output matches the bash version.
 strip_dot_slash(p: string) {
-    if string_starts_with(p, "./") == 1 {
-        return string_substring(p, 2, string_length(p))
+    if string.starts_with(p, "./") == 1 {
+        return string.substring(p, 2, string.length(p))
     }
-    return string_concat(p, "")
+    return string.concat(p, "")
 }
 
 // Returns 1 if `path` starts with one of the directory excludes.
@@ -37,18 +30,18 @@ strip_dot_slash(p: string) {
 is_excluded(path: string, excludes: string) {
     rest = excludes
     ex = ""
-    while string_length(rest) > 0 {
-        nl = string_index_of(rest, "\n")
+    while string.length(rest) > 0 {
+        nl = string.index_of(rest, "\n")
         if nl < 0 {
-            ex = string_concat(rest, "")
+            ex = string.concat(rest, "")
             rest = ""
         } else {
-            ex = string_substring(rest, 0, nl)
-            rest = string_substring(rest, nl + 1, string_length(rest))
+            ex = string.substring(rest, 0, nl)
+            rest = string.substring(rest, nl + 1, string.length(rest))
         }
-        if string_length(ex) > 0 {
-            prefix = string_concat(ex, "/")
-            if string_starts_with(path, prefix) == 1 {
+        if string.length(ex) > 0 {
+            prefix = string.concat(ex, "/")
+            if string.starts_with(path, prefix) == 1 {
                 return 1
             }
             if path == ex {
@@ -63,53 +56,59 @@ is_excluded(path: string, excludes: string) {
 // directory entries (trailing slash stripped, comments and blanks removed).
 load_extra_excludes() {
     out = ""
-    if file_exists(".aebignore") == 0 {
-        return string_concat(out, "")
+    if file.exists(".aebignore") == 0 {
+        return string.concat(out, "")
     }
-    content = io_read_file(".aebignore")
+    content, rerr = io.read_file(".aebignore")
+    if rerr != "" {
+        return string.concat(out, "")
+    }
     rest = content
     line = ""
-    while string_length(rest) > 0 {
-        nl = string_index_of(rest, "\n")
+    while string.length(rest) > 0 {
+        nl = string.index_of(rest, "\n")
         if nl < 0 {
-            line = string_concat(rest, "")
+            line = string.concat(rest, "")
             rest = ""
         } else {
-            line = string_substring(rest, 0, nl)
-            rest = string_substring(rest, nl + 1, string_length(rest))
+            line = string.substring(rest, 0, nl)
+            rest = string.substring(rest, nl + 1, string.length(rest))
         }
-        line = string_trim(line)
-        if string_length(line) > 0 {
-            if string_starts_with(line, "#") == 0 {
+        line = string.trim(line)
+        if string.length(line) > 0 {
+            if string.starts_with(line, "#") == 0 {
                 // Strip a single trailing slash if present
-                if string_length(line) > 1 {
-                    last = string_substring(line, string_length(line) - 1, string_length(line))
+                if string.length(line) > 1 {
+                    last = string.substring(line, string.length(line) - 1, string.length(line))
                     if last == "/" {
-                        line = string_substring(line, 0, string_length(line) - 1)
+                        line = string.substring(line, 0, string.length(line) - 1)
                     }
                 }
-                if string_length(out) > 0 {
-                    out = string_concat(out, "\n")
+                if string.length(out) > 0 {
+                    out = string.concat(out, "\n")
                 }
-                out = string_concat(out, line)
+                out = string.concat(out, line)
             }
         }
     }
-    return string_concat(out, "")
+    return string.concat(out, "")
 }
 
 main() {
     excludes = "target\n.aeb\nlib"
     extra = load_extra_excludes()
-    if string_length(extra) > 0 {
-        excludes = string_concat(excludes, "\n")
-        excludes = string_concat(excludes, extra)
+    if string.length(extra) > 0 {
+        excludes = string.concat(excludes, "\n")
+        excludes = string.concat(excludes, extra)
     }
 
-    // fs_glob recognises "/**/" as a recursive marker; the pattern needs a
+    // fs.glob recognises "/**/" as a recursive marker; the pattern needs a
     // leading directory prefix (".") so the marker isn't at the very start.
     // Results come back ./-prefixed and we strip that below.
-    files = fs_glob("./**/.*.ae")
+    files, gerr = fs.glob("./**/.*.ae")
+    if gerr != "" {
+        return 0
+    }
     n = dir_list_count(files)
 
     // Collect into a single newline-separated buffer, filter out excludes,
@@ -122,19 +121,23 @@ main() {
         raw = dir_list_get(files, i)
         clean = strip_dot_slash(raw)
         if is_excluded(clean, excludes) == 0 {
-            if string_length(buf) > 0 {
-                buf = string_concat(buf, "\n")
+            if string.length(buf) > 0 {
+                buf = string.concat(buf, "\n")
             }
-            buf = string_concat(buf, clean)
+            buf = string.concat(buf, clean)
         }
         i = i + 1
     }
     dir_list_free(files)
 
-    if string_length(buf) == 0 {
+    if string.length(buf) == 0 {
         return 0
     }
-    sorted = string_trim(os_exec("printf '%s' '${buf}' | sort"))
-    println(sorted)
+    sorted_out, eerr = os.exec("printf '%s' '${buf}' | sort")
+    if eerr != "" {
+        println(string.concat("scan-ae-files: ", eerr))
+        return 1
+    }
+    println(string.trim(sorted_out))
     return 0
 }

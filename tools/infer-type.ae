@@ -9,21 +9,20 @@
 // Usage: infer-type <file> [<file>...]
 // Prints the type for each input on its own line.
 
-extern string_ends_with(s: string, suffix: string) -> int
-extern string_concat(a: string, b: string) -> string
-extern aether_args_count() -> int
-extern aether_args_get(index: int) -> string
+import std.string
+import std.os
+
 extern println(s: string)
 extern exit(code: int)
 
 infer_type(file: string) {
-    if string_ends_with(file, ".tests.ae") == 1 {
-        return string_concat("test", "")
+    if string.ends_with(file, ".tests.ae") == 1 {
+        return string.concat("test", "")
     }
-    if string_ends_with(file, ".dist.ae") == 1 {
-        return string_concat("dist", "")
+    if string.ends_with(file, ".dist.ae") == 1 {
+        return string.concat("dist", "")
     }
-    return string_concat("build", "")
+    return string.concat("build", "")
 }
 
 main() {

@@ -19,62 +19,51 @@
 //
 // Usage: topo-sort <edges-file>
 
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_index_of(s: string, sub: string) -> int
-extern string_substring(s: string, start: int, end: int) -> string
-extern string_trim(s: string) -> string
-extern io_read_file(path: string) -> string
-extern os_system(cmd: string) -> int
-extern aether_args_count() -> int
-extern aether_args_get(index: int) -> string
-extern map_new() -> ptr
-extern map_get(m: ptr, key: string) -> ptr
-extern map_put(m: ptr, key: string, value: ptr)
-extern map_has(m: ptr, key: string) -> int
-extern list_new() -> ptr
-extern list_add(l: ptr, item: ptr)
-extern list_size(l: ptr) -> int
-extern list_get(l: ptr, index: int) -> ptr
+import std.string
+import std.io
+import std.os
+import std.list
+import std.map
+
 extern println(s: string)
 extern exit(code: int)
 
 // First word of a space-separated string
 first_word(s: string) {
-    sp = string_index_of(s, " ")
+    sp = string.index_of(s, " ")
     if sp < 0 {
-        return string_concat(s, "")
+        return string.concat(s, "")
     }
-    return string_substring(s, 0, sp)
+    return string.substring(s, 0, sp)
 }
 
 // Everything after the first word and the single space following it
 rest_after_first_word(s: string) {
-    sp = string_index_of(s, " ")
+    sp = string.index_of(s, " ")
     if sp < 0 {
-        return string_concat("", "")
+        return string.concat("", "")
     }
-    return string_substring(s, sp + 1, string_length(s))
+    return string.substring(s, sp + 1, string.length(s))
 }
 
 // Split a space-separated string into a list of strings (skipping empties).
 split_words(s: string, out: ptr) {
-    rest = string_trim(s)
+    rest = string.trim(s)
     // Initialise `word` with a heap-string-typed value so the heap-tracker
     // flag is declared at function scope (works around an aetherc edge case
     // where lazy declarations land in nested C blocks).
-    word = string_concat("", "")
-    while string_length(rest) > 0 {
-        sp = string_index_of(rest, " ")
+    word = string.concat("", "")
+    while string.length(rest) > 0 {
+        sp = string.index_of(rest, " ")
         if sp < 0 {
-            word = string_concat(rest, "")
+            word = string.concat(rest, "")
             rest = ""
         } else {
-            word = string_substring(rest, 0, sp)
-            rest = string_trim(string_substring(rest, sp + 1, string_length(rest)))
+            word = string.substring(rest, 0, sp)
+            rest = string.trim(string.substring(rest, sp + 1, string.length(rest)))
         }
-        if string_length(word) > 0 {
-            list_add(out, word)
+        if string.length(word) > 0 {
+            _ae = list.add(out, word)
         }
     }
 }
@@ -82,33 +71,33 @@ split_words(s: string, out: ptr) {
 // Recursive DFS visit. file_deps maps file -> space-separated dep list.
 // visited_map maps file -> "visiting" or "done". order is the output post-order.
 dfs_visit(file: string, file_deps: ptr, visited_map: ptr, order: ptr) {
-    if map_has(visited_map, file) == 1 {
-        cur = map_get(visited_map, file)
+    if map.has(visited_map, file) == 1 {
+        cur = map.get(visited_map, file)
         if cur == "done" { return 0 }
         if cur == "visiting" {
-            os_system(string_concat(string_concat("printf 'error: circular dependency involving ", file), "\n' >&2"))
+            os.system(string.concat(string.concat("printf 'error: circular dependency involving ", file), "\n' >&2"))
             exit(1)
         }
     }
-    map_put(visited_map, file, "visiting")
+    _mp1 = map.put(visited_map, file, "visiting")
     deps_str = ""
-    if map_has(file_deps, file) == 1 {
-        deps_str = map_get(file_deps, file)
+    if map.has(file_deps, file) == 1 {
+        deps_str = map.get(file_deps, file)
     }
-    deps_list = list_new()
+    deps_list = list.new()
     split_words(deps_str, deps_list)
-    n = list_size(deps_list)
+    n = list.size(deps_list)
     i = 0
     while i < n {
-        dep = list_get(deps_list, i)
+        dep = list.get(deps_list, i)
         // Only follow deps that are themselves in the input set
-        if map_has(file_deps, dep) == 1 {
+        if map.has(file_deps, dep) == 1 {
             dfs_visit(dep, file_deps, visited_map, order)
         }
         i = i + 1
     }
-    map_put(visited_map, file, "done")
-    list_add(order, file)
+    _mp2 = map.put(visited_map, file, "done")
+    _la = list.add(order, file)
     return 0
 }
 
@@ -117,47 +106,51 @@ main() {
         println("Usage: topo-sort <edges-file>")
         exit(1)
     }
-    raw = io_read_file(aether_args_get(1))
-    file_deps = map_new()
-    files = list_new()
+    raw, rerr = io.read_file(aether_args_get(1))
+    if rerr != "" {
+        println(string.concat("topo-sort: ", rerr))
+        exit(1)
+    }
+    file_deps = map.new()
+    files = list.new()
 
     rest = raw
-    line = string_concat("", "")
-    while string_length(rest) > 0 {
-        nl = string_index_of(rest, "\n")
+    line = string.concat("", "")
+    while string.length(rest) > 0 {
+        nl = string.index_of(rest, "\n")
         if nl < 0 {
-            line = string_concat(rest, "")
+            line = string.concat(rest, "")
             rest = ""
         } else {
-            line = string_substring(rest, 0, nl)
-            rest = string_substring(rest, nl + 1, string_length(rest))
+            line = string.substring(rest, 0, nl)
+            rest = string.substring(rest, nl + 1, string.length(rest))
         }
-        line = string_trim(line)
-        if string_length(line) > 0 {
-            file = string_concat(first_word(line), "")
-            deps = string_concat(rest_after_first_word(line), "")
+        line = string.trim(line)
+        if string.length(line) > 0 {
+            file = string.concat(first_word(line), "")
+            deps = string.concat(rest_after_first_word(line), "")
             // Add the file even if no deps (so it's known to the graph)
-            if map_has(file_deps, file) == 0 {
-                list_add(files, file)
+            if map.has(file_deps, file) == 0 {
+                _lf = list.add(files, file)
             }
-            map_put(file_deps, file, deps)
+            _mf = map.put(file_deps, file, deps)
         }
     }
 
-    visited_map = map_new()
-    order = list_new()
-    fcount = list_size(files)
+    visited_map = map.new()
+    order = list.new()
+    fcount = list.size(files)
     j = 0
     while j < fcount {
-        f = list_get(files, j)
+        f = list.get(files, j)
         dfs_visit(f, file_deps, visited_map, order)
         j = j + 1
     }
 
-    ocount = list_size(order)
+    ocount = list.size(order)
     k = 0
     while k < ocount {
-        println(list_get(order, k))
+        println(list.get(order, k))
         k = k + 1
     }
     return 0

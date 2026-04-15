@@ -15,10 +15,12 @@ SRC="$1"
 LIB="$2"
 
 # Extract top-level `import X` identifiers from an .ae file.
-# Matches `import foo`, `import foo (sel)`, etc. Portable sed — works
-# on BSD (macOS) and GNU alike.
+# Matches `import foo`, `import foo.bar`, `import foo (sel)`, etc.
+# Dotted forms (e.g. `import std.string`) are captured intact so that
+# stdlib sub-modules survive the round-trip and are re-emitted to the
+# consumer file. Portable sed — works on BSD (macOS) and GNU alike.
 extract_imports() {
-    sed -n 's/^import \([A-Za-z_][A-Za-z0-9_]*\).*$/\1/p' "$1"
+    sed -n 's/^import \([A-Za-z_][A-Za-z0-9_.]*\).*$/\1/p' "$1"
 }
 
 tmp_seen=$(mktemp)

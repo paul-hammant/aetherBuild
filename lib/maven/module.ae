@@ -5,24 +5,15 @@
 // Separate from the Java language SDK — a Java project might use
 // Gradle instead of Maven.
 import build
-
-extern map_put(m: ptr, key: string, value: ptr)
-extern map_get(m: ptr, key: string) -> ptr
-extern map_has(m: ptr, key: string) -> int
-extern list_new() -> ptr
-extern list_add(l: ptr, item: ptr)
-extern list_get(l: ptr, index: int) -> ptr
-extern list_size(l: ptr) -> int
-extern os_getenv(name: string) -> string
-extern os_system(cmd: string) -> int
-extern os_exec(cmd: string) -> string
-extern file_exists(path: string) -> int
-extern path_join(a: string, b: string) -> string
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_trim(s: string) -> string
-extern io_read_file(path: string) -> string
-extern io_write_file(path: string, content: string) -> int
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
 
 // --- BOM file loading ---
 //
@@ -32,18 +23,18 @@ extern io_write_file(path: string, content: string) -> int
 
 load_bom_file(ctx: ptr, rel_path: string) {
     source_dir = build._get(ctx, "source_dir")
-    full_path = path_join(source_dir, rel_path)
-    if file_exists(full_path) == 0 {
+    full_path = path.join(source_dir, rel_path)
+    if file.exists(full_path) == 0 {
         println("warning: BOM file not found: ${full_path}")
         return 0
     }
 
     // Accumulate bom file paths in a list so multiple can be loaded
-    if map_has(ctx, "_bom_files") == 0 {
-        map_put(ctx, "_bom_files", list_new())
+    if map.has(ctx, "_bom_files") == 0 {
+        _e1 = map.put(ctx, "_bom_files", list.new())
     }
-    bom_files = map_get(ctx, "_bom_files")
-    list_add(bom_files, full_path)
+    bom_files = map.get(ctx, "_bom_files")
+    _e2 = list.add(bom_files, full_path)
     return 1
 }
 
@@ -55,14 +46,14 @@ load_bom_file(ctx: ptr, rel_path: string) {
 
 resolve(ctx: ptr) {
     // Return cached result if already resolved
-    if map_has(ctx, "_maven_resolved") == 1 {
-        return map_get(ctx, "_maven_resolved")
+    if map.has(ctx, "_maven_resolved") == 1 {
+        return map.get(ctx, "_maven_resolved")
     }
 
-    maven_deps = map_get(ctx, "maven_deps")
-    dep_count = list_size(maven_deps)
+    maven_deps = map.get(ctx, "maven_deps")
+    dep_count = list.size(maven_deps)
     if dep_count == 0 {
-        map_put(ctx, "_maven_resolved", "")
+        _e1 = map.put(ctx, "_maven_resolved", "")
         return ""
     }
 
@@ -70,93 +61,94 @@ resolve(ctx: ptr) {
     build._mkdirs(target_dir)
 
     // Build the resolver command
-    aeb_home = os_getenv("AEB_HOME")
-    resolver_jar = path_join(aeb_home, "tools/aeb-resolve.jar")
+    aeb_home = os.getenv("AEB_HOME")
+    resolver_jar = path.join(aeb_home, "tools/aeb-resolve.jar")
     cmd = "java -jar ${resolver_jar} --output classpath"
 
     // Add BOM files (the Java resolver parses .bom.ae natively)
-    if map_has(ctx, "_bom_files") == 1 {
-        bom_files = map_get(ctx, "_bom_files")
-        bf_count = list_size(bom_files)
+    if map.has(ctx, "_bom_files") == 1 {
+        bom_files = map.get(ctx, "_bom_files")
+        bf_count = list.size(bom_files)
         bf_i = 0
         while bf_i < bf_count {
-            bom_file = list_get(bom_files, bf_i)
-            cmd = string_concat(cmd, " --bom-file ${bom_file}")
+            bom_file = list.get(bom_files, bf_i)
+            cmd = string.concat(cmd, " --bom-file ${bom_file}")
             bf_i = bf_i + 1
         }
     }
 
     // Add explicit BOMs
-    boms = map_get(ctx, "boms")
-    bom_count = list_size(boms)
+    boms = map.get(ctx, "boms")
+    bom_count = list.size(boms)
     bi = 0
     while bi < bom_count {
-        b_coord = list_get(boms, bi)
-        cmd = string_concat(cmd, " --bom ${b_coord}")
+        b_coord = list.get(boms, bi)
+        cmd = string.concat(cmd, " --bom ${b_coord}")
         bi = bi + 1
     }
 
     // Add repos
-    repos = map_get(ctx, "repos")
-    repo_count = list_size(repos)
+    repos = map.get(ctx, "repos")
+    repo_count = list.size(repos)
     ri = 0
     while ri < repo_count {
-        r_url = list_get(repos, ri)
-        cmd = string_concat(cmd, " --repo ${r_url}")
+        r_url = list.get(repos, ri)
+        cmd = string.concat(cmd, " --repo ${r_url}")
         ri = ri + 1
     }
 
     // Add deps
     di = 0
     while di < dep_count {
-        d_coord = list_get(maven_deps, di)
-        cmd = string_concat(cmd, " ${d_coord}")
+        d_coord = list.get(maven_deps, di)
+        cmd = string.concat(cmd, " ${d_coord}")
         di = di + 1
     }
 
-    // SLF4J warnings go to stderr, os_exec captures stdout only
+    // SLF4J warnings go to stderr, os.exec captures stdout only
 
     mod_dir = build._get(ctx, "module_dir")
     println("${mod_dir}: resolving maven dependencies")
-    result = string_trim(os_exec(cmd))
-    if string_length(result) == 0 {
+    result_raw, _eerr = os.exec(cmd)
+    result = string.trim(result_raw)
+    if string.length(result) == 0 {
         println("${mod_dir}: warning: no maven jars resolved")
     }
 
     // Cache and write artifact for downstream modules
-    map_put(ctx, "_maven_resolved", result)
+    _e2 = map.put(ctx, "_maven_resolved", result)
     build._write_artifact(ctx, "maven_classpath", result)
     return result
 }
 
 classpath(ctx: ptr) {
     // Return cached result if already built
-    if map_has(ctx, "_maven_cp_built") == 1 {
-        return map_get(ctx, "_maven_cp_built")
+    if map.has(ctx, "_maven_cp_built") == 1 {
+        return map.get(ctx, "_maven_cp_built")
     }
 
     // First, resolve own maven deps
     own_cp = resolve(ctx)
 
     // Then collect maven classpaths from module deps
-    deps = map_get(ctx, "deps")
-    count = list_size(deps)
+    deps = map.get(ctx, "deps")
+    count = list.size(deps)
     i = 0
     while i < count {
-        dp = list_get(deps, i)
+        dp = list.get(deps, i)
         dm = build._strip_lang(dp)
         dep_mvn = build._read_dep_artifact(ctx, dm, "maven_classpath")
-        if string_length(dep_mvn) > 0 {
-            if string_length(own_cp) > 0 {
-                tmp = string_concat(own_cp, ":")
-                own_cp = string_concat(tmp, dep_mvn)
+        if string.length(dep_mvn) > 0 {
+            if string.length(own_cp) > 0 {
+                tmp = string.concat(own_cp, ":")
+                own_cp = string.concat(tmp, dep_mvn)
             } else {
                 own_cp = dep_mvn
             }
         }
         i = i + 1
     }
-    map_put(ctx, "_maven_cp_built", own_cp)
+    _e = map.put(ctx, "_maven_cp_built", own_cp)
     // Write merged classpath so downstream modules see transitive deps
     build._write_artifact(ctx, "maven_classpath", own_cp)
     return own_cp

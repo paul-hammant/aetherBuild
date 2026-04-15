@@ -14,145 +14,125 @@
 //   BUILD_ROOT       — absolute path to monorepo root
 //   BUILD_MODULE_DIR — module path relative to root (e.g. java/components/vowelbase)
 
-// Runtime externs (linked from libaether.a)
-extern map_new() -> ptr
-extern map_put(m: ptr, key: string, value: ptr)
-extern map_get(m: ptr, key: string) -> ptr
-extern map_has(m: ptr, key: string) -> int
-extern list_new() -> ptr
-extern list_add(l: ptr, item: ptr)
-extern list_get(l: ptr, index: int) -> ptr
-extern list_size(l: ptr) -> int
-extern os_getenv(name: string) -> string
-extern os_system(cmd: string) -> int
-extern os_exec(cmd: string) -> string
-extern aether_args_get(index: int) -> string
-extern file_exists(path: string) -> int
-extern file_mtime(path: string) -> int
-extern dir_create(path: string) -> int
-extern dir_list_count(dl: ptr) -> int
-extern dir_list_get(dl: ptr, index: int) -> string
-extern dir_list_free(dl: ptr)
-extern fs_glob(pattern: string) -> ptr
-extern path_join(a: string, b: string) -> string
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_index_of(s: string, sub: string) -> int
-extern string_substring(s: string, start: int, end: int) -> string
-extern string_trim(s: string) -> string
-extern string_ends_with(s: string, suffix: string) -> int
-extern io_read_file(path: string) -> string
-extern io_write_file(path: string, content: string) -> int
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
 
 // --- Session (shared across all modules in one build) ---
 
 session(root_path: string) {
-    s = map_new()
-    map_put(s, "root", root_path)
-    map_put(s, "visited", map_new())
+    s = map.new()
+    _e1 = map.put(s, "root", root_path)
+    _e2 = map.put(s, "visited", map.new())
     return s
 }
 
 // Begin a module build. Returns module context, or 0 if already done.
 // module_dir can be "test:path" for co-located test modules.
 begin(s: ptr, module_dir: string) {
-    visited = map_get(s, "visited")
-    if map_has(visited, module_dir) == 1 {
-        return map_get(s, "_null_")
+    visited = map.get(s, "visited")
+    if map.has(visited, module_dir) == 1 {
+        return map.get(s, "_null_")
     }
 
-    root = map_get(s, "root")
-    ctx = map_new()
-    map_put(ctx, "root", root)
-    map_put(ctx, "module_dir", module_dir)
+    root = map.get(s, "root")
+    ctx = map.new()
+    _e1 = map.put(ctx, "root", root)
+    _e2 = map.put(ctx, "module_dir", module_dir)
 
     // Handle "test:" prefix for co-located tests
     fs_dir = module_dir
     is_colocated_test = 0
-    test_prefix = string_index_of(module_dir, "test:")
+    test_prefix = string.index_of(module_dir, "test:")
     if test_prefix == 0 {
-        fs_dir = string_substring(module_dir, 5, string_length(module_dir))
+        fs_dir = string.substring(module_dir, 5, string.length(module_dir))
         is_colocated_test = 1
     }
     // Handle "dist:" prefix for packaging targets
-    dist_prefix = string_index_of(module_dir, "dist:")
+    dist_prefix = string.index_of(module_dir, "dist:")
     if dist_prefix == 0 {
-        fs_dir = string_substring(module_dir, 5, string_length(module_dir))
+        fs_dir = string.substring(module_dir, 5, string.length(module_dir))
     }
 
     mod_name = fs_dir
     lang_prefix = ""
-    slash = string_index_of(fs_dir, "/")
+    slash = string.index_of(fs_dir, "/")
     if slash >= 0 {
-        lang_prefix = string_substring(fs_dir, 0, slash)
-        mod_name = string_substring(fs_dir, slash + 1, string_length(fs_dir))
+        lang_prefix = string.substring(fs_dir, 0, slash)
+        mod_name = string.substring(fs_dir, slash + 1, string.length(fs_dir))
     }
-    map_put(ctx, "module", mod_name)
+    _e3 = map.put(ctx, "module", mod_name)
 
-    source_dir = path_join(root, fs_dir)
-    map_put(ctx, "source_dir", source_dir)
+    source_dir = path.join(root, fs_dir)
+    _e4 = map.put(ctx, "source_dir", source_dir)
 
-    target_base = path_join(root, "target")
-    is_test = string_ends_with(lang_prefix, "tests")
+    target_base = path.join(root, "target")
+    is_test = string.ends_with(lang_prefix, "tests")
     if is_test == 1 {
-        target_base = path_join(target_base, "tests")
+        target_base = path.join(target_base, "tests")
     }
     if is_colocated_test == 1 {
-        target_base = path_join(target_base, "tests")
+        target_base = path.join(target_base, "tests")
     }
     // Use full module path for target dir to avoid collisions
     // (e.g. mongodb/util vs cassandra/util)
-    tgt_dir = path_join(target_base, fs_dir)
-    map_put(ctx, "target_dir", tgt_dir)
+    tgt_dir = path.join(target_base, fs_dir)
+    _e5 = map.put(ctx, "target_dir", tgt_dir)
 
-    map_put(ctx, "deps", list_new())
-    map_put(ctx, "libs", list_new())
-    map_put(ctx, "cargo_deps", list_new())
-    map_put(ctx, "npm_deps", list_new())
-    map_put(ctx, "maven_deps", list_new())
-    map_put(ctx, "boms", list_new())
-    map_put(ctx, "repos", list_new())
+    _e6 = map.put(ctx, "deps", list.new())
+    _e7 = map.put(ctx, "libs", list.new())
+    _e8 = map.put(ctx, "cargo_deps", list.new())
+    _e9 = map.put(ctx, "npm_deps", list.new())
+    _e10 = map.put(ctx, "maven_deps", list.new())
+    _e11 = map.put(ctx, "boms", list.new())
+    _e12 = map.put(ctx, "repos", list.new())
 
     return ctx
 }
 
 // Mark a module as done in the session
 done(s: ptr, module_dir: string) {
-    visited = map_get(s, "visited")
-    map_put(visited, module_dir, "1")
+    visited = map.get(s, "visited")
+    _e = map.put(visited, module_dir, "1")
 }
 
 // --- Context creation (standalone mode, env-var based) ---
 
 start() {
-    ctx = map_new()
-    root = os_getenv("BUILD_ROOT")
-    module_dir = os_getenv("BUILD_MODULE_DIR")
+    ctx = map.new()
+    root = os.getenv("BUILD_ROOT")
+    module_dir = os.getenv("BUILD_MODULE_DIR")
 
-    map_put(ctx, "root", root)
-    map_put(ctx, "module_dir", module_dir)
+    _e1 = map.put(ctx, "root", root)
+    _e2 = map.put(ctx, "module_dir", module_dir)
 
     mod_name = module_dir
-    slash = string_index_of(module_dir, "/")
+    slash = string.index_of(module_dir, "/")
     if slash >= 0 {
-        mod_name = string_substring(module_dir, slash + 1, string_length(module_dir))
+        mod_name = string.substring(module_dir, slash + 1, string.length(module_dir))
     }
-    map_put(ctx, "module", mod_name)
+    _e3 = map.put(ctx, "module", mod_name)
 
-    source_dir = path_join(root, module_dir)
-    map_put(ctx, "source_dir", source_dir)
+    source_dir = path.join(root, module_dir)
+    _e4 = map.put(ctx, "source_dir", source_dir)
 
-    target_base = path_join(root, "target")
-    tgt_dir = path_join(target_base, module_dir)
-    map_put(ctx, "target_dir", tgt_dir)
+    target_base = path.join(root, "target")
+    tgt_dir = path.join(target_base, module_dir)
+    _e5 = map.put(ctx, "target_dir", tgt_dir)
 
-    map_put(ctx, "deps", list_new())
-    map_put(ctx, "libs", list_new())
-    map_put(ctx, "cargo_deps", list_new())
-    map_put(ctx, "npm_deps", list_new())
-    map_put(ctx, "maven_deps", list_new())
-    map_put(ctx, "boms", list_new())
-    map_put(ctx, "repos", list_new())
+    _e6 = map.put(ctx, "deps", list.new())
+    _e7 = map.put(ctx, "libs", list.new())
+    _e8 = map.put(ctx, "cargo_deps", list.new())
+    _e9 = map.put(ctx, "npm_deps", list.new())
+    _e10 = map.put(ctx, "maven_deps", list.new())
+    _e11 = map.put(ctx, "boms", list.new())
+    _e12 = map.put(ctx, "repos", list.new())
 
     return ctx
 }
@@ -167,23 +147,23 @@ start() {
 // Maven coordinates contain colons; module paths use slashes.
 // npm deps start with "npm:".
 
-dep(ctx: ptr, path: string) {
+dep(ctx: ptr, path_str: string) {
     // Check for npm: prefix first
-    npm_prefix = string_index_of(path, "npm:")
+    npm_prefix = string.index_of(path_str, "npm:")
     if npm_prefix == 0 {
-        npm_deps = map_get(ctx, "npm_deps")
+        npm_deps = map.get(ctx, "npm_deps")
         // Strip "npm:" prefix, store as "pkg:version"
-        pkg_spec = string_substring(path, 4, string_length(path))
-        list_add(npm_deps, pkg_spec)
+        pkg_spec = string.substring(path_str, 4, string.length(path_str))
+        _e = list.add(npm_deps, pkg_spec)
         return 0
     }
-    colon = string_index_of(path, ":")
+    colon = string.index_of(path_str, ":")
     if colon >= 0 {
-        maven_deps = map_get(ctx, "maven_deps")
-        list_add(maven_deps, path)
+        maven_deps = map.get(ctx, "maven_deps")
+        _e1 = list.add(maven_deps, path_str)
     } else {
-        deps = map_get(ctx, "deps")
-        list_add(deps, path)
+        deps = map.get(ctx, "deps")
+        _e2 = list.add(deps, path_str)
     }
 }
 
@@ -206,7 +186,8 @@ dep(ctx: ptr, path: string) {
 // don't bother caching. Language SDKs use this to pick OS-specific
 // linker flags or runtime env vars.
 _uname_s() {
-    return string_trim(os_exec("uname -s"))
+    out, _eerr = os.exec("uname -s")
+    return string.trim(out)
 }
 
 _is_macos() {
@@ -242,11 +223,11 @@ _dyld_env_var() {
 }
 
 _mkdirs(dir_path: string) {
-    os_system("mkdir -p ${dir_path}")
+    os.system("mkdir -p ${dir_path}")
 }
 
 _get(ctx: ptr, key: string) {
-    return map_get(ctx, key)
+    return map.get(ctx, key)
 }
 
 _strip_lang(dep_path: string) {
@@ -257,33 +238,34 @@ _strip_lang(dep_path: string) {
 
 _read_dep_artifact(ctx: ptr, dep_module: string, artifact: string) {
     root = _get(ctx, "root")
-    t = path_join(root, "target")
-    t2 = path_join(t, dep_module)
-    p = path_join(t2, artifact)
-    if file_exists(p) == 1 {
-        return io_read_file(p)
+    t = path.join(root, "target")
+    t2 = path.join(t, dep_module)
+    p = path.join(t2, artifact)
+    if file.exists(p) == 1 {
+        content, _rerr = io.read_file(p)
+        return content
     }
     return ""
 }
 
 _write_artifact(ctx: ptr, artifact: string, content: string) {
     td = _get(ctx, "target_dir")
-    p = path_join(td, artifact)
-    io_write_file(p, content)
+    p = path.join(td, artifact)
+    _e = io.write_file(p, content)
 }
 
 _needs_rebuild(source_dir: string, ts_file: string) {
-    if file_exists(ts_file) == 0 {
+    if file.exists(ts_file) == 0 {
         return 1
     }
-    prev = file_mtime(ts_file)
-    pat = path_join(source_dir, "*")
-    files = fs_glob(pat)
+    prev = file.mtime(ts_file)
+    pat = path.join(source_dir, "*")
+    files, _gerr = fs.glob(pat)
     count = dir_list_count(files)
     i = 0
     while i < count {
         f = dir_list_get(files, i)
-        mt = file_mtime(f)
+        mt = file.mtime(f)
         if mt > prev {
             dir_list_free(files)
             return 1
@@ -295,17 +277,17 @@ _needs_rebuild(source_dir: string, ts_file: string) {
 }
 
 _collect_file_list(pattern: string) {
-    files = fs_glob(pattern)
+    files, _gerr = fs.glob(pattern)
     count = dir_list_count(files)
     result = ""
     i = 0
     while i < count {
         f = dir_list_get(files, i)
         if i == 0 {
-            result = string_concat(f, "")
+            result = string.concat(f, "")
         } else {
-            sp = string_concat(result, " ")
-            result = string_concat(sp, f)
+            sp = string.concat(result, " ")
+            result = string.concat(sp, f)
         }
         i = i + 1
     }
@@ -314,19 +296,20 @@ _collect_file_list(pattern: string) {
 }
 
 _build_dep_classpath(ctx: ptr) {
-    deps = map_get(ctx, "deps")
+    deps = map.get(ctx, "deps")
     cp = ""
-    count = list_size(deps)
+    count = list.size(deps)
     i = 0
     while i < count {
-        dp = list_get(deps, i)
+        dp = list.get(deps, i)
         dm = _strip_lang(dp)
         dep_cp_raw = _read_dep_artifact(ctx, dm, "jvm_classpath_deps_including_transitive")
-        if string_length(dep_cp_raw) > 0 {
-            dep_cp = string_trim(os_exec("echo '${dep_cp_raw}' | tr '\n' ':' | sed 's/:$//'"))
-            if string_length(cp) > 0 {
-                tmp = string_concat(cp, ":")
-                cp = string_concat(tmp, dep_cp)
+        if string.length(dep_cp_raw) > 0 {
+            out, _eerr = os.exec("echo '${dep_cp_raw}' | tr '\n' ':' | sed 's/:$//'")
+            dep_cp = string.trim(out)
+            if string.length(cp) > 0 {
+                tmp = string.concat(cp, ":")
+                cp = string.concat(tmp, dep_cp)
             } else {
                 cp = dep_cp
             }
@@ -338,17 +321,17 @@ _build_dep_classpath(ctx: ptr) {
 
 _build_lib_classpath(ctx: ptr) {
     root = _get(ctx, "root")
-    libs = map_get(ctx, "libs")
+    libs = map.get(ctx, "libs")
     cp = ""
-    count = list_size(libs)
+    count = list.size(libs)
     i = 0
     while i < count {
-        lp = list_get(libs, i)
-        libs_dir = path_join(root, "libs")
-        full = path_join(libs_dir, lp)
-        if string_length(cp) > 0 {
-            tmp = string_concat(cp, ":")
-            cp = string_concat(tmp, full)
+        lp = list.get(libs, i)
+        libs_dir = path.join(root, "libs")
+        full = path.join(libs_dir, lp)
+        if string.length(cp) > 0 {
+            tmp = string.concat(cp, ":")
+            cp = string.concat(tmp, full)
         } else {
             cp = full
         }
@@ -360,26 +343,26 @@ _build_lib_classpath(ctx: ptr) {
 // --- Shared DSL setters (used by all languages) ---
 
 extra(_ctx: ptr, flag: string) {
-    if map_has(_ctx, "extra") == 1 {
-        prev = map_get(_ctx, "extra")
-        combined = string_concat(prev, " ")
-        combined = string_concat(combined, flag)
-        map_put(_ctx, "extra", combined)
+    if map.has(_ctx, "extra") == 1 {
+        prev = map.get(_ctx, "extra")
+        combined = string.concat(prev, " ")
+        combined = string.concat(combined, flag)
+        _e1 = map.put(_ctx, "extra", combined)
     } else {
-        map_put(_ctx, "extra", flag)
+        _e2 = map.put(_ctx, "extra", flag)
     }
 }
 
 werror(_ctx: ptr) {
-    map_put(_ctx, "werror", "true")
+    _e = map.put(_ctx, "werror", "true")
 }
 
 nowarn(_ctx: ptr) {
-    map_put(_ctx, "nowarn", "true")
+    _e = map.put(_ctx, "nowarn", "true")
 }
 
 verbose(_ctx: ptr) {
-    map_put(_ctx, "verbose", "true")
+    _e = map.put(_ctx, "verbose", "true")
 }
 
 // Load a shared third-party deps file (.deps.ae). Cross-cutting:
@@ -387,33 +370,35 @@ verbose(_ctx: ptr) {
 // Not for in-repo module deps.
 load_third_party_deps(ctx: ptr, rel_path: string) {
     source_dir = _get(ctx, "source_dir")
-    full_path = path_join(source_dir, rel_path)
-    if file_exists(full_path) == 0 {
+    full_path = path.join(source_dir, rel_path)
+    if file.exists(full_path) == 0 {
         println("warning: deps file not found: ${full_path}")
         return 0
     }
 
     // Store path for maven BOM resolution
-    if map_has(ctx, "_bom_files") == 0 {
-        map_put(ctx, "_bom_files", list_new())
+    if map.has(ctx, "_bom_files") == 0 {
+        _e1 = map.put(ctx, "_bom_files", list.new())
     }
-    bom_files = map_get(ctx, "_bom_files")
-    list_add(bom_files, full_path)
+    bom_files = map.get(ctx, "_bom_files")
+    _e2 = list.add(bom_files, full_path)
 
     // Also extract dep() lines with npm: prefix
-    parsed = string_trim(os_exec("grep 'dep.*npm:' '${full_path}' | grep -o '\"npm:[^\"]*\"' | tr -d '\"' | sed 's/^npm://'"))
-    if string_length(parsed) == 0 {
+    parsed_raw, _eerr = os.exec("grep 'dep.*npm:' '${full_path}' | grep -o '\"npm:[^\"]*\"' | tr -d '\"' | sed 's/^npm://'")
+    parsed = string.trim(parsed_raw)
+    if string.length(parsed) == 0 {
         return 1
     }
 
-    npm_deps_list = map_get(ctx, "npm_deps")
+    npm_deps_list = map.get(ctx, "npm_deps")
     line_idx = 1
     while line_idx <= 500 {
-        line = string_trim(os_exec("echo '${parsed}' | sed -n '${line_idx}p'"))
-        if string_length(line) == 0 {
+        line_raw, _e3 = os.exec("echo '${parsed}' | sed -n '${line_idx}p'")
+        line = string.trim(line_raw)
+        if string.length(line) == 0 {
             line_idx = 501
         } else {
-            list_add(npm_deps_list, line)
+            _e4 = list.add(npm_deps_list, line)
             line_idx = line_idx + 1
         }
     }
