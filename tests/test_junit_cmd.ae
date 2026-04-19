@@ -1,4 +1,15 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
 import build
+import maven
 // Tests for junit_cmd()
 
 import java

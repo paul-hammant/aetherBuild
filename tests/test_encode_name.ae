@@ -1,11 +1,19 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
 // Tests for encode_name — converts file paths to C-safe function names
 // Mirrors the bash: / → _    _ → __   - → _H_   . → _D_
 
-extern string_concat(a: string, b: string) -> string
-extern string_length(s: string) -> int
-extern string_contains(s: string, sub: string) -> int
-extern os_exec(cmd: string) -> string
-extern string_trim(s: string) -> string
+// string_concat/length/contains/trim are now supplied by std.string; os_exec
+// became a Go-style (output, err) wrapper, so the single-string extern is
+// os_exec_raw. No local extern redeclarations needed.
 
 // encode_name via sed (same transform as the bash script)
 // Matches the bash encode_name in aeb and tools/gen-orchestrator.ae:
@@ -15,7 +23,7 @@ encode_name(input: string) {
     cmd = "printf '%s' '"
     cmd = string_concat(cmd, input)
     cmd = string_concat(cmd, "' | sed 's/__/DBLUND/g; s|/|_|g; s/-/_H_/g; s/\\./_D_/g; s/DBLUND/__/g'")
-    return string_trim(os_exec(cmd))
+    return string_trim(os_exec_raw(cmd))
 }
 
 _assert_eq(label: string, actual: string, expected: string) {

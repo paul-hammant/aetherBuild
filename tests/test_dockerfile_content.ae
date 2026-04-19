@@ -1,3 +1,13 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
 import build
 // Tests for dockerfile_content() — Dockerfile string generation
 
@@ -16,7 +26,10 @@ _assert_eq(label: string, actual: string, expected: string) {
 
 // Check that a string contains a substring
 _assert_contains(label: string, haystack: string, needle: string) {
-    result = os_exec("echo '${haystack}' | grep -c '${needle}'")
+    // os_exec is now a Go-style wrapper returning (output, err); the raw
+    // single-string extern is os_exec_raw. string_trim is already provided
+    // by std.string — no local extern needed.
+    result = os_exec_raw("echo '${haystack}' | grep -c '${needle}'")
     result = string_trim(result)
     if result != "0" {
         println("PASS: ${label}")
@@ -25,9 +38,6 @@ _assert_contains(label: string, haystack: string, needle: string) {
         println("  actual: ${haystack}")
     }
 }
-
-extern os_exec(cmd: string) -> string
-extern string_trim(s: string) -> string
 
 main() {
     // No config: default base + default workdir + artifact copy

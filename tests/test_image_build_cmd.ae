@@ -1,3 +1,13 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
 import build
 // Tests for image_build_cmd() — OCI container build command builder
 
