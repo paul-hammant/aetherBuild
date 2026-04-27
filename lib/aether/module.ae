@@ -38,12 +38,12 @@ _resolve_aether_dir() {
 
 _collect_shared_libs(ctx: ptr) {
     // Returns newline-separated list of .so file paths from transitive deps.
-    deps = map.get(ctx, "deps")
+    deps, _ = map.get(ctx, "deps")
     out = ""
     n = list.size(deps)
     i = 0
     while i < n {
-        dp = list.get(deps, i)
+        dp, _ = list.get(deps, i)
         dm = build._strip_lang(dp)
         sh = build._read_dep_artifact(ctx, dm, "shared_library_deps_including_transitive")
         if string.length(sh) > 0 {
@@ -128,7 +128,7 @@ builder program(ctx: ptr) {
     src_name = _default_source_name(ctx)
     if _builder != null {
         if map.has(_builder, "source") == 1 {
-            src_name = map.get(_builder, "source")
+            src_name, _ = map.get(_builder, "source")
         }
     }
     src_path = path.join(source_dir, src_name)
@@ -136,7 +136,7 @@ builder program(ctx: ptr) {
     out_name = "program"
     if _builder != null {
         if map.has(_builder, "output") == 1 {
-            out_name = map.get(_builder, "output")
+            out_name, _ = map.get(_builder, "output")
         }
     }
     bin_path = path.join(bin_dir, out_name)
@@ -163,7 +163,7 @@ builder program_test(ctx: ptr) {
     src_name = _default_source_name(ctx)
     if _builder != null {
         if map.has(_builder, "source") == 1 {
-            src_name = map.get(_builder, "source")
+            src_name, _ = map.get(_builder, "source")
         }
     }
     src_path = path.join(source_dir, src_name)

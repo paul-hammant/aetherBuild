@@ -42,7 +42,7 @@ nuget(_ctx: ptr, pkg: string) {
     if map.has(_ctx, "nuget_deps") == 0 {
         _e1 = map.put(_ctx, "nuget_deps", list.new())
     }
-    pkgs = map.get(_ctx, "nuget_deps")
+    pkgs, _ = map.get(_ctx, "nuget_deps")
     _e2 = list.add(pkgs, pkg)
 }
 
@@ -60,6 +60,134 @@ output_type(_ctx: ptr, t: string) {
 
 implicit_usings(_ctx: ptr) {
     _e = map.put(_ctx, "implicit_usings", "true")
+}
+
+// --- Command builders (pure) ---
+
+// dotnet_build_cmd — `dotnet build` invocation. Pure.
+dotnet_build_cmd(csproj: string, config: string) {
+    return "dotnet build '${csproj}' --configuration ${config}"
+}
+
+// dotnet_test_cmd — `dotnet test` invocation. Pure. --no-build because
+// the test orchestrator runs after build_project has already compiled.
+dotnet_test_cmd(csproj: string, config: string) {
+    return "dotnet test '${csproj}' --configuration ${config} --no-build"
+}
+
+// csproj_content — generate the .csproj XML from builder opts and
+// pre-resolved dep lists. Pure: caller pre-walks dep artifacts and
+// passes plain lists, this just assembles XML.
+//
+// pkgrefs: list of "name~version" strings (use "~name" / no version
+//   for an unversioned PackageReference). Inline nuget() entries with
+//   colon separators are normalised to tilde by the caller.
+// vendored_refs: list of "name~hint_path" strings.
+// project_refs: list of relative .csproj paths for ProjectReference.
+csproj_content(opts: ptr, pkgrefs: ptr, vendored_refs: ptr, project_refs: ptr) {
+    proj_sdk = "Microsoft.NET.Sdk"
+    if opts != null {
+        if map.has(opts, "sdk") == 1 {
+            proj_sdk, _ = map.get(opts, "sdk")
+        }
+    }
+
+    xml = "<Project Sdk=\"${proj_sdk}\">\n\n  <PropertyGroup>\n"
+
+    if opts != null {
+        if map.has(opts, "target_framework") == 1 {
+            tfm, _ = map.get(opts, "target_framework")
+            xml = string.concat(xml, "    <TargetFramework>${tfm}</TargetFramework>\n")
+        }
+        if map.has(opts, "root_namespace") == 1 {
+            ns, _ = map.get(opts, "root_namespace")
+            xml = string.concat(xml, "    <RootNamespace>${ns}</RootNamespace>\n")
+        }
+        if map.has(opts, "assembly_name") == 1 {
+            an, _ = map.get(opts, "assembly_name")
+            xml = string.concat(xml, "    <AssemblyName>${an}</AssemblyName>\n")
+        }
+        if map.has(opts, "output_type") == 1 {
+            ot, _ = map.get(opts, "output_type")
+            xml = string.concat(xml, "    <OutputType>${ot}</OutputType>\n")
+        }
+        if map.has(opts, "nullable") == 1 {
+            xml = string.concat(xml, "    <Nullable>enable</Nullable>\n")
+        }
+        if map.has(opts, "implicit_usings") == 1 {
+            xml = string.concat(xml, "    <ImplicitUsings>enable</ImplicitUsings>\n")
+        }
+        if map.has(opts, "is_test_project") == 1 {
+            xml = string.concat(xml, "    <IsPackable>false</IsPackable>\n")
+        }
+    }
+
+    xml = string.concat(xml, "  </PropertyGroup>\n")
+
+    has_pkgrefs = 0
+    if pkgrefs != null {
+        if list.size(pkgrefs) > 0 { has_pkgrefs = 1 }
+    }
+    if has_pkgrefs == 1 {
+        xml = string.concat(xml, "\n  <ItemGroup>\n")
+        n = list.size(pkgrefs)
+        i = 0
+        while i < n {
+            entry, _ = list.get(pkgrefs, i)
+            if string.contains(entry, "~") == 1 {
+                idx = string.index_of(entry, "~")
+                pkg_name = string.substring(entry, 0, idx)
+                pkg_ver = string.substring(entry, idx + 1, string.length(entry))
+                if string.length(pkg_ver) > 0 {
+                    xml = string.concat(xml, "    <PackageReference Include=\"${pkg_name}\" Version=\"${pkg_ver}\" />\n")
+                } else {
+                    xml = string.concat(xml, "    <PackageReference Include=\"${pkg_name}\" />\n")
+                }
+            } else {
+                xml = string.concat(xml, "    <PackageReference Include=\"${entry}\" />\n")
+            }
+            i = i + 1
+        }
+        xml = string.concat(xml, "  </ItemGroup>\n")
+    }
+
+    has_vrefs = 0
+    if vendored_refs != null {
+        if list.size(vendored_refs) > 0 { has_vrefs = 1 }
+    }
+    if has_vrefs == 1 {
+        xml = string.concat(xml, "\n  <ItemGroup>\n")
+        n = list.size(vendored_refs)
+        i = 0
+        while i < n {
+            entry, _ = list.get(vendored_refs, i)
+            idx = string.index_of(entry, "~")
+            r_name = string.substring(entry, 0, idx)
+            r_path = string.substring(entry, idx + 1, string.length(entry))
+            xml = string.concat(xml, "    <Reference Include=\"${r_name}\"><HintPath>${r_path}</HintPath></Reference>\n")
+            i = i + 1
+        }
+        xml = string.concat(xml, "  </ItemGroup>\n")
+    }
+
+    has_prefs = 0
+    if project_refs != null {
+        if list.size(project_refs) > 0 { has_prefs = 1 }
+    }
+    if has_prefs == 1 {
+        xml = string.concat(xml, "\n  <ItemGroup>\n")
+        n = list.size(project_refs)
+        i = 0
+        while i < n {
+            ref, _ = list.get(project_refs, i)
+            xml = string.concat(xml, "    <ProjectReference Include=\"${ref}\" />\n")
+            i = i + 1
+        }
+        xml = string.concat(xml, "  </ItemGroup>\n")
+    }
+
+    xml = string.concat(xml, "\n</Project>\n")
+    return xml
 }
 
 // --- SDK functions ---
@@ -86,7 +214,7 @@ builder nuget_registry(ctx: ptr, name_and_ver: string) {
         new_content = string.concat(existing, "\n")
         new_content = string.concat(new_content, name_and_ver)
     }
-    _e = io.write_file(artifact_path, new_content)
+    _e = fs.write_atomic(artifact_path, new_content, string.length(new_content))
     println("${mod_dir}: registry nuget ${name_and_ver}")
     return 0
 }
@@ -111,7 +239,7 @@ builder nuget_vendored(ctx: ptr, name_and_path: string) {
         new_content = string.concat(existing, "\n")
         new_content = string.concat(new_content, name_and_path)
     }
-    _e = io.write_file(artifact_path, new_content)
+    _e = fs.write_atomic(artifact_path, new_content, string.length(new_content))
     println("${mod_dir}: vendored dll ${name_and_path}")
     return 0
 }
@@ -127,81 +255,39 @@ builder build_project(ctx: ptr) {
     pn_raw, _ep = os.exec("basename '${source_dir}'")
     project_name = string.trim(pn_raw)
 
-    // --- Generate .csproj ---
-    proj_sdk = "Microsoft.NET.Sdk"
-    if _builder != null {
-        if map.has(_builder, "sdk") == 1 {
-            proj_sdk = map.get(_builder, "sdk")
-        }
-    }
-
-    xml = "<Project Sdk=\"${proj_sdk}\">\n\n  <PropertyGroup>\n"
-
-    // TargetFramework — if set, overrides the central Directory.Packages.props default
-    if _builder != null {
-        if map.has(_builder, "target_framework") == 1 {
-            tfm = map.get(_builder, "target_framework")
-            xml = string.concat(xml, "    <TargetFramework>${tfm}</TargetFramework>\n")
-        }
-    }
-
-    if _builder != null {
-        if map.has(_builder, "root_namespace") == 1 {
-            ns = map.get(_builder, "root_namespace")
-            xml = string.concat(xml, "    <RootNamespace>${ns}</RootNamespace>\n")
-        }
-        if map.has(_builder, "assembly_name") == 1 {
-            an = map.get(_builder, "assembly_name")
-            xml = string.concat(xml, "    <AssemblyName>${an}</AssemblyName>\n")
-        }
-        if map.has(_builder, "output_type") == 1 {
-            ot = map.get(_builder, "output_type")
-            xml = string.concat(xml, "    <OutputType>${ot}</OutputType>\n")
-        }
-        if map.has(_builder, "nullable") == 1 {
-            xml = string.concat(xml, "    <Nullable>enable</Nullable>\n")
-        }
-        if map.has(_builder, "implicit_usings") == 1 {
-            xml = string.concat(xml, "    <ImplicitUsings>enable</ImplicitUsings>\n")
-        }
-        if map.has(_builder, "is_test_project") == 1 {
-            xml = string.concat(xml, "    <IsPackable>false</IsPackable>\n")
-        }
-    }
-
-    xml = string.concat(xml, "  </PropertyGroup>\n")
-
-    // NuGet PackageReferences — inline + from .nupkg.ae dep artifacts
-    has_any_pkgref = 0
-    pkgref_xml = ""
-
-    // Inline nuget() calls (colon-separated "name:version")
+    // Collect package refs: inline nuget() + .nupkg.ae registry deps.
+    // Inline entries arrive colon-separated ("name:version"); registry
+    // artifact lines are tilde-separated. Normalise everything to tilde
+    // so csproj_content sees a single shape.
+    pkgrefs = list.new()
     if _builder != null {
         if map.has(_builder, "nuget_deps") == 1 {
-            pkgs = map.get(_builder, "nuget_deps")
+            pkgs, _ = map.get(_builder, "nuget_deps")
             count = list.size(pkgs)
             i = 0
             while i < count {
-                pkg = list.get(pkgs, i)
+                pkg, _ = list.get(pkgs, i)
                 if string.contains(pkg, ":") == 1 {
-                    pkg_name = string.substring(pkg, 0, string.index_of(pkg, ":"))
-                    pkg_ver = string.substring(pkg, string.index_of(pkg, ":") + 1, string.length(pkg))
-                    pkgref_xml = string.concat(pkgref_xml, "    <PackageReference Include=\"${pkg_name}\" Version=\"${pkg_ver}\" />\n")
+                    idx = string.index_of(pkg, ":")
+                    pkg_name = string.substring(pkg, 0, idx)
+                    pkg_ver = string.substring(pkg, idx + 1, string.length(pkg))
+                    entry = string.concat(pkg_name, "~")
+                    entry = string.concat(entry, pkg_ver)
+                    _e_pi = list.add(pkgrefs, entry)
                 } else {
-                    pkgref_xml = string.concat(pkgref_xml, "    <PackageReference Include=\"${pkg}\" />\n")
+                    entry = string.concat(pkg, "~")
+                    _e_pi2 = list.add(pkgrefs, entry)
                 }
-                has_any_pkgref = 1
                 i = i + 1
             }
         }
     }
 
-    // Registry nuget deps from .nupkg.ae dep files (tilde-separated "name~version")
-    dep_list = map.get(ctx, "deps")
+    dep_list, _ = map.get(ctx, "deps")
     dl_count = list.size(dep_list)
     dli = 0
     while dli < dl_count {
-        dp_n = list.get(dep_list, dli)
+        dp_n, _ = list.get(dep_list, dli)
         dm_n = build._strip_lang(dp_n)
         raw_n = build._read_dep_artifact(ctx, dm_n, "dotnet_nuget_deps_including_transitive")
         if string.length(raw_n) > 0 {
@@ -212,12 +298,7 @@ builder build_project(ctx: ptr) {
                 if string.length(line_n) == 0 {
                     ni = 999
                 } else {
-                    if string.contains(line_n, "~") == 1 {
-                        n_name = string.substring(line_n, 0, string.index_of(line_n, "~"))
-                        n_ver = string.substring(line_n, string.index_of(line_n, "~") + 1, string.length(line_n))
-                        pkgref_xml = string.concat(pkgref_xml, "    <PackageReference Include=\"${n_name}\" Version=\"${n_ver}\" />\n")
-                        has_any_pkgref = 1
-                    }
+                    _e_pn = list.add(pkgrefs, line_n)
                     ni = ni + 1
                 }
             }
@@ -225,18 +306,13 @@ builder build_project(ctx: ptr) {
         dli = dli + 1
     }
 
-    if has_any_pkgref == 1 {
-        xml = string.concat(xml, "\n  <ItemGroup>\n")
-        xml = string.concat(xml, pkgref_xml)
-        xml = string.concat(xml, "  </ItemGroup>\n")
-    }
-
-    // Vendored DLL <Reference> entries from .nupkg.ae dep artifacts
-    has_any_ref = 0
-    ref_xml = ""
+    // Collect vendored DLL refs from .nupkg.ae dep artifacts. HintPath
+    // is computed here (impure: needs python3 + filesystem) and the
+    // result is passed as a tilde-joined "name~hint_rel" entry.
+    vendored_refs = list.new()
     dli2 = 0
     while dli2 < dl_count {
-        dp_r = list.get(dep_list, dli2)
+        dp_r, _ = list.get(dep_list, dli2)
         dm_r = build._strip_lang(dp_r)
         raw_r = build._read_dep_artifact(ctx, dm_r, "dotnet_vendored_refs_including_transitive")
         if string.length(raw_r) > 0 {
@@ -248,13 +324,14 @@ builder build_project(ctx: ptr) {
                     ri = 999
                 } else {
                     if string.contains(line_r, "~") == 1 {
-                        r_name = string.substring(line_r, 0, string.index_of(line_r, "~"))
-                        r_path = string.substring(line_r, string.index_of(line_r, "~") + 1, string.length(line_r))
-                        // HintPath is relative to project dir
+                        idx = string.index_of(line_r, "~")
+                        r_name = string.substring(line_r, 0, idx)
+                        r_path = string.substring(line_r, idx + 1, string.length(line_r))
                         hr_raw, _ehr = os.exec("python3 -c \"import os; print(os.path.relpath('${root}/${r_path}', '${source_dir}'))\"")
                         hint_rel = string.trim(hr_raw)
-                        ref_xml = string.concat(ref_xml, "    <Reference Include=\"${r_name}\"><HintPath>${hint_rel}</HintPath></Reference>\n")
-                        has_any_ref = 1
+                        entry = string.concat(r_name, "~")
+                        entry = string.concat(entry, hint_rel)
+                        _e_vr = list.add(vendored_refs, entry)
                     }
                     ri = ri + 1
                 }
@@ -262,42 +339,36 @@ builder build_project(ctx: ptr) {
         }
         dli2 = dli2 + 1
     }
-    if has_any_ref == 1 {
-        xml = string.concat(xml, "\n  <ItemGroup>\n")
-        xml = string.concat(xml, ref_xml)
-        xml = string.concat(xml, "  </ItemGroup>\n")
-    }
 
-    // ProjectReferences from build.dep()
-    deps = map.get(ctx, "deps")
+    // ProjectReferences from build.dep() module deps. The Include path
+    // (relative to source_dir) is computed here and passed as a plain
+    // string list to csproj_content.
+    project_refs = list.new()
+    deps, _ = map.get(ctx, "deps")
     dep_count = list.size(deps)
-    if dep_count > 0 {
-        xml = string.concat(xml, "\n  <ItemGroup>\n")
-        i = 0
-        while i < dep_count {
-            dp = list.get(deps, i)
-            dep_dir = path.join(root, dp)
-            rel_raw, _erel = os.exec("python3 -c \"import os; print(os.path.relpath('${dep_dir}', '${source_dir}'))\"")
-            rel = string.trim(rel_raw)
-            dc_raw, _edc = os.exec("ls '${dep_dir}'/.*.generated.csproj 2>/dev/null | head -1")
-            dep_csproj = string.trim(dc_raw)
-            if string.length(dep_csproj) == 0 {
-                dc2_raw, _edc2 = os.exec("ls '${dep_dir}'/*.csproj 2>/dev/null | head -1")
-                dep_csproj = string.trim(dc2_raw)
-            }
-            if string.length(dep_csproj) > 0 {
-                cn_raw, _ecn = os.exec("basename '${dep_csproj}'")
-                csproj_name = string.trim(cn_raw)
-                ref_path = string.concat(rel, "/")
-                ref_path = string.concat(ref_path, csproj_name)
-                xml = string.concat(xml, "    <ProjectReference Include=\"${ref_path}\" />\n")
-            }
-            i = i + 1
+    i = 0
+    while i < dep_count {
+        dp, _ = list.get(deps, i)
+        dep_dir = path.join(root, dp)
+        rel_raw, _erel = os.exec("python3 -c \"import os; print(os.path.relpath('${dep_dir}', '${source_dir}'))\"")
+        rel = string.trim(rel_raw)
+        dc_raw, _edc = os.exec("ls '${dep_dir}'/.*.generated.csproj 2>/dev/null | head -1")
+        dep_csproj = string.trim(dc_raw)
+        if string.length(dep_csproj) == 0 {
+            dc2_raw, _edc2 = os.exec("ls '${dep_dir}'/*.csproj 2>/dev/null | head -1")
+            dep_csproj = string.trim(dc2_raw)
         }
-        xml = string.concat(xml, "  </ItemGroup>\n")
+        if string.length(dep_csproj) > 0 {
+            cn_raw, _ecn = os.exec("basename '${dep_csproj}'")
+            csproj_name = string.trim(cn_raw)
+            ref_path = string.concat(rel, "/")
+            ref_path = string.concat(ref_path, csproj_name)
+            _e_pr = list.add(project_refs, ref_path)
+        }
+        i = i + 1
     }
 
-    xml = string.concat(xml, "\n</Project>\n")
+    xml = csproj_content(_builder, pkgrefs, vendored_refs, project_refs)
 
     csproj = path.join(source_dir, ".${project_name}.generated.csproj")
     _ew = io.write_file(csproj, xml)
@@ -308,11 +379,11 @@ builder build_project(ctx: ptr) {
     config = "Release"
     if _builder != null {
         if map.has(_builder, "configuration") == 1 {
-            config = map.get(_builder, "configuration")
+            config, _ = map.get(_builder, "configuration")
         }
     }
 
-    cmd = "dotnet build '${csproj}' --configuration ${config}"
+    cmd = dotnet_build_cmd(csproj, config)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: dotnet build failed")
@@ -342,11 +413,11 @@ builder test(ctx: ptr) {
     config = "Release"
     if _builder != null {
         if map.has(_builder, "configuration") == 1 {
-            config = map.get(_builder, "configuration")
+            config, _ = map.get(_builder, "configuration")
         }
     }
 
-    cmd = "dotnet test '${csproj}' --configuration ${config} --no-build"
+    cmd = dotnet_test_cmd(csproj, config)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")

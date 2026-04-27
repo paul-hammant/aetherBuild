@@ -15,6 +15,52 @@ import std.map
 import std.path
 import std.dir
 
+// --- Command builders (pure) ---
+
+// pnpm_spec_from_dep — translate a "name:version" dep entry into the
+// "name@version" spec pnpm add expects. Handles scoped packages
+// (e.g. "@angular/core:11.2.4" → "@angular/core@11.2.4") by splitting
+// on the LAST colon. Pure.
+pnpm_spec_from_dep(pkg: string) {
+    pkg_len = string.length(pkg)
+    last_colon = -1
+    ci = 0
+    while ci < pkg_len {
+        ch = string.substring(pkg, ci, ci + 1)
+        if ch == ":" {
+            last_colon = ci
+        }
+        ci = ci + 1
+    }
+    if last_colon < 0 {
+        return pkg
+    }
+    pkg_name = string.substring(pkg, 0, last_colon)
+    pkg_ver = string.substring(pkg, last_colon + 1, pkg_len)
+    out = string.concat(pkg_name, "@")
+    return string.concat(out, pkg_ver)
+}
+
+// pnpm_add_cmd — assemble the pnpm add command. Pure: caller passes
+// a pre-built list of dep entries (each "name:version") and the
+// install prefix dir. Each entry is run through pnpm_spec_from_dep
+// before quoting.
+pnpm_add_cmd(prefix_dir: string, deps: ptr) {
+    cmd = "COREPACK_ENABLE_STRICT=0 pnpm add --prefix '${prefix_dir}'"
+    if deps == null {
+        return cmd
+    }
+    n = list.size(deps)
+    i = 0
+    while i < n {
+        pkg, _ = list.get(deps, i)
+        spec = pnpm_spec_from_dep(pkg)
+        cmd = string.concat(cmd, " '${spec}'")
+        i = i + 1
+    }
+    return cmd
+}
+
 // --- npm dependency resolution ---
 //
 // All npm deps (npm:pkg:version) are collected via dep() in build
@@ -22,10 +68,11 @@ import std.dir
 
 resolve(ctx: ptr) {
     if map.has(ctx, "_npm_resolved") == 1 {
-        return map.get(ctx, "_npm_resolved")
+        v, _ = map.get(ctx, "_npm_resolved")
+        return v
     }
 
-    npm_deps = map.get(ctx, "npm_deps")
+    npm_deps, _ = map.get(ctx, "npm_deps")
     dep_count = list.size(npm_deps)
     if dep_count == 0 {
         _e1 = map.put(ctx, "_npm_resolved", "")
@@ -55,37 +102,9 @@ resolve(ctx: ptr) {
         _e4 = io.write_file(aeb_npmrc, "node-linker=hoisted")
     }
 
-    // Build pnpm add command with all deps
     // COREPACK_ENABLE_STRICT=0 allows pnpm to work even when
     // a parent package.json declares a different package manager
-    cmd = "COREPACK_ENABLE_STRICT=0 pnpm add --prefix '${aeb_dir}'"
-    di = 0
-    while di < dep_count {
-        pkg = list.get(npm_deps, di)
-        // pkg is "name:version" — convert to "name@version" for pnpm
-        // Handle scoped packages: @angular/core:11.2.4 → @angular/core@11.2.4
-        // Find last colon (the version separator)
-        pkg_len = string.length(pkg)
-        last_colon = -1
-        ci = 0
-        while ci < pkg_len {
-            ch = string.substring(pkg, ci, ci + 1)
-            if ch == ":" {
-                last_colon = ci
-            }
-            ci = ci + 1
-        }
-        pnpm_spec = pkg
-        if last_colon > 0 {
-            pkg_name = string.substring(pkg, 0, last_colon)
-            pkg_ver = string.substring(pkg, last_colon + 1, pkg_len)
-            pnpm_spec = string.concat(pkg_name, "@")
-            pnpm_spec = string.concat(pnpm_spec, pkg_ver)
-        }
-        cmd = string.concat(cmd, " '${pnpm_spec}'")
-        di = di + 1
-    }
-
+    cmd = pnpm_add_cmd(aeb_dir, npm_deps)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: warning: pnpm add failed")

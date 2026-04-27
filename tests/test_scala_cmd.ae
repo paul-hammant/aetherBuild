@@ -1,0 +1,51 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+// Tests for scala.scalac_cmd, scala.munit_cmd
+
+import scala (scalac_cmd, munit_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    _assert_eq("scalac_cmd basic",
+        scalac_cmd("/c/scala3-compiler.jar:/c/dotty-deps.jar",
+                   "/out/classes",
+                   "/out/classes:/lib/scala3-library.jar",
+                   "/out/sources.txt"),
+        "java -cp '/c/scala3-compiler.jar:/c/dotty-deps.jar' dotty.tools.dotc.Main -d '/out/classes' -cp '/out/classes:/lib/scala3-library.jar' @'/out/sources.txt'")
+
+    _assert_eq("scalac_cmd test classes",
+        scalac_cmd("/c/compiler.jar",
+                   "/out/test-classes",
+                   "/out/test-classes:/lib/lib.jar:/maven/junit.jar",
+                   "/out/test_sources.txt"),
+        "java -cp '/c/compiler.jar' dotty.tools.dotc.Main -d '/out/test-classes' -cp '/out/test-classes:/lib/lib.jar:/maven/junit.jar' @'/out/test_sources.txt'")
+
+    _assert_eq("munit_cmd basic",
+        munit_cmd("/out/test-classes:/lib/scala3.jar:/maven/junit.jar",
+                  "com.example.FooTest com.example.BarTest"),
+        "java -cp '/out/test-classes:/lib/scala3.jar:/maven/junit.jar' org.junit.runner.JUnitCore com.example.FooTest com.example.BarTest")
+
+    _assert_eq("munit_cmd single class",
+        munit_cmd("/cp", "com.foo.Test"),
+        "java -cp '/cp' org.junit.runner.JUnitCore com.foo.Test")
+
+    println("scala cmd tests done")
+}

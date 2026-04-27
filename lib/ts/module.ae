@@ -43,6 +43,86 @@ mocha_grep(_ctx: ptr, pat: string) {
     _e = map.put(_ctx, "grep", pat)
 }
 
+// --- Command builders (pure) ---
+
+// tsc_cmd — project-mode tsc invocation. Pure: takes the tsc binary
+// path, a tsconfig path, and an options map; returns the command
+// string. No fs, no os.exec.
+tsc_cmd(tsc_bin: string, tsconfig_path: string, opts: ptr) {
+    cmd = "${tsc_bin} -p '${tsconfig_path}'"
+    if opts != null {
+        if map.has(opts, "skip_lib_check") == 1 {
+            cmd = string.concat(cmd, " --skipLibCheck")
+        }
+        if map.has(opts, "out_dir") == 1 {
+            val, _ = map.get(opts, "out_dir")
+            cmd = string.concat(cmd, " --outDir '${val}'")
+        }
+        if map.has(opts, "extra") == 1 {
+            val, _ = map.get(opts, "extra")
+            cmd = string.concat(cmd, " ${val}")
+        }
+    }
+    return cmd
+}
+
+// tsc_files_cmd — free-files tsc invocation (no project file). Pure.
+tsc_files_cmd(source_dir: string, opts: ptr) {
+    cmd = "cd ${source_dir} && tsc"
+    if opts != null {
+        if map.has(opts, "strict") == 1 {
+            cmd = string.concat(cmd, " --strict")
+        }
+        if map.has(opts, "target") == 1 {
+            val, _ = map.get(opts, "target")
+            cmd = string.concat(cmd, " --target ${val}")
+        }
+        if map.has(opts, "module_kind") == 1 {
+            val, _ = map.get(opts, "module_kind")
+            cmd = string.concat(cmd, " --module ${val}")
+        }
+        if map.has(opts, "out_dir") == 1 {
+            val, _ = map.get(opts, "out_dir")
+            cmd = string.concat(cmd, " --outDir ${val}")
+        }
+        if map.has(opts, "extra") == 1 {
+            val, _ = map.get(opts, "extra")
+            cmd = string.concat(cmd, " ${val}")
+        }
+    }
+    return cmd
+}
+
+// mocha_cmd — mocha test invocation. Pure: caller resolves NODE_PATH
+// and ld_path, then this assembles the final shell line. Pass
+// dyld_var "" and ld_path "" to skip the LD_LIBRARY_PATH/DYLD_…
+// prefix; pass both to set it.
+mocha_cmd(node_path: string, ld_path: string, dyld_var: string, mocha_bin: string, opts: ptr, test_file: string) {
+    mocha_opts = ""
+    if opts != null {
+        if map.has(opts, "timeout") == 1 {
+            val, _ = map.get(opts, "timeout")
+            mocha_opts = string.concat(mocha_opts, " --timeout ${val}")
+        }
+        if map.has(opts, "reporter") == 1 {
+            val, _ = map.get(opts, "reporter")
+            mocha_opts = string.concat(mocha_opts, " --reporter ${val}")
+        }
+        if map.has(opts, "grep") == 1 {
+            val, _ = map.get(opts, "grep")
+            mocha_opts = string.concat(mocha_opts, " --grep '${val}'")
+        }
+        if map.has(opts, "extra") == 1 {
+            val, _ = map.get(opts, "extra")
+            mocha_opts = string.concat(mocha_opts, " ${val}")
+        }
+    }
+    if string.length(ld_path) > 0 {
+        return "NODE_PATH=${node_path} ${dyld_var}=${ld_path} node ${mocha_bin}${mocha_opts} ${test_file}"
+    }
+    return "NODE_PATH=${node_path} node ${mocha_bin}${mocha_opts} ${test_file}"
+}
+
 // --- SDK functions ---
 
 // npm_vendored — declare an npm package from the local vendored layout.
@@ -79,12 +159,12 @@ builder npm_registry(ctx: ptr, name_and_ver: string) {
 // inject them into the current module's npm_deps list as "name:version"
 // entries so pnpm.resolve processes them alongside inline declarations.
 _merge_npm_registry_deps(ctx: ptr) {
-    deps = map.get(ctx, "deps")
-    npm_deps_list = map.get(ctx, "npm_deps")
+    deps, _ = map.get(ctx, "deps")
+    npm_deps_list, _ = map.get(ctx, "npm_deps")
     dep_count = list.size(deps)
     di = 0
     while di < dep_count {
-        dp = list.get(deps, di)
+        dp, _ = list.get(deps, di)
         dm = build._strip_lang(dp)
         raw = build._read_dep_artifact(ctx, dm, "npm_registry_deps_including_transitive")
         if string.length(raw) > 0 {
@@ -114,7 +194,7 @@ builder tsc_files(ctx: ptr) {
     target_dir = build._get(ctx, "target_dir")
     mod_name = build._get(ctx, "module")
     mod_dir = build._get(ctx, "module_dir")
-    deps = map.get(ctx, "deps")
+    deps, _ = map.get(ctx, "deps")
 
     build._mkdirs(target_dir)
     ts_file = path.join(target_dir, ".timestamp")
@@ -129,7 +209,7 @@ builder tsc_files(ctx: ptr) {
     ts_deps = path.join(target_dir, "js")
     i = 0
     while i < dep_count {
-        dp6 = list.get(deps, i)
+        dp6, _ = list.get(deps, i)
         dm6 = build._strip_lang(dp6)
         dep_td = build._read_dep_artifact(ctx, dm6, "typescript_module_deps_including_transitive")
         if string.length(dep_td) > 0 {
@@ -142,12 +222,12 @@ builder tsc_files(ctx: ptr) {
     // Merge registry npm deps from .npm.ae dep files into ctx.npm_deps
     _merge_npm_registry_deps(ctx)
 
-    npm_deps_list = map.get(ctx, "npm_deps")
+    npm_deps_list, _ = map.get(ctx, "npm_deps")
     npm_count = list.size(npm_deps_list)
     npm_out = ""
     i = 0
     while i < npm_count {
-        nd = list.get(npm_deps_list, i)
+        nd, _ = list.get(npm_deps_list, i)
         if string.length(npm_out) > 0 {
             npm_out = string.concat(string.concat(npm_out, "\n"), nd)
         } else {
@@ -157,7 +237,7 @@ builder tsc_files(ctx: ptr) {
     }
     i = 0
     while i < dep_count {
-        dp7 = list.get(deps, i)
+        dp7, _ = list.get(deps, i)
         dm7 = build._strip_lang(dp7)
         dep_npm = build._read_dep_artifact(ctx, dm7, "npm_deps_including_transitive")
         if string.length(dep_npm) > 0 {
@@ -174,7 +254,7 @@ builder tsc_files(ctx: ptr) {
     shared_out = ""
     i = 0
     while i < dep_count {
-        dp8 = list.get(deps, i)
+        dp8, _ = list.get(deps, i)
         dm8 = build._strip_lang(dp8)
         dep_sh = build._read_dep_artifact(ctx, dm8, "shared_library_deps_including_transitive")
         if string.length(dep_sh) > 0 {
@@ -204,29 +284,8 @@ builder tsc_files(ctx: ptr) {
         }
     }
 
-    tsc_cmd = "cd ${source_dir} && tsc"
-    if _builder != null {
-        if map.has(_builder, "strict") == 1 {
-            tsc_cmd = string.concat(tsc_cmd, " --strict")
-        }
-        if map.has(_builder, "target") == 1 {
-            val = map.get(_builder, "target")
-            tsc_cmd = string.concat(tsc_cmd, " --target ${val}")
-        }
-        if map.has(_builder, "module_kind") == 1 {
-            val = map.get(_builder, "module_kind")
-            tsc_cmd = string.concat(tsc_cmd, " --module ${val}")
-        }
-        if map.has(_builder, "out_dir") == 1 {
-            val = map.get(_builder, "out_dir")
-            tsc_cmd = string.concat(tsc_cmd, " --outDir ${val}")
-        }
-        if map.has(_builder, "extra") == 1 {
-            val = map.get(_builder, "extra")
-            tsc_cmd = string.concat(tsc_cmd, " ${val}")
-        }
-    }
-    exit_code = os.system(tsc_cmd)
+    cmd = tsc_files_cmd(source_dir, _builder)
+    exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: tsc failed")
         return exit_code
@@ -240,7 +299,7 @@ builder mocha(ctx: ptr, test_file: string) {
     root = build._get(ctx, "root")
     target_dir = build._get(ctx, "target_dir")
     mod_dir = build._get(ctx, "module_dir")
-    deps = map.get(ctx, "deps")
+    deps, _ = map.get(ctx, "deps")
 
     js_dir = path.join(target_dir, "js")
     node_path = js_dir
@@ -250,7 +309,7 @@ builder mocha(ctx: ptr, test_file: string) {
     dep_count = list.size(deps)
     i = 0
     while i < dep_count {
-        dp9 = list.get(deps, i)
+        dp9, _ = list.get(deps, i)
         dm9 = build._strip_lang(dp9)
         dep_td = build._read_dep_artifact(ctx, dm9, "typescript_module_deps_including_transitive")
         if string.length(dep_td) > 0 {
@@ -267,7 +326,7 @@ builder mocha(ctx: ptr, test_file: string) {
     ld_path = ""
     i = 0
     while i < dep_count {
-        dpA = list.get(deps, i)
+        dpA, _ = list.get(deps, i)
         dmA = build._strip_lang(dpA)
         dep_sh = build._read_dep_artifact(ctx, dmA, "shared_library_deps_including_transitive")
         if string.length(dep_sh) > 0 {
@@ -285,33 +344,11 @@ builder mocha(ctx: ptr, test_file: string) {
     mocha_bin = path.join(root, "libs/javascript/npm_vendored/node_modules/mocha/bin/mocha.js")
     println("${mod_dir}: running tests")
 
-    mocha_opts = ""
-    if _builder != null {
-        if map.has(_builder, "timeout") == 1 {
-            val = map.get(_builder, "timeout")
-            mocha_opts = string.concat(mocha_opts, " --timeout ${val}")
-        }
-        if map.has(_builder, "reporter") == 1 {
-            val = map.get(_builder, "reporter")
-            mocha_opts = string.concat(mocha_opts, " --reporter ${val}")
-        }
-        if map.has(_builder, "grep") == 1 {
-            val = map.get(_builder, "grep")
-            mocha_opts = string.concat(mocha_opts, " --grep '${val}'")
-        }
-        if map.has(_builder, "extra") == 1 {
-            val = map.get(_builder, "extra")
-            mocha_opts = string.concat(mocha_opts, " ${val}")
-        }
-    }
-
-    run_cmd = ""
+    dyld_var = ""
     if string.length(ld_path) > 0 {
         dyld_var = build._dyld_env_var()
-        run_cmd = "NODE_PATH=${node_path} ${dyld_var}=${ld_path} node ${mocha_bin}${mocha_opts} ${test_file}"
-    } else {
-        run_cmd = "NODE_PATH=${node_path} node ${mocha_bin}${mocha_opts} ${test_file}"
     }
+    run_cmd = mocha_cmd(node_path, ld_path, dyld_var, mocha_bin, _builder, test_file)
     exit_code = os.system(run_cmd)
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")
@@ -353,7 +390,7 @@ builder tsc(ctx: ptr) {
     tc = path.join(source_dir, "tsconfig.lib.json")
     if _builder != null {
         if map.has(_builder, "tsconfig") == 1 {
-            tc_rel = map.get(_builder, "tsconfig")
+            tc_rel, _ = map.get(_builder, "tsconfig")
             tc = path.join(source_dir, tc_rel)
         }
     }
@@ -362,21 +399,7 @@ builder tsc(ctx: ptr) {
 
     aeb_dir = path.join(root, ".aeb")
     tsc_bin = path.join(aeb_dir, "node_modules/.bin/tsc")
-    cmd = "${tsc_bin} -p '${tc}'"
-
-    if _builder != null {
-        if map.has(_builder, "skip_lib_check") == 1 {
-            cmd = string.concat(cmd, " --skipLibCheck")
-        }
-        if map.has(_builder, "out_dir") == 1 {
-            val = map.get(_builder, "out_dir")
-            cmd = string.concat(cmd, " --outDir '${val}'")
-        }
-        if map.has(_builder, "extra") == 1 {
-            val = map.get(_builder, "extra")
-            cmd = string.concat(cmd, " ${val}")
-        }
-    }
+    cmd = tsc_cmd(tsc_bin, tc, _builder)
 
     exit_code = os.system(cmd)
     if exit_code != 0 {

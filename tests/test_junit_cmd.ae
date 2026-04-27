@@ -9,10 +9,8 @@ import std.path
 import std.dir
 
 import build
-import maven
 // Tests for junit_cmd()
 
-import java
 import java (junit_cmd)
 
 _assert_eq(label: string, actual: string, expected: string) {

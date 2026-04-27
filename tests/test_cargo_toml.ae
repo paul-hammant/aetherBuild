@@ -29,7 +29,7 @@ _add_dep(opts: ptr, name: string, ver: string) {
     if map_has(opts, "_crate_deps") == 0 {
         map_put(opts, "_crate_deps", list_new())
     }
-    deps = map_get(opts, "_crate_deps")
+    deps, _ = map.get(opts, "_crate_deps")
     entry = string_concat(name, "~")
     entry = string_concat(entry, ver)
     list_add(deps, entry)
@@ -40,7 +40,7 @@ _add_dep_features(opts: ptr, name: string, ver: string, feats: string) {
     if map_has(opts, "_crate_deps_features") == 0 {
         map_put(opts, "_crate_deps_features", list_new())
     }
-    deps = map_get(opts, "_crate_deps_features")
+    deps, _ = map.get(opts, "_crate_deps_features")
     entry = string_concat(name, "~")
     entry = string_concat(entry, ver)
     entry = string_concat(entry, "~")
@@ -53,7 +53,7 @@ _add_path_dep(opts: ptr, name: string, path: string) {
     if map_has(opts, "_path_deps") == 0 {
         map_put(opts, "_path_deps", list_new())
     }
-    deps = map_get(opts, "_path_deps")
+    deps, _ = map.get(opts, "_path_deps")
     entry = string_concat(name, "~")
     entry = string_concat(entry, path)
     list_add(deps, entry)

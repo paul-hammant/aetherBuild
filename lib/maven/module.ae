@@ -4,7 +4,16 @@
 // via aeb-resolve.jar, and classpath construction for Maven deps.
 // Separate from the Java language SDK — a Java project might use
 // Gradle instead of Maven.
+//
+// Maven resolution is the slowest step in any JVM build (network
+// lookups against Maven Central, transitive walks). The resolved
+// classpath is purely a function of dep coordinates + BOM contents
+// + repo URLs, so it caches well — once a developer or CI run has
+// resolved a given coordinate set, every subsequent build with the
+// same inputs short-circuits to a content-addressable lookup
+// against $AEB_CACHE_DIR (default ~/.aeb/cache). See lib/cache.
 import build
+import cache
 import std.string
 import std.io
 import std.os
@@ -14,6 +23,8 @@ import std.list
 import std.map
 import std.path
 import std.dir
+import std.cryptography
+import std.zlib
 
 // --- BOM file loading ---
 //
@@ -33,9 +44,61 @@ load_bom_file(ctx: ptr, rel_path: string) {
     if map.has(ctx, "_bom_files") == 0 {
         _e1 = map.put(ctx, "_bom_files", list.new())
     }
-    bom_files = map.get(ctx, "_bom_files")
+    bom_files, _ = map.get(ctx, "_bom_files")
     _e2 = list.add(bom_files, full_path)
     return 1
+}
+
+// --- Command builders (pure) ---
+
+// mvn_resolve_cmd — assemble the aeb-resolve.jar classpath-resolution
+// invocation. Pure: caller resolves the resolver jar path and pre-
+// builds the BOM-files, BOM-coords, repo-URLs, and dep-coordinates
+// lists (any may be null/empty).
+mvn_resolve_cmd(resolver_jar: string, bom_files: ptr, boms: ptr, repos: ptr, deps: ptr) {
+    cmd = "java -jar ${resolver_jar} --output classpath"
+
+    if bom_files != null {
+        n = list.size(bom_files)
+        i = 0
+        while i < n {
+            f, _ = list.get(bom_files, i)
+            cmd = string.concat(cmd, " --bom-file ${f}")
+            i = i + 1
+        }
+    }
+
+    if boms != null {
+        n = list.size(boms)
+        i = 0
+        while i < n {
+            b, _ = list.get(boms, i)
+            cmd = string.concat(cmd, " --bom ${b}")
+            i = i + 1
+        }
+    }
+
+    if repos != null {
+        n = list.size(repos)
+        i = 0
+        while i < n {
+            r, _ = list.get(repos, i)
+            cmd = string.concat(cmd, " --repo ${r}")
+            i = i + 1
+        }
+    }
+
+    if deps != null {
+        n = list.size(deps)
+        i = 0
+        while i < n {
+            d, _ = list.get(deps, i)
+            cmd = string.concat(cmd, " ${d}")
+            i = i + 1
+        }
+    }
+
+    return cmd
 }
 
 // --- Maven dependency resolution ---
@@ -44,13 +107,77 @@ load_bom_file(ctx: ptr, rel_path: string) {
 // Collects all maven_deps from context, passes BOMs and repos,
 // caches resolved classpath as an artifact.
 
+// Compute the cache key for a maven resolve request. Inputs in
+// canonical order: each BOM file's content, each explicit BOM
+// coordinate, each repo URL, each dep coordinate. Each part is
+// length-prefixed by cache.hash_inputs so distinct concatenations
+// can't collide. Returns ("", err) if any BOM file is unreadable.
+//
+// The exact set of inputs that go into the hash is the contract:
+// any future change to the resolver invocation that would change
+// the resolved classpath (e.g. a new repo URL, a different
+// resolver flag) MUST be added here, otherwise stale cache hits
+// will mask the change. Conversely, things that don't affect the
+// resolved set (mod_dir, target_dir, log verbosity) MUST NOT be
+// added.
+_cache_key_for_resolve(ctx: ptr) {
+    parts = list.new()
+
+    // BOM file contents — canonicalise on content rather than path
+    // so the same BOM at two different paths produces the same key.
+    if map.has(ctx, "_bom_files") == 1 {
+        bom_files, _ = map.get(ctx, "_bom_files")
+        bf_count = list.size(bom_files)
+        bf_i = 0
+        while bf_i < bf_count {
+            bom_file, _ = list.get(bom_files, bf_i)
+            content, rerr = io.read_file(bom_file)
+            if string.length(rerr) > 0 {
+                return "", rerr
+            }
+            _ea = list.add(parts, string.concat("bom-file:", content))
+            bf_i = bf_i + 1
+        }
+    }
+
+    boms, _ = map.get(ctx, "boms")
+    bom_count = list.size(boms)
+    bi = 0
+    while bi < bom_count {
+        b_coord, _ = list.get(boms, bi)
+        _eb = list.add(parts, string.concat("bom:", b_coord))
+        bi = bi + 1
+    }
+
+    repos, _ = map.get(ctx, "repos")
+    repo_count = list.size(repos)
+    ri = 0
+    while ri < repo_count {
+        r_url, _ = list.get(repos, ri)
+        _er = list.add(parts, string.concat("repo:", r_url))
+        ri = ri + 1
+    }
+
+    maven_deps, _ = map.get(ctx, "maven_deps")
+    dep_count = list.size(maven_deps)
+    di = 0
+    while di < dep_count {
+        d_coord, _ = list.get(maven_deps, di)
+        _ed = list.add(parts, string.concat("dep:", d_coord))
+        di = di + 1
+    }
+
+    return cache.hash_inputs(parts)
+}
+
 resolve(ctx: ptr) {
     // Return cached result if already resolved
     if map.has(ctx, "_maven_resolved") == 1 {
-        return map.get(ctx, "_maven_resolved")
+        v, _ = map.get(ctx, "_maven_resolved")
+        return v
     }
 
-    maven_deps = map.get(ctx, "maven_deps")
+    maven_deps, _ = map.get(ctx, "maven_deps")
     dep_count = list.size(maven_deps)
     if dep_count == 0 {
         _e1 = map.put(ctx, "_maven_resolved", "")
@@ -59,55 +186,45 @@ resolve(ctx: ptr) {
 
     target_dir = build._get(ctx, "target_dir")
     build._mkdirs(target_dir)
+    mod_dir = build._get(ctx, "module_dir")
+
+    // Try the content-addressable cache first. Skipping the Java
+    // resolver subprocess saves ~1-3s per cache hit on a warm
+    // repo, more on a cold one with network round-trips. The
+    // cache check is gated on cache.available() so toolchains
+    // built without OpenSSL/zlib fall through to the live path.
+    cache_key = ""
+    if cache.available() == 1 {
+        ck, kerr = _cache_key_for_resolve(ctx)
+        if string.length(kerr) == 0 {
+            cache_key = ck
+            cached, gerr = cache.get_string(cache_key)
+            if string.length(gerr) == 0 {
+                println("${mod_dir}: maven cache hit ${cache_key}")
+                _ec = map.put(ctx, "_maven_resolved", cached)
+                build._write_artifact(ctx, "maven_classpath", cached)
+                return cached
+            }
+        }
+    }
+
+    // Cache miss (or cache disabled) — fall through to the live
+    // resolver invocation.
 
     // Build the resolver command
     aeb_home = os.getenv("AEB_HOME")
     resolver_jar = path.join(aeb_home, "tools/aeb-resolve.jar")
-    cmd = "java -jar ${resolver_jar} --output classpath"
 
-    // Add BOM files (the Java resolver parses .bom.ae natively)
+    bom_files = null
     if map.has(ctx, "_bom_files") == 1 {
-        bom_files = map.get(ctx, "_bom_files")
-        bf_count = list.size(bom_files)
-        bf_i = 0
-        while bf_i < bf_count {
-            bom_file = list.get(bom_files, bf_i)
-            cmd = string.concat(cmd, " --bom-file ${bom_file}")
-            bf_i = bf_i + 1
-        }
+        bom_files, _ = map.get(ctx, "_bom_files")
     }
-
-    // Add explicit BOMs
-    boms = map.get(ctx, "boms")
-    bom_count = list.size(boms)
-    bi = 0
-    while bi < bom_count {
-        b_coord = list.get(boms, bi)
-        cmd = string.concat(cmd, " --bom ${b_coord}")
-        bi = bi + 1
-    }
-
-    // Add repos
-    repos = map.get(ctx, "repos")
-    repo_count = list.size(repos)
-    ri = 0
-    while ri < repo_count {
-        r_url = list.get(repos, ri)
-        cmd = string.concat(cmd, " --repo ${r_url}")
-        ri = ri + 1
-    }
-
-    // Add deps
-    di = 0
-    while di < dep_count {
-        d_coord = list.get(maven_deps, di)
-        cmd = string.concat(cmd, " ${d_coord}")
-        di = di + 1
-    }
+    boms, _ = map.get(ctx, "boms")
+    repos, _ = map.get(ctx, "repos")
+    cmd = mvn_resolve_cmd(resolver_jar, bom_files, boms, repos, maven_deps)
 
     // SLF4J warnings go to stderr, os.exec captures stdout only
 
-    mod_dir = build._get(ctx, "module_dir")
     println("${mod_dir}: resolving maven dependencies")
     result_raw, _eerr = os.exec(cmd)
     result = string.trim(result_raw)
@@ -118,24 +235,37 @@ resolve(ctx: ptr) {
     // Cache and write artifact for downstream modules
     _e2 = map.put(ctx, "_maven_resolved", result)
     build._write_artifact(ctx, "maven_classpath", result)
+
+    // Populate the content-addressable cache so future builds with
+    // the same dep set short-circuit. Best-effort: a write failure
+    // is logged but doesn't fail the build (the live resolver
+    // already produced a valid result).
+    if string.length(cache_key) > 0 && string.length(result) > 0 {
+        perr = cache.put_string(cache_key, result)
+        if string.length(perr) > 0 {
+            println("${mod_dir}: maven cache write failed: ${perr}")
+        }
+    }
+
     return result
 }
 
 classpath(ctx: ptr) {
     // Return cached result if already built
     if map.has(ctx, "_maven_cp_built") == 1 {
-        return map.get(ctx, "_maven_cp_built")
+        v, _ = map.get(ctx, "_maven_cp_built")
+        return v
     }
 
     // First, resolve own maven deps
     own_cp = resolve(ctx)
 
     // Then collect maven classpaths from module deps
-    deps = map.get(ctx, "deps")
+    deps, _ = map.get(ctx, "deps")
     count = list.size(deps)
     i = 0
     while i < count {
-        dp = list.get(deps, i)
+        dp, _ = list.get(deps, i)
         dm = build._strip_lang(dp)
         dep_mvn = build._read_dep_artifact(ctx, dm, "maven_classpath")
         if string.length(dep_mvn) > 0 {

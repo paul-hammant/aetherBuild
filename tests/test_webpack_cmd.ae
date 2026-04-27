@@ -1,0 +1,38 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+import pnpm
+// Tests for webpack.webpack_cmd()
+
+import webpack
+import webpack (webpack_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    _assert_eq("webpack_cmd basic",
+        webpack_cmd("/proj/.aeb/node_modules", "/proj/.aeb/node_modules/.bin/webpack", "/proj/apps/web/webpack.aeb.config.js"),
+        "NODE_PATH='/proj/.aeb/node_modules' /proj/.aeb/node_modules/.bin/webpack --config '/proj/apps/web/webpack.aeb.config.js'")
+
+    _assert_eq("webpack_cmd custom config name",
+        webpack_cmd("/n", "/n/.bin/webpack", "/p/webpack.prod.config.js"),
+        "NODE_PATH='/n' /n/.bin/webpack --config '/p/webpack.prod.config.js'")
+
+    println("webpack cmd tests done")
+}

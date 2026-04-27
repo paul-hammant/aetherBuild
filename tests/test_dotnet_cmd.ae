@@ -1,0 +1,45 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+// Tests for dotnet.dotnet_build_cmd, dotnet.dotnet_test_cmd
+
+import dotnet
+import dotnet (dotnet_build_cmd, dotnet_test_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    _assert_eq("dotnet_build_cmd Release",
+        dotnet_build_cmd("/proj/.app.generated.csproj", "Release"),
+        "dotnet build '/proj/.app.generated.csproj' --configuration Release")
+
+    _assert_eq("dotnet_build_cmd Debug",
+        dotnet_build_cmd("/proj/app.csproj", "Debug"),
+        "dotnet build '/proj/app.csproj' --configuration Debug")
+
+    _assert_eq("dotnet_test_cmd Release no-build",
+        dotnet_test_cmd("/proj/.tests.generated.csproj", "Release"),
+        "dotnet test '/proj/.tests.generated.csproj' --configuration Release --no-build")
+
+    _assert_eq("dotnet_test_cmd Debug",
+        dotnet_test_cmd("/proj/tests.csproj", "Debug"),
+        "dotnet test '/proj/tests.csproj' --configuration Debug --no-build")
+
+    println("dotnet cmd tests done")
+}

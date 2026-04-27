@@ -555,6 +555,18 @@ or similar could validate/install prerequisites.
 
 ## Java/Maven
 
+What we have today: `java.javac()` covers the maven-compiler-plugin
+surface (release / source / target / lint / encoding / parameters /
+debug / `--enable-preview` / `--module-path` / annotation processors /
+generated sources). `java.junit()` and `java.junit5()` cover the
+surefire core case. `java.shade()` builds classic fat JARs.
+`maven.resolve()` + `maven.classpath()` + `load_bom_file()` handle
+dependency resolution including BOM-managed versions.
+
+Below is what's still missing measured against mainstream Maven
+plugin grammars — grouped by how often a typical Java shop actually
+needs each.
+
 1. tools/aeb-resolve.jar - maybe not check that it. Maybe  have is slimmer and source transitive deps from ~/.m2/repository using the manifest. If those transitive 
 deps are missing go get them and place them in there
 
@@ -562,6 +574,166 @@ deps are missing go get them and place them in there
 
 3. Surefire equivalent in aeb grammar — `build.junit(b)` already handles
    the core case (find test classes, fork JVM, run with JUnit). Missing
-   pieces vs Surefire: test filtering/includes/excludes, parallel forks,
-   XML report output. Add incrementally to the Java SDK as needed.
+   pieces vs Surefire: test filtering/includes/excludes, parallel forks
+   (`forkCount` / `reuseForks` / `argLine`), `parallel=classes` worker
+   pool, XML report output (`target/surefire-reports/TEST-*.xml`).
+   Single-JVM `junit5_cmd` won't scale on a real test suite. Add
+   incrementally.
+
+### Tier 1 — every serious Java project needs these
+
+4. **Resources + resource filtering** (maven-resources-plugin). Copy
+   `src/main/resources` into the classpath, optionally substituting
+   `${project.version}` etc. Today `java.javac()` only sees `*.java`,
+   so properties / YAML / XML / SQL resources have no path onto the
+   classpath. DSL sketch:
+
+   ```aether
+   java.javac(b) {
+       resources("src/main/resources")
+       filter("application.yml")            // do placeholder sub
+       property("project.version", "1.2.3")
+   }
+   ```
+
+5. **Manifest / Main-Class** (maven-jar-plugin). Today plain `jar`
+   output has no manifest control. Needed for runnable JARs and
+   `-Multi-Release` headers. DSL sketch:
+
+   ```aether
+   java.jar(b) {
+       main_class("com.example.Main")
+       manifest_attribute("Implementation-Version", "1.2.3")
+       multi_release(true)
+   }
+   ```
+
+6. **Sources JAR + Javadoc JAR** (maven-source-plugin,
+   maven-javadoc-plugin). `*-sources.jar` and `*-javadoc.jar` next to
+   the main artifact — required by Maven Central, used by every IDE.
+   Builders: `java.sources_jar(b)`, `java.javadoc(b) { link(...); doctitle(...) }`.
+
+7. **Spring Boot fat-JAR layout** (`spring-boot-maven-plugin
+   repackage`). Different from `shade()` — uses `BOOT-INF/`,
+   `PropertiesLauncher`, layered jars. High leverage given the
+   `itests/spring-data-examples` scale. DSL: `java.spring_boot_repackage(b)`.
+
+8. **Integration test phase** (maven-failsafe-plugin). `*IT.java`
+   pattern, separate from unit tests, post-suite verify that fails
+   the build only after teardown runs. Today `junit5()` runs
+   everything in one phase. Add `java.junit5_it(b)` with an `*IT`
+   default include pattern and post-test cleanup hook.
+
+9. **Code coverage** (jacoco-maven-plugin). Inject
+   `-javaagent:jacocoagent.jar=destfile=...` into junit invocations
+   and emit exec/HTML/XML reports. One agent flag in `junit5_cmd` +
+   a small report builder. DSL:
+
+   ```aether
+   java.junit5(b) {
+       coverage("jacoco")               // or coverage_off()
+   }
+   java.coverage_report(b) { format("xml", "html") }
+   ```
+
+### Tier 2 — needed to publish or distribute artifacts
+
+10. **POM emission**. Maven Central (and most artifact stores) need
+    a `pom.xml` next to the jar. Even Gradle has to emit one. Cheap
+    to implement — a `pom_xml_content(opts, deps)` content builder in
+    the same shape as the new `dotnet.csproj_content()`. Without this
+    nothing aeb produces is publishable.
+
+11. **mvn install / deploy** (maven-install-plugin,
+    maven-deploy-plugin). `mvn install` populates `~/.m2` for
+    cross-project local consumption; `mvn deploy` pushes to
+    Nexus/Artifactory/Central. aeb's vendored/registry pattern
+    doesn't write to `~/.m2`, and there's no push step at all.
+    Builders: `java.install(b)`, `java.deploy(b) { repo(...);
+    credentials(...) }`.
+
+12. **GPG signing** (maven-gpg-plugin) + checksums. Central requires
+    `.asc` signatures and `.md5` / `.sha1` / `.sha256` / `.sha512`
+    siblings on every artifact. DSL: `java.sign(b) { key_id(...) }`,
+    `java.checksums(b) { algorithms("sha256", "sha512") }`.
+
+### Tier 3 — quality / static analysis
+
+13. **Checkstyle / PMD / SpotBugs / Spotless**. Run as part of build,
+    fail on violations. Each is a small `.cmd_string` builder
+    invoking the respective standalone runner. Group under
+    `java.lint(b) { checkstyle(...); spotbugs(...); spotless_check() }`
+    or one builder per tool.
+
+14. **errorprone / NullAway** (javac `-Xplugin:` style). Distinct
+    from annotation processors — these ride `javac` itself. Add an
+    `xplugin()` setter to `java.javac()` that emits `-Xplugin:` flags.
+    Existing `processor()` covers AP path; this is the missing
+    sibling.
+
+15. **maven-enforcer-plugin** equivalents. Banned-deps,
+    dep-convergence, no-snapshot-deps, required Java version. DSL:
+
+    ```aether
+    java.enforce(b) {
+        require_java(">= 21")
+        ban_dep("commons-logging:commons-logging")
+        require_convergence()
+        no_snapshots()
+    }
+    ```
+
+### Tier 4 — build-system meta
+
+16. **maven-toolchains-plugin** equivalent. Pick one of several
+    installed JDKs by vendor/version per module — multi-JDK builds
+    in a monorepo. Today aeb uses whatever `javac` is on PATH. This
+    is the same gap as the hermetic-toolchain item in
+    `bazel-gaps.md`; if that gets resolved at the runner level
+    (hermetic-LLVM-style fetch + pin), this falls out.
+
+17. **Profiles** (`<profile id="ci">`). Maven's environment-specific
+    config switches. aeb has no profile concept. Could ride
+    `criteria()` (cross-cutting Cake item above) plus a profile
+    selector flag — same DAG, same SDK calls, just different setter
+    values per profile.
+
+18. **Properties / interpolation**. `${project.version}` and
+    friends used by resources, manifest, POM, jib. Tied to the
+    versioning story in the Cake section above and to (4) and (10)
+    here. One `properties` map on the build context, expanded by
+    each builder that reads strings.
+
+19. **versions-maven-plugin**. `display-dependency-updates`,
+    `use-latest-versions`. Mostly tooling, not build. Could be a
+    standalone `aeb deps update` subcommand rather than a builder.
+
+20. **flatten-maven-plugin**. Resolves parent/property references
+    in the published POM. Only matters once (10) lands.
+
+### Tier 5 — domain-specific
+
+21. **protobuf-maven-plugin + os-maven-plugin**. `protoc` codegen
+    with platform-specific compiler binary selection. Big for
+    gRPC/Spring-gRPC shops. DSL: `proto.compile(b) { ... }` —
+    probably its own SDK module rather than crammed into Java.
+
+22. **jib-maven-plugin**. Daemonless layered OCI images. We have
+    `lib/container/` via podman/docker; the Jib approach (no daemon,
+    layered jars) is materially different and worth a separate
+    builder.
+
+23. **graalvm native-maven-plugin**. AOT `native-image`. DSL:
+    `java.native_image(b) { no_fallback(); reflect_config(...) }`.
+
+24. **Liquibase / Flyway**. DB migration tasks. Probably its own
+    `db.migrate(b) { ... }` SDK rather than under Java.
+
+### Suggested order if attacking this
+
+POM emission (10) → Resources (4) → Manifest (5) → Sources/Javadoc
+(6) → Spring Boot repackage (7) → Surefire forking + XML reports (3)
+→ Jacoco (9). That sequence unblocks "publishable library" and
+"runnable Spring Boot app" — the two shapes most Java itests in this
+repo actually exercise.
 

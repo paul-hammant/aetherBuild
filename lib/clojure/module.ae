@@ -25,16 +25,43 @@ test_timeout(_ctx: ptr, seconds: string) {
     _e = map.put(_ctx, "test_timeout", seconds)
 }
 
+// --- Command builders (pure) ---
+
+// clj_aot_compile_cmd — assemble a `clojure.main -e "(compile 'ns)"`
+// invocation for AOT compilation. Pure: caller resolves the classpath
+// and the namespace symbol.
+clj_aot_compile_cmd(classes_dir: string, classpath: string, ns: string) {
+    return "java -Dclojure.compile.path='${classes_dir}' -cp '${classpath}' clojure.main -e \"(compile '${ns})\""
+}
+
+// clj_load_check_cmd — assemble a clojure.main invocation that just
+// verifies the sources load. Pure.
+clj_load_check_cmd(classpath: string) {
+    return "java -cp '${classpath}' clojure.main -e \"(println :ok)\""
+}
+
+// clj_test_cmd — assemble a clojure.test runner invocation. Pure:
+// caller pre-builds the quoted-namespace list. test_timeout is
+// the seconds string (or "" to skip the `timeout` prefix).
+clj_test_cmd(classpath: string, quoted_namespaces: string, test_timeout: string) {
+    expr = "(require ${quoted_namespaces}) (let [r (clojure.test/run-tests ${quoted_namespaces})] (System/exit (+ (:fail r) (:error r))))"
+    cmd = "java -cp '${classpath}' clojure.main -e \"${expr}\""
+    if string.length(test_timeout) > 0 {
+        cmd = string.concat("timeout ${test_timeout} ", cmd)
+    }
+    return cmd
+}
+
 // --- Internal helpers ---
 
 // Collect source paths from dep modules (Clojure needs source dirs on classpath)
 _dep_src_classpath(ctx: ptr) {
-    deps = map.get(ctx, "deps")
+    deps, _ = map.get(ctx, "deps")
     cp = ""
     count = list.size(deps)
     i = 0
     while i < count {
-        dp = list.get(deps, i)
+        dp, _ = list.get(deps, i)
         dm = build._strip_lang(dp)
         dep_src = build._read_dep_artifact(ctx, dm, "clojure_src_path")
         if string.length(dep_src) > 0 {
@@ -96,8 +123,8 @@ builder compile(ctx: ptr) {
     // AOT compile if main_ns is set
     if _builder != null {
         if map.has(_builder, "main_ns") == 1 {
-            ns = map.get(_builder, "main_ns")
-            cmd = "java -Dclojure.compile.path='${classes_dir}' -cp '${cp}' clojure.main -e \"(compile '${ns})\""
+            ns, _ = map.get(_builder, "main_ns")
+            cmd = clj_aot_compile_cmd(classes_dir, cp, ns)
             exit_code = os.system(cmd)
             if exit_code != 0 {
                 println("${mod_dir}: clojure AOT compilation failed")
@@ -109,7 +136,7 @@ builder compile(ctx: ptr) {
     }
 
     // No main_ns — just verify sources load
-    cmd = "java -cp '${cp}' clojure.main -e \"(println :ok)\""
+    cmd = clj_load_check_cmd(cp)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: clojure load-check failed")
@@ -168,15 +195,13 @@ builder test(ctx: ptr) {
     quoted_raw, _e_q = os.exec("echo '${ns_list}' | sed \"s/^/'/; s/$/ /\" | tr -d '\\n'")
     quoted = string.trim(quoted_raw)
 
-    clj_expr = "(require ${quoted}) (let [r (clojure.test/run-tests ${quoted})] (System/exit (+ (:fail r) (:error r))))"
-    cmd = "java -cp '${cp}' clojure.main -e \"${clj_expr}\""
-
+    timeout_secs = ""
     if _builder != null {
         if map.has(_builder, "test_timeout") == 1 {
-            timeout = map.get(_builder, "test_timeout")
-            cmd = string.concat("timeout ${timeout} ", cmd)
+            timeout_secs, _ = map.get(_builder, "test_timeout")
         }
     }
+    cmd = clj_test_cmd(cp, quoted, timeout_secs)
 
     exit_code = os.system(cmd)
     if exit_code != 0 {

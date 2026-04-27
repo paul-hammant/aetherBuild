@@ -75,7 +75,7 @@ generated_sources(_ctx: ptr, dir: string) {
 
 jvm_args(_ctx: ptr, arg: string) {
     if map.has(_ctx, "jvm_args") == 1 {
-        prev = map.get(_ctx, "jvm_args")
+        prev, _ = map.get(_ctx, "jvm_args")
         combined = string.concat(prev, " ")
         combined = string.concat(combined, arg)
         _e1 = map.put(_ctx, "jvm_args", combined)
@@ -91,26 +91,26 @@ javac_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr) 
 
     if opts != null {
         if map.has(opts, "release") == 1 {
-            val = map.get(opts, "release")
+            val, _ = map.get(opts, "release")
             cmd = string.concat(cmd, " --release ${val}")
         } else {
             if map.has(opts, "source") == 1 {
-                val = map.get(opts, "source")
+                val, _ = map.get(opts, "source")
                 cmd = string.concat(cmd, " -source ${val}")
             }
             if map.has(opts, "target") == 1 {
-                val = map.get(opts, "target")
+                val, _ = map.get(opts, "target")
                 cmd = string.concat(cmd, " -target ${val}")
             }
         }
 
         if map.has(opts, "encoding") == 1 {
-            val = map.get(opts, "encoding")
+            val, _ = map.get(opts, "encoding")
             cmd = string.concat(cmd, " -encoding ${val}")
         }
 
         if map.has(opts, "debug") == 1 {
-            val = map.get(opts, "debug")
+            val, _ = map.get(opts, "debug")
             if val == "none" {
                 cmd = string.concat(cmd, " -g:none")
             } else {
@@ -123,7 +123,7 @@ javac_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr) 
         }
 
         if map.has(opts, "lint") == 1 {
-            val = map.get(opts, "lint")
+            val, _ = map.get(opts, "lint")
             cmd = string.concat(cmd, " -Xlint:${val}")
         }
 
@@ -152,27 +152,27 @@ javac_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr) 
         }
 
         if map.has(opts, "module_path") == 1 {
-            val = map.get(opts, "module_path")
+            val, _ = map.get(opts, "module_path")
             cmd = string.concat(cmd, " --module-path ${val}")
         }
 
         if map.has(opts, "processor") == 1 {
-            val = map.get(opts, "processor")
+            val, _ = map.get(opts, "processor")
             cmd = string.concat(cmd, " -processor ${val}")
         }
 
         if map.has(opts, "processor_path") == 1 {
-            val = map.get(opts, "processor_path")
+            val, _ = map.get(opts, "processor_path")
             cmd = string.concat(cmd, " -processorpath ${val}")
         }
 
         if map.has(opts, "generated_sources") == 1 {
-            val = map.get(opts, "generated_sources")
+            val, _ = map.get(opts, "generated_sources")
             cmd = string.concat(cmd, " -s ${val}")
         }
 
         if map.has(opts, "extra") == 1 {
-            val = map.get(opts, "extra")
+            val, _ = map.get(opts, "extra")
             cmd = string.concat(cmd, " ${val}")
         }
     }
@@ -193,11 +193,11 @@ junit_cmd(classpath: string, class_names: string, ld_path: string, opts: ptr) {
 
     if opts != null {
         if map.has(opts, "jvm_args") == 1 {
-            val = map.get(opts, "jvm_args")
+            val, _ = map.get(opts, "jvm_args")
             cmd = string.concat(cmd, " ${val}")
         }
         if map.has(opts, "extra") == 1 {
-            val = map.get(opts, "extra")
+            val, _ = map.get(opts, "extra")
             cmd = string.concat(cmd, " ${val}")
         }
     }
@@ -224,7 +224,7 @@ builder jar_vendored(ctx: ptr, jar_path: string) {
 // to maven_deps for later resolution. Use jar_registry_finalize(b) as the final builder
 // in a .jar.ae file to actually resolve and write the classpath artifact.
 jar_registry(ctx: ptr, coord: string) {
-    maven_deps = map.get(ctx, "maven_deps")
+    maven_deps, _ = map.get(ctx, "maven_deps")
     _e = list.add(maven_deps, coord)
 }
 
@@ -279,14 +279,14 @@ builder javac(ctx: ptr) {
 
     // Create generated sources dir if requested (for annotation processors like QueryDSL)
     if map.has(_builder, "generated_sources") == 1 {
-        gen_dir = map.get(_builder, "generated_sources")
+        gen_dir, _ = map.get(_builder, "generated_sources")
         build._mkdirs(gen_dir)
     }
 
     // Write source file list to an argfile (avoids command-line length limits)
     argfile = path.join(target_dir, "javac_sources.txt")
     if map.has(_builder, "source_layout") == 1 {
-        layout = map.get(_builder, "source_layout")
+        layout, _ = map.get(_builder, "source_layout")
         if layout == "maven idiomatic" {
             src_root = path.join(source_dir, "src/main/java")
             os.system("find '${src_root}' -name '*.java' > '${argfile}' 2>/dev/null || true")
@@ -331,13 +331,13 @@ builder javac(ctx: ptr) {
     build._write_artifact(ctx, "jvm_classpath_deps_including_transitive", cp_out)
 
     // Collect ldlibdeps and shared_library_deps from all deps
-    deps = map.get(ctx, "deps")
+    deps, _ = map.get(ctx, "deps")
     dep_count = list.size(deps)
     ld_out = ""
     shared_out = ""
     k = 0
     while k < dep_count {
-        dp2 = list.get(deps, k)
+        dp2, _ = list.get(deps, k)
         dm2 = build._strip_lang(dp2)
         dep_ld = build._read_dep_artifact(ctx, dm2, "ldlibdeps")
         if string.length(dep_ld) > 0 {
@@ -398,7 +398,7 @@ builder javac_test(ctx: ptr) {
     // Write source file list to an argfile (avoids command-line length limits)
     argfile = path.join(target_dir, "javac_test_sources.txt")
     if map.has(_builder, "source_layout") == 1 {
-        layout = map.get(_builder, "source_layout")
+        layout, _ = map.get(_builder, "source_layout")
         if layout == "maven idiomatic" {
             src_root = path.join(source_dir, "src/test/java")
             os.system("find '${src_root}' -name '*.java' > '${argfile}' 2>/dev/null || true")
@@ -491,12 +491,12 @@ builder junit(ctx: ptr) {
     dir_list_free(test_files)
 
     // Build LD_LIBRARY_PATH from deps' ldlibdeps
-    deps = map.get(ctx, "deps")
+    deps, _ = map.get(ctx, "deps")
     ndeps = list.size(deps)
     ld_path = ""
     m = 0
     while m < ndeps {
-        dp3 = list.get(deps, m)
+        dp3, _ = list.get(deps, m)
         dm3 = build._strip_lang(dp3)
         dep_ld = build._read_dep_artifact(ctx, dm3, "ldlibdeps")
         if string.length(dep_ld) > 0 {
@@ -531,7 +531,7 @@ junit5_cmd(classpath: string, test_classes_dir: string, ld_path: string, opts: p
     timeout_secs = "60"
     if opts != null {
         if map.has(opts, "test_timeout") == 1 {
-            timeout_secs = map.get(opts, "test_timeout")
+            timeout_secs, _ = map.get(opts, "test_timeout")
         }
     }
     cmd = "timeout ${timeout_secs}"
@@ -548,11 +548,11 @@ junit5_cmd(classpath: string, test_classes_dir: string, ld_path: string, opts: p
 
     if opts != null {
         if map.has(opts, "jvm_args") == 1 {
-            val = map.get(opts, "jvm_args")
+            val, _ = map.get(opts, "jvm_args")
             cmd = string.concat(cmd, " ${val}")
         }
         if map.has(opts, "extra") == 1 {
-            val = map.get(opts, "extra")
+            val, _ = map.get(opts, "extra")
             cmd = string.concat(cmd, " ${val}")
         }
     }
@@ -595,12 +595,12 @@ builder junit5(ctx: ptr) {
     }
 
     // Build LD_LIBRARY_PATH from deps' ldlibdeps
-    deps = map.get(ctx, "deps")
+    deps, _ = map.get(ctx, "deps")
     ndeps = list.size(deps)
     ld_path = ""
     m = 0
     while m < ndeps {
-        dp3 = list.get(deps, m)
+        dp3, _ = list.get(deps, m)
         dm3 = build._strip_lang(dp3)
         dep_ld = build._read_dep_artifact(ctx, dm3, "ldlibdeps")
         if string.length(dep_ld) > 0 {

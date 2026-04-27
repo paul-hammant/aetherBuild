@@ -1,0 +1,223 @@
+// cache — Content-addressable build artifact cache (v1, local-only).
+//
+// Phase 1 of the remote-cache TODO in aeb. Just primitives:
+//   - sha256-keyed hashing of inputs (file contents, dep manifests, flags)
+//   - zlib-compressed storage under $AEB_CACHE_DIR (or ~/.aeb/cache)
+//   - put / get / has lookups against the local store
+//
+// No SDK builder integration, no remote backend, no eviction policy.
+// This is the substrate the remote-cache work will sit on top of.
+// Drop-in alongside the existing target/ timestamp cache — callers
+// opt in by hashing inputs themselves and only invoking the SDK
+// builder on cache miss.
+//
+// Returns ("", "cache unavailable") when the toolchain was built
+// without OpenSSL or zlib — callers should fall back to the existing
+// timestamp cache rather than failing the build.
+
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.path
+import std.cryptography
+import std.zlib
+
+// available() — 1 if both sha256 (OpenSSL) and zlib are linked into
+// the toolchain, 0 otherwise. Cheap to call; caller should check once
+// at startup and disable cache lookups for the duration of the build
+// rather than retrying every entry.
+available() {
+    if zlib.available() == 0 { return 0 }
+    // Probe sha256 by hashing the empty buffer — returns "" + err when
+    // OpenSSL is unavailable, a 64-char digest otherwise.
+    digest, err = cryptography.sha256_hex("", 0)
+    if string.length(err) > 0 { return 0 }
+    return 1
+}
+
+// dir() — local cache root. $AEB_CACHE_DIR if set, else $HOME/.aeb/cache.
+// Falls back to ./.aeb/cache when $HOME is unset (CI sandboxes).
+dir() {
+    env_dir = os.getenv("AEB_CACHE_DIR")
+    if string.length(env_dir) > 0 {
+        return env_dir
+    }
+    home = os.getenv("HOME")
+    if string.length(home) == 0 {
+        return ".aeb/cache"
+    }
+    return path.join(path.join(home, ".aeb"), "cache")
+}
+
+// path(hash) — shard the cache into 256 directories by the digest's
+// first two hex chars. Keeps any single directory under typical
+// inode limits even at millions of entries — same trick git, the
+// CAS, and apt object stores use.
+path(hash: string) {
+    n = string.length(hash)
+    if n < 2 { return path.join(dir(), hash) }
+    prefix = string.substring(hash, 0, 2)
+    rest = string.substring(hash, 2, n)
+    return path.join(path.join(dir(), prefix), rest)
+}
+
+// has(hash) — does the cache contain an entry for this hash?
+has(hash: string) {
+    return file.exists(path(hash))
+}
+
+// hash_file(path) — sha256 hex digest of a file's bytes. Binary-safe
+// (uses fs.read_binary so embedded NULs survive). Returns
+// ("", err_msg) on read or hash failure — callers should treat any
+// non-empty err as cache-miss and fall through to a fresh build.
+hash_file(p: string) {
+    bytes, length, rerr = fs.read_binary(p)
+    if string.length(rerr) > 0 {
+        return "", rerr
+    }
+    return cryptography.sha256_hex(bytes, length)
+}
+
+// hash_inputs(parts) — sha256 of length-prefixed concatenation of
+// `parts`, a list of strings. The length prefix matters: without it,
+// inputs ["ab", "c"] and ["a", "bc"] would collide. Format per part:
+//   <decimal-byte-length> ":" <bytes>
+// e.g. ["foo", "bar"] -> "3:foo3:bar"
+//
+// Caller decides what's a part. Typical recipe:
+//   - For each source file: filename + "\0" + sha256(content)
+//   - For each transitive dep: the dep's *_deps_including_transitive
+//     file content (already hashed by the dep's own cache.put)
+//   - For each compiler flag: the flag string verbatim
+//   - Sort the parts before passing in so hash is order-independent
+hash_inputs(parts: ptr) {
+    n = list.size(parts)
+    buf = ""
+    i = 0
+    while i < n {
+        part, _ = list.get(parts, i)
+        len_str = string.from_int(string.length(part))
+        buf = string.concat(buf, len_str)
+        buf = string.concat(buf, ":")
+        buf = string.concat(buf, part)
+        i = i + 1
+    }
+    return cryptography.sha256_hex(buf, string.length(buf))
+}
+
+// put(hash, src_path) — read src_path, deflate, write to path(hash).
+// Idempotent: if path(hash) already exists this is a no-op.
+// Returns "" on success or hit, error string on read/deflate/write
+// failure. Uses fs.write_atomic for the put so a Ctrl-C between
+// downloaders mid-write can't leave a torn cache file that subsequent
+// builds would zlib.inflate-then-fail on.
+put(hash: string, src_path: string) {
+    dest = path(hash)
+    if file.exists(dest) == 1 {
+        return ""
+    }
+
+    bytes, length, rerr = fs.read_binary(src_path)
+    if string.length(rerr) > 0 {
+        return rerr
+    }
+
+    // -1 picks zlib's default level (typically 6). The corpus most
+    // likely to land here is a mix of already-compressed jars and
+    // plain-text classpath manifests — default tuned for both.
+    compressed, clen, cerr = zlib.deflate(bytes, length, -1)
+    if string.length(cerr) > 0 {
+        return cerr
+    }
+
+    // Make sure the shard directory exists before writing.
+    parent = path.dirname(dest)
+    merr = fs.mkdir_p(parent)
+    if string.length(merr) > 0 {
+        return merr
+    }
+
+    return fs.write_atomic(dest, compressed, clen)
+}
+
+// get(hash, dest_path) — fetch from the cache, decompress, write to
+// dest_path. Returns "miss" if the cache doesn't have the entry, ""
+// on success, or some other error string on transport / decompress
+// failure. dest_path is overwritten via fs.write_atomic so a partial
+// decompress can't leave dest_path in a torn state.
+get(hash: string, dest_path: string) {
+    src = path(hash)
+    if file.exists(src) == 0 {
+        return "miss"
+    }
+
+    bytes, length, rerr = fs.read_binary(src)
+    if string.length(rerr) > 0 {
+        return rerr
+    }
+
+    decompressed, dlen, derr = zlib.inflate(bytes, length)
+    if string.length(derr) > 0 {
+        return derr
+    }
+
+    return fs.write_atomic(dest_path, decompressed, dlen)
+}
+
+// put_string(hash, value) — string-shaped put, skipping the
+// filesystem round-trip needed when the artifact is just a string
+// (e.g. a Maven classpath). Idempotent: a hit short-circuits.
+put_string(hash: string, value: string) {
+    dest = path(hash)
+    if file.exists(dest) == 1 {
+        return ""
+    }
+
+    compressed, clen, cerr = zlib.deflate(value, string.length(value), -1)
+    if string.length(cerr) > 0 {
+        return cerr
+    }
+
+    parent = path.dirname(dest)
+    merr = fs.mkdir_p(parent)
+    if string.length(merr) > 0 {
+        return merr
+    }
+
+    return fs.write_atomic(dest, compressed, clen)
+}
+
+// get_string(hash) -> (value, err) — string-shaped get. Returns
+// ("", "miss") when not cached, ("", err_msg) on transport /
+// decompress failure, or (value, "") on hit.
+//
+// CONSTRAINT: text-only payloads. The returned value is normalised
+// to a plain C string via string.concat (the standard
+// "snapshot a borrowed TLS buffer" idiom, strlen-based) so callers
+// can pass it through `==` and printf without seeing AetherString
+// header bytes. Embedded NULs in the cached payload would be
+// truncated at the first NUL — for binary artifacts (jars, .so,
+// .class trees) use the file-shaped get/put pair instead.
+get_string(hash: string) {
+    src = path(hash)
+    if file.exists(src) == 0 {
+        return "", "miss"
+    }
+
+    bytes, length, rerr = fs.read_binary(src)
+    if string.length(rerr) > 0 {
+        return "", rerr
+    }
+
+    decompressed, dlen, derr = zlib.inflate(bytes, length)
+    if string.length(derr) > 0 {
+        return "", derr
+    }
+
+    // Normalise the AetherString pointer to a plain char* for
+    // strlen-based consumers (printf, strcmp, the `==` operator).
+    return string.concat(decompressed, ""), ""
+}

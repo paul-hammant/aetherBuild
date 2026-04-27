@@ -31,7 +31,7 @@ source_layout(_ctx: ptr, layout: string) {
 
 compiler_plugin(_ctx: ptr, path: string) {
     if map.has(_ctx, "compiler_plugin") == 1 {
-        prev = map.get(_ctx, "compiler_plugin")
+        prev, _ = map.get(_ctx, "compiler_plugin")
         combined = string.concat(prev, ",")
         combined = string.concat(combined, path)
         _e1 = map.put(_ctx, "compiler_plugin", combined)
@@ -47,15 +47,15 @@ kotlinc_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr
 
     if opts != null {
         if map.has(opts, "jvm_target") == 1 {
-            val = map.get(opts, "jvm_target")
+            val, _ = map.get(opts, "jvm_target")
             cmd = string.concat(cmd, " -jvm-target ${val}")
         }
         if map.has(opts, "api_version") == 1 {
-            val = map.get(opts, "api_version")
+            val, _ = map.get(opts, "api_version")
             cmd = string.concat(cmd, " -api-version ${val}")
         }
         if map.has(opts, "language_version") == 1 {
-            val = map.get(opts, "language_version")
+            val, _ = map.get(opts, "language_version")
             cmd = string.concat(cmd, " -language-version ${val}")
         }
         if map.has(opts, "werror") == 1 {
@@ -68,11 +68,11 @@ kotlinc_cmd(classes_dir: string, classpath: string, file_list: string, opts: ptr
             cmd = string.concat(cmd, " -verbose")
         }
         if map.has(opts, "compiler_plugin") == 1 {
-            val = map.get(opts, "compiler_plugin")
+            val, _ = map.get(opts, "compiler_plugin")
             cmd = string.concat(cmd, " -Xplugin=${val}")
         }
         if map.has(opts, "extra") == 1 {
-            val = map.get(opts, "extra")
+            val, _ = map.get(opts, "extra")
             cmd = string.concat(cmd, " ${val}")
         }
     }
@@ -88,7 +88,7 @@ builder kotlinc(ctx: ptr) {
     target_dir = build._get(ctx, "target_dir")
     mod_name = build._get(ctx, "module")
     mod_dir = build._get(ctx, "module_dir")
-    deps = map.get(ctx, "deps")
+    deps, _ = map.get(ctx, "deps")
 
     classes_dir = path.join(target_dir, "classes")
     build._mkdirs(classes_dir)
@@ -123,7 +123,7 @@ builder kotlinc(ctx: ptr) {
     // Write source file list to argfile
     argfile = path.join(target_dir, "kotlinc_sources.txt")
     if map.has(_builder, "source_layout") == 1 {
-        layout = map.get(_builder, "source_layout")
+        layout, _ = map.get(_builder, "source_layout")
         if layout == "maven idiomatic" {
             src_root = path.join(source_dir, "src/main/kotlin")
             os.system("find '${src_root}' -name '*.kt' > '${argfile}' 2>/dev/null || true")
@@ -161,7 +161,7 @@ builder kotlinc(ctx: ptr) {
     ld_out = ""
     k = 0
     while k < dep_count {
-        dp2 = list.get(deps, k)
+        dp2, _ = list.get(deps, k)
         dm2 = build._strip_lang(dp2)
         dep_ld = build._read_dep_artifact(ctx, dm2, "ldlibdeps")
         if string.length(dep_ld) > 0 {
@@ -259,11 +259,11 @@ builder kotlin_test(ctx: ptr, test_class: string) {
     run_cmd = "java -ea"
     if _builder != null {
         if map.has(_builder, "jvm_args") == 1 {
-            val = map.get(_builder, "jvm_args")
+            val, _ = map.get(_builder, "jvm_args")
             run_cmd = string.concat(run_cmd, " ${val}")
         }
         if map.has(_builder, "extra") == 1 {
-            val = map.get(_builder, "extra")
+            val, _ = map.get(_builder, "extra")
             run_cmd = string.concat(run_cmd, " ${val}")
         }
     }

@@ -190,7 +190,7 @@ main() {
     nd = 0
     i = 0
     while i < n {
-        f = list.get(files, i)
+        f, _ = list.get(files, i)
         t = infer_type(f)
         if t == "build" { nb = nb + 1 }
         if t == "test"  { nt = nt + 1 }
@@ -203,7 +203,7 @@ main() {
     c_files = list.new()
     i = 0
     while i < n {
-        file_path = list.get(files, i)
+        file_path, _ = list.get(files, i)
         type      = infer_type(file_path)
         fname     = encode_name(file_path)
         label     = file_to_label(file_path)
@@ -254,7 +254,8 @@ main() {
     j = 0
     while j < n {
         if j > 0 { go_cmd = string.concat(go_cmd, " ") }
-        go_cmd = string.concat(go_cmd, list.get(files, j))
+        _f, _ = list.get(files, j)
+        go_cmd = string.concat(go_cmd, _f)
         j = j + 1
     }
     go_cmd = string.concat(go_cmd, " > ")
@@ -277,7 +278,8 @@ main() {
     k = 0
     while k < n {
         cc = string.concat(cc, " ")
-        cc = string.concat(cc, list.get(c_files, k))
+        _cf, _ = list.get(c_files, k)
+        cc = string.concat(cc, _cf)
         k = k + 1
     }
     if file.exists(aether_lib_a) == 1 {

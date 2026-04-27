@@ -19,7 +19,7 @@ pip(_ctx: ptr, pkg: string) {
     if map.has(_ctx, "pip_deps") == 0 {
         _e1 = map.put(_ctx, "pip_deps", list.new())
     }
-    pkgs = map.get(_ctx, "pip_deps")
+    pkgs, _ = map.get(_ctx, "pip_deps")
     _e2 = list.add(pkgs, pkg)
 }
 
@@ -50,6 +50,108 @@ packages_where(_ctx: ptr, where: string) {
 // Set the packages include pattern
 packages_include(_ctx: ptr, pattern: string) {
     _e = map.put(_ctx, "packages_include", pattern)
+}
+
+// --- Command builders (pure) ---
+
+// pytest_cmd — pytest invocation. Pure.
+pytest_cmd(py_bin: string, source_dir: string, root: string) {
+    return "cd '${root}' && '${py_bin}' -m pytest '${source_dir}' -v"
+}
+
+// ruff_lint_cmd — ruff lint invocation. Pure.
+ruff_lint_cmd(ruff_bin: string, source_dir: string) {
+    return "'${ruff_bin}' check '${source_dir}'"
+}
+
+// mypy_cmd — mypy type-check invocation. Pure.
+mypy_cmd(py_bin: string, source_dir: string, root: string) {
+    return "cd '${root}' && '${py_bin}' -m mypy '${source_dir}' --ignore-missing-imports"
+}
+
+// build_package_cmd — `python -m build` invocation. Pure.
+build_package_cmd(py_bin: string, source_dir: string, dist_dir: string) {
+    return "cd '${source_dir}' && '${py_bin}' -m build --outdir '${dist_dir}'"
+}
+
+// pip_install_cmd — install a single pip dep. Pure.
+pip_install_cmd(pip_bin: string, spec: string) {
+    return "'${pip_bin}' install -q '${spec}'"
+}
+
+// pip_install_requirements_cmd — install from requirements file. Pure.
+pip_install_requirements_cmd(pip_bin: string, req_path: string) {
+    return "'${pip_bin}' install -q -r '${req_path}'"
+}
+
+// pyproject_toml_content — generate the [project] pyproject.toml from
+// builder opts and a pre-resolved list of dependency specs. Pure.
+//
+// dep_specs is a list of strings shaped like "requests>=2.31.0" or
+// "django==4.2"; the caller pre-translates "name~version" tilde
+// shorthands. An empty/null list omits the dependencies = [] block.
+pyproject_toml_content(opts: ptr, dep_specs: ptr) {
+    toml = "[build-system]\nrequires = [\"setuptools\"]\nbuild-backend = \"setuptools.build_meta\"\n\n[project]\n"
+
+    pkg_name = "package"
+    if opts != null {
+        if map.has(opts, "package_name") == 1 {
+            pkg_name, _ = map.get(opts, "package_name")
+        }
+    }
+    toml = string.concat(toml, "name = \"${pkg_name}\"\n")
+
+    pkg_ver = "0.1.0"
+    if opts != null {
+        if map.has(opts, "version") == 1 {
+            pkg_ver, _ = map.get(opts, "version")
+        }
+    }
+    toml = string.concat(toml, "version = \"${pkg_ver}\"\n")
+
+    if opts != null {
+        if map.has(opts, "requires_python") == 1 {
+            rp, _ = map.get(opts, "requires_python")
+            toml = string.concat(toml, "requires-python = \"${rp}\"\n")
+        }
+    }
+
+    has_any_dep = 0
+    if dep_specs != null {
+        if list.size(dep_specs) > 0 {
+            has_any_dep = 1
+        }
+    }
+    if has_any_dep == 1 {
+        toml = string.concat(toml, "dependencies = [\n")
+        n = list.size(dep_specs)
+        i = 0
+        while i < n {
+            spec, _ = list.get(dep_specs, i)
+            toml = string.concat(toml, "    \"${spec}\",\n")
+            i = i + 1
+        }
+        toml = string.concat(toml, "]\n")
+    }
+
+    toml = string.concat(toml, "\n[tool.setuptools.packages.find]\n")
+    pkg_where = "."
+    if opts != null {
+        if map.has(opts, "packages_where") == 1 {
+            pkg_where, _ = map.get(opts, "packages_where")
+        }
+    }
+    toml = string.concat(toml, "where = [\"${pkg_where}\"]\n")
+
+    pkg_include = "${pkg_name}*"
+    if opts != null {
+        if map.has(opts, "packages_include") == 1 {
+            pkg_include, _ = map.get(opts, "packages_include")
+        }
+    }
+    toml = string.concat(toml, "include = [\"${pkg_include}\"]\n")
+
+    return toml
 }
 
 // --- Internal: ensure venv exists ---
@@ -86,7 +188,7 @@ builder wheel_registry(ctx: ptr, name_and_ver: string) {
         new_content = string.concat(existing, "\n")
         new_content = string.concat(new_content, name_and_ver)
     }
-    _ew = io.write_file(artifact_path, new_content)
+    _ew = fs.write_atomic(artifact_path, new_content, string.length(new_content))
     println("${mod_dir}: registry pypi ${name_and_ver}")
     return 0
 }
@@ -110,7 +212,7 @@ builder wheel_vendored(ctx: ptr, wheel_path: string) {
         new_content = string.concat(existing, "\n")
         new_content = string.concat(new_content, wheel_path)
     }
-    _ew = io.write_file(artifact_path, new_content)
+    _ew = fs.write_atomic(artifact_path, new_content, string.length(new_content))
     println("${mod_dir}: vendored wheel ${wheel_path}")
     return 0
 }
@@ -129,10 +231,10 @@ builder install(ctx: ptr) {
     // Install from requirements file
     if _builder != null {
         if map.has(_builder, "requirements_file") == 1 {
-            req = map.get(_builder, "requirements_file")
+            req, _ = map.get(_builder, "requirements_file")
             req_path = path.join(root, req)
             if file.exists(req_path) == 1 {
-                os.system("'${pip_bin}' install -q -r '${req_path}'")
+                os.system(pip_install_requirements_cmd(pip_bin, req_path))
             }
         }
     }
@@ -140,23 +242,23 @@ builder install(ctx: ptr) {
     // Install individual pip deps
     if _builder != null {
         if map.has(_builder, "pip_deps") == 1 {
-            pkgs = map.get(_builder, "pip_deps")
+            pkgs, _ = map.get(_builder, "pip_deps")
             count = list.size(pkgs)
             i = 0
             while i < count {
-                pkg = list.get(pkgs, i)
-                os.system("'${pip_bin}' install -q '${pkg}'")
+                pkg, _ = list.get(pkgs, i)
+                os.system(pip_install_cmd(pip_bin, pkg))
                 i = i + 1
             }
         }
     }
 
     // Install PyPI coords from .whl.ae dep artifacts
-    dep_list = map.get(ctx, "deps")
+    dep_list, _ = map.get(ctx, "deps")
     dl_count = list.size(dep_list)
     dli = 0
     while dli < dl_count {
-        dp_w = list.get(dep_list, dli)
+        dp_w, _ = list.get(dep_list, dli)
         dm_w = build._strip_lang(dp_w)
         raw_pypi = build._read_dep_artifact(ctx, dm_w, "python_pypi_deps_including_transitive")
         if string.length(raw_pypi) > 0 {
@@ -175,7 +277,7 @@ builder install(ctx: ptr) {
                     //       otherwise default to == for exact version pinning.
                     ps_raw, _eps = os.exec("printf '%s' '${pline}' | awk -F'~' '{n=$1; v=$2; if(v==\"\") print n; else if(v ~ /^[<>=!~]/) print n v; else print n \"==\" v}'")
                     pip_spec = string.trim(ps_raw)
-                    os.system("'${pip_bin}' install -q '${pip_spec}'")
+                    os.system(pip_install_cmd(pip_bin, pip_spec))
                     pi = pi + 1
                 }
             }
@@ -191,7 +293,7 @@ builder install(ctx: ptr) {
                 } else {
                     // wline is a path relative to project root
                     wheel_full = path.join(root, wline)
-                    os.system("'${pip_bin}' install -q '${wheel_full}'")
+                    os.system(pip_install_cmd(pip_bin, wheel_full))
                     wi = wi + 1
                 }
             }
@@ -216,7 +318,7 @@ builder pytest(ctx: ptr) {
     venv = _ensure_venv(root)
     py = path.join(venv, "bin/python")
 
-    cmd = "cd '${root}' && '${py}' -m pytest '${source_dir}' -v"
+    cmd = pytest_cmd(py, source_dir, root)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")
@@ -246,7 +348,7 @@ builder lint(ctx: ptr) {
         os.system("'${pip_bin}' install -q ruff")
     }
 
-    cmd = "'${ruff}' check '${source_dir}'"
+    cmd = ruff_lint_cmd(ruff, source_dir)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: lint FAILED")
@@ -277,7 +379,7 @@ builder typecheck(ctx: ptr) {
     }
 
     py = path.join(venv, "bin/python")
-    cmd = "cd '${root}' && '${py}' -m mypy '${source_dir}' --ignore-missing-imports"
+    cmd = mypy_cmd(py, source_dir, root)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: typecheck FAILED")
@@ -303,57 +405,26 @@ builder package(ctx: ptr) {
     pip_bin = path.join(venv, "bin/pip")
     py = path.join(venv, "bin/python")
 
-    // --- Generate pyproject.toml from DSL ---
-    toml = "[build-system]\nrequires = [\"setuptools\"]\nbuild-backend = \"setuptools.build_meta\"\n\n[project]\n"
-
-    pkg_name = "package"
-    if _builder != null {
-        if map.has(_builder, "package_name") == 1 {
-            pkg_name = map.get(_builder, "package_name")
-        }
-    }
-    toml = string.concat(toml, "name = \"${pkg_name}\"\n")
-
-    pkg_ver = "0.1.0"
-    if _builder != null {
-        if map.has(_builder, "version") == 1 {
-            pkg_ver = map.get(_builder, "version")
-        }
-    }
-    toml = string.concat(toml, "version = \"${pkg_ver}\"\n")
-
-    if _builder != null {
-        if map.has(_builder, "requires_python") == 1 {
-            rp = map.get(_builder, "requires_python")
-            toml = string.concat(toml, "requires-python = \"${rp}\"\n")
-        }
-    }
-
-    // Dependencies from pip() calls and .whl.ae dep artifacts
-    has_any_dep = 0
-    dep_entries = ""
-
-    // Inline pip() entries
+    // Collect all dep specs (inline pip() calls + .whl.ae registry deps)
+    dep_specs = list.new()
     if _builder != null {
         if map.has(_builder, "pip_deps") == 1 {
-            pkgs = map.get(_builder, "pip_deps")
+            pkgs, _ = map.get(_builder, "pip_deps")
             count = list.size(pkgs)
             i = 0
             while i < count {
-                pkg = list.get(pkgs, i)
-                dep_entries = string.concat(dep_entries, "    \"${pkg}\",\n")
-                has_any_dep = 1
+                pkg, _ = list.get(pkgs, i)
+                _e_a = list.add(dep_specs, pkg)
                 i = i + 1
             }
         }
     }
 
-    // PyPI coords from .whl.ae dep artifacts
-    pkg_deps = map.get(ctx, "deps")
+    pkg_deps, _ = map.get(ctx, "deps")
     pkg_dep_count = list.size(pkg_deps)
     pdi = 0
     while pdi < pkg_dep_count {
-        pdp = list.get(pkg_deps, pdi)
+        pdp, _ = list.get(pkg_deps, pdi)
         pdm = build._strip_lang(pdp)
         raw_p = build._read_dep_artifact(ctx, pdm, "python_pypi_deps_including_transitive")
         if string.length(raw_p) > 0 {
@@ -364,11 +435,9 @@ builder package(ctx: ptr) {
                 if string.length(plline) == 0 {
                     ppi = 999
                 } else {
-                    // Translate "name~spec" the same way install() does
                     ps_raw, _eps = os.exec("printf '%s' '${plline}' | awk -F'~' '{n=$1; v=$2; if(v==\"\") print n; else if(v ~ /^[<>=!~]/) print n v; else print n \"==\" v}'")
                     pip_spec = string.trim(ps_raw)
-                    dep_entries = string.concat(dep_entries, "    \"${pip_spec}\",\n")
-                    has_any_dep = 1
+                    _e_b = list.add(dep_specs, pip_spec)
                     ppi = ppi + 1
                 }
             }
@@ -376,30 +445,7 @@ builder package(ctx: ptr) {
         pdi = pdi + 1
     }
 
-    if has_any_dep == 1 {
-        toml = string.concat(toml, "dependencies = [\n")
-        toml = string.concat(toml, dep_entries)
-        toml = string.concat(toml, "]\n")
-    }
-
-    // Package discovery
-    toml = string.concat(toml, "\n[tool.setuptools.packages.find]\n")
-    pkg_where = "."
-    if _builder != null {
-        if map.has(_builder, "packages_where") == 1 {
-            pkg_where = map.get(_builder, "packages_where")
-        }
-    }
-    toml = string.concat(toml, "where = [\"${pkg_where}\"]\n")
-
-    pkg_include = "${pkg_name}*"
-    if _builder != null {
-        if map.has(_builder, "packages_include") == 1 {
-            pkg_include = map.get(_builder, "packages_include")
-        }
-    }
-    toml = string.concat(toml, "include = [\"${pkg_include}\"]\n")
-
+    toml = pyproject_toml_content(_builder, dep_specs)
     pyproject = path.join(source_dir, ".pyproject.generated.toml")
     _ew1 = io.write_file(pyproject, toml)
 
@@ -408,14 +454,12 @@ builder package(ctx: ptr) {
     // Ensure build tool is installed
     os.system("'${pip_bin}' install -q build")
 
-    cmd = "cd '${source_dir}' && PIP_CONFIG_FILE=/dev/null '${py}' -m build --outdir '${dist_dir}' --config-setting=--build-option=--config='${pyproject}'"
-
     // python -m build doesn't support --config for pyproject path.
     // Instead, write pyproject.toml directly (overwrite if exists).
     real_pyproject = path.join(source_dir, "pyproject.toml")
     _ew2 = io.write_file(real_pyproject, toml)
 
-    cmd = "cd '${source_dir}' && '${py}' -m build --outdir '${dist_dir}'"
+    cmd = build_package_cmd(py, source_dir, dist_dir)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: packaging failed")

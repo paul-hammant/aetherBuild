@@ -21,6 +21,32 @@ skip_lib_check(_ctx: ptr) {
     _e = map.put(_ctx, "skip_lib_check", "true")
 }
 
+// --- Command builders (pure) ---
+
+// ngc_cmd — Angular Compiler invocation. Pure: takes the ngc binary
+// path, the tsconfig path, and an options map; returns the command
+// string.
+ngc_cmd(ngc_bin: string, tsconfig_path: string, opts: ptr) {
+    cmd = "${ngc_bin} -p '${tsconfig_path}'"
+    if opts != null {
+        if map.has(opts, "skip_lib_check") == 1 {
+            cmd = string.concat(cmd, " --skipLibCheck")
+        }
+        if map.has(opts, "extra") == 1 {
+            val, _ = map.get(opts, "extra")
+            cmd = string.concat(cmd, " ${val}")
+        }
+    }
+    return cmd
+}
+
+// ng_build_cmd — `ng build <app> --configuration <config>` invocation.
+// Pure: caller resolves the ng binary path and the app name (typically
+// from basename of source_dir).
+ng_build_cmd(ng_bin: string, app_name: string, configuration: string) {
+    return "${ng_bin} build ${app_name} --configuration ${configuration}"
+}
+
 // --- SDK functions ---
 
 // Compile Angular TypeScript using ngc (Angular compiler).
@@ -39,7 +65,7 @@ builder ngc(ctx: ptr) {
     tc = path.join(source_dir, "tsconfig.lib.json")
     if _builder != null {
         if map.has(_builder, "tsconfig") == 1 {
-            tc_rel = map.get(_builder, "tsconfig")
+            tc_rel, _ = map.get(_builder, "tsconfig")
             tc = path.join(source_dir, tc_rel)
         }
     }
@@ -48,17 +74,7 @@ builder ngc(ctx: ptr) {
 
     aeb_dir = path.join(root, ".aeb")
     ngc_bin = path.join(aeb_dir, "node_modules/.bin/ngc")
-    cmd = "${ngc_bin} -p '${tc}'"
-
-    if _builder != null {
-        if map.has(_builder, "skip_lib_check") == 1 {
-            cmd = string.concat(cmd, " --skipLibCheck")
-        }
-        if map.has(_builder, "extra") == 1 {
-            val = map.get(_builder, "extra")
-            cmd = string.concat(cmd, " ${val}")
-        }
-    }
+    cmd = ngc_cmd(ngc_bin, tc, _builder)
 
     exit_code = os.system(cmd)
     if exit_code != 0 {
@@ -88,7 +104,7 @@ builder ng_build(ctx: ptr) {
 
     aeb_dir = path.join(root, ".aeb")
     ng_bin = path.join(aeb_dir, "node_modules/.bin/ng")
-    cmd = "${ng_bin} build ${app_name} --configuration production"
+    cmd = ng_build_cmd(ng_bin, app_name, "production")
 
     exit_code = os.system(cmd)
     if exit_code != 0 {

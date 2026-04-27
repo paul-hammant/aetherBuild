@@ -121,7 +121,7 @@ main() {
         nf = list.size(files)
         i = 0
         while i < nf {
-            f = list.get(files, i)
+            f, _ = list.get(files, i)
             d = run_capture(string.concat(string.concat(extract_deps_bin, " "), f))
             _md = map.put(file_deps, f, string.concat(d, ""))
             i = i + 1
@@ -151,7 +151,7 @@ main() {
         d = string.concat("", "")
         dword = string.concat("", "")
         while head < qs {
-            f = list.get(queue, head)
+            f, _ = list.get(queue, head)
             head = head + 1
             _lf2 = list.add(files, string.concat(f, ""))
             d = run_capture(string.concat(string.concat(extract_deps_bin, " "), f))
@@ -198,10 +198,10 @@ main() {
     nfiles = list.size(files)
     j = 0
     while j < nfiles {
-        f = list.get(files, j)
+        f, _ = list.get(files, j)
         ds = string.concat("", "")
         if map.has(file_deps, f) == 1 {
-            ds = map.get(file_deps, f)
+            ds, _ = map.get(file_deps, f)
         }
         line = string.concat(f, " ")
         line = string.concat(line, ds)

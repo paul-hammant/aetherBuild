@@ -9,10 +9,8 @@ import std.path
 import std.dir
 
 import build
-import maven
 // Tests for kotlinc_cmd()
 
-import kotlin
 import kotlin (kotlinc_cmd)
 
 _assert_eq(label: string, actual: string, expected: string) {

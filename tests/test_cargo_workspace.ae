@@ -40,7 +40,7 @@ _add_member(opts: ptr, path: string) {
     if map_has(opts, "_ws_members") == 0 {
         map_put(opts, "_ws_members", list_new())
     }
-    members = map_get(opts, "_ws_members")
+    members, _ = map.get(opts, "_ws_members")
     list_add(members, path)
 }
 
@@ -49,7 +49,7 @@ _add_ws_dep(opts: ptr, name: string, ver: string) {
     if map_has(opts, "_ws_deps") == 0 {
         map_put(opts, "_ws_deps", list_new())
     }
-    deps = map_get(opts, "_ws_deps")
+    deps, _ = map.get(opts, "_ws_deps")
     entry = string_concat(name, "~")
     entry = string_concat(entry, ver)
     list_add(deps, entry)
@@ -60,7 +60,7 @@ _add_ws_dep_features(opts: ptr, name: string, ver: string, feats: string) {
     if map_has(opts, "_ws_deps_features") == 0 {
         map_put(opts, "_ws_deps_features", list_new())
     }
-    deps = map_get(opts, "_ws_deps_features")
+    deps, _ = map.get(opts, "_ws_deps_features")
     entry = string_concat(name, "~")
     entry = string_concat(entry, ver)
     entry = string_concat(entry, "~")
@@ -146,7 +146,7 @@ main() {
     if map_has(opts7, "_ws_refs") == 0 {
         map_put(opts7, "_ws_refs", list_new())
     }
-    ws_refs = map_get(opts7, "_ws_refs")
+    ws_refs, _ = map.get(opts7, "_ws_refs")
     list_add(ws_refs, "serde")
     list_add(ws_refs, "tokio")
     list_add(ws_refs, "log")
@@ -164,14 +164,14 @@ main() {
     if map_has(opts8, "_ws_refs") == 0 {
         map_put(opts8, "_ws_refs", list_new())
     }
-    ws_refs8 = map_get(opts8, "_ws_refs")
+    ws_refs8, _ = map.get(opts8, "_ws_refs")
     list_add(ws_refs8, "tokio")
     list_add(ws_refs8, "actix-web")
     // Also has a path dep on liboxen
     if map_has(opts8, "_path_deps") == 0 {
         map_put(opts8, "_path_deps", list_new())
     }
-    pd = map_get(opts8, "_path_deps")
+    pd, _ = map.get(opts8, "_path_deps")
     entry = string_concat("liboxen", "~")
     entry = string_concat(entry, "../lib")
     list_add(pd, entry)
@@ -188,7 +188,7 @@ main() {
     if map_has(opts9, "_features") == 0 {
         map_put(opts9, "_features", list_new())
     }
-    f9 = map_get(opts9, "_features")
+    f9, _ = map.get(opts9, "_features")
     // Simple feature with deps
     e9a = string_concat("otel", "~")
     e9a = string_concat(e9a, "dep:opentelemetry,dep:tracing-opentelemetry")
@@ -221,7 +221,7 @@ main() {
     if map_has(opts11, "_bins") == 0 {
         map_put(opts11, "_bins", list_new())
     }
-    b11 = map_get(opts11, "_bins")
+    b11, _ = map.get(opts11, "_bins")
     e11 = string_concat("oxen", "~")
     e11 = string_concat(e11, "src/main.rs")
     list_add(b11, e11)
@@ -236,7 +236,7 @@ main() {
     if map_has(opts12, "_ws_deps_full") == 0 {
         map_put(opts12, "_ws_deps_full", list_new())
     }
-    full12 = map_get(opts12, "_ws_deps_full")
+    full12, _ = map.get(opts12, "_ws_deps_full")
     // flate2 with no default features
     e12a = string_concat("flate2", "~")
     e12a = string_concat(e12a, "1.1.0")
@@ -294,7 +294,7 @@ main() {
     if map_has(opts13, "_dev_ws_refs") == 0 {
         map_put(opts13, "_dev_ws_refs", list_new())
     }
-    dev13 = map_get(opts13, "_dev_ws_refs")
+    dev13, _ = map.get(opts13, "_dev_ws_refs")
     list_add(dev13, "actix-multipart-test")
     list_add(dev13, "mockito")
     toml13 = cargo_crate_toml_content(opts13)

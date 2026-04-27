@@ -1,0 +1,51 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+// Tests for clojure.clj_aot_compile_cmd, clojure.clj_load_check_cmd,
+// clojure.clj_test_cmd
+
+import clojure (clj_aot_compile_cmd, clj_load_check_cmd, clj_test_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    _assert_eq("clj_aot_compile_cmd basic",
+        clj_aot_compile_cmd("/out/classes",
+                            "/src/main:/out/classes:/maven/clojure.jar",
+                            "myapp.core"),
+        "java -Dclojure.compile.path='/out/classes' -cp '/src/main:/out/classes:/maven/clojure.jar' clojure.main -e \"(compile 'myapp.core)\"")
+
+    _assert_eq("clj_load_check_cmd basic",
+        clj_load_check_cmd("/src/main:/out/classes:/maven/clojure.jar"),
+        "java -cp '/src/main:/out/classes:/maven/clojure.jar' clojure.main -e \"(println :ok)\"")
+
+    _assert_eq("clj_test_cmd no timeout",
+        clj_test_cmd("/src/main:/src/test:/maven/junit.jar",
+                     "'myapp.core-test 'myapp.util-test ",
+                     ""),
+        "java -cp '/src/main:/src/test:/maven/junit.jar' clojure.main -e \"(require 'myapp.core-test 'myapp.util-test ) (let [r (clojure.test/run-tests 'myapp.core-test 'myapp.util-test )] (System/exit (+ (:fail r) (:error r))))\"")
+
+    _assert_eq("clj_test_cmd with timeout",
+        clj_test_cmd("/cp",
+                     "'foo-test ",
+                     "60"),
+        "timeout 60 java -cp '/cp' clojure.main -e \"(require 'foo-test ) (let [r (clojure.test/run-tests 'foo-test )] (System/exit (+ (:fail r) (:error r))))\"")
+
+    println("clojure cmd tests done")
+}

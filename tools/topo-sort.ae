@@ -72,7 +72,7 @@ split_words(s: string, out: ptr) {
 // visited_map maps file -> "visiting" or "done". order is the output post-order.
 dfs_visit(file: string, file_deps: ptr, visited_map: ptr, order: ptr) {
     if map.has(visited_map, file) == 1 {
-        cur = map.get(visited_map, file)
+        cur, _ = map.get(visited_map, file)
         if cur == "done" { return 0 }
         if cur == "visiting" {
             os.system(string.concat(string.concat("printf 'error: circular dependency involving ", file), "\n' >&2"))
@@ -82,14 +82,14 @@ dfs_visit(file: string, file_deps: ptr, visited_map: ptr, order: ptr) {
     _mp1 = map.put(visited_map, file, "visiting")
     deps_str = ""
     if map.has(file_deps, file) == 1 {
-        deps_str = map.get(file_deps, file)
+        deps_str, _ = map.get(file_deps, file)
     }
     deps_list = list.new()
     split_words(deps_str, deps_list)
     n = list.size(deps_list)
     i = 0
     while i < n {
-        dep = list.get(deps_list, i)
+        dep, _ = list.get(deps_list, i)
         // Only follow deps that are themselves in the input set
         if map.has(file_deps, dep) == 1 {
             dfs_visit(dep, file_deps, visited_map, order)
@@ -142,7 +142,7 @@ main() {
     fcount = list.size(files)
     j = 0
     while j < fcount {
-        f = list.get(files, j)
+        f, _ = list.get(files, j)
         dfs_visit(f, file_deps, visited_map, order)
         j = j + 1
     }
@@ -150,7 +150,8 @@ main() {
     ocount = list.size(order)
     k = 0
     while k < ocount {
-        println(list.get(order, k))
+        _o, _ = list.get(order, k)
+        println(_o)
         k = k + 1
     }
     return 0

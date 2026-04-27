@@ -17,6 +17,23 @@ timeout(_ctx: ptr, secs: string) {
     _e = map.put(_ctx, "timeout", secs)
 }
 
+// --- Command builders (pure) ---
+
+// jest_cmd — assemble a `timeout N jest` invocation. Pure: caller
+// resolves the jest binary path, the jest config path, and the
+// timeout value; this just glues them. opts may contribute "extra"
+// flags appended at the end.
+jest_cmd(jest_bin: string, jest_config: string, timeout_secs: string, opts: ptr) {
+    cmd = "timeout ${timeout_secs} ${jest_bin} --config '${jest_config}' --passWithNoTests"
+    if opts != null {
+        if map.has(opts, "extra") == 1 {
+            val, _ = map.get(opts, "extra")
+            cmd = string.concat(cmd, " ${val}")
+        }
+    }
+    return cmd
+}
+
 // --- SDK functions ---
 
 // Run Jest tests using the project's jest.config.ts.
@@ -40,20 +57,12 @@ builder test(ctx: ptr) {
     timeout_secs = "60"
     if _builder != null {
         if map.has(_builder, "timeout") == 1 {
-            timeout_secs = map.get(_builder, "timeout")
+            timeout_secs, _ = map.get(_builder, "timeout")
         }
     }
 
     jest_config = path.join(source_dir, "jest.config.ts")
-    cmd = "timeout ${timeout_secs} ${jest_bin} --config '${jest_config}' --passWithNoTests"
-
-    if _builder != null {
-        if map.has(_builder, "extra") == 1 {
-            val = map.get(_builder, "extra")
-            cmd = string.concat(cmd, " ${val}")
-        }
-    }
-
+    cmd = jest_cmd(jest_bin, jest_config, timeout_secs, _builder)
     exit_code = os.system(cmd)
     if exit_code == 124 {
         println("${mod_dir}: tests TIMEOUT")

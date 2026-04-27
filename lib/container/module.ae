@@ -16,7 +16,7 @@ base(_ctx: ptr, img: string) {
 
 port(_ctx: ptr, p: string) {
     if map.has(_ctx, "ports") == 1 {
-        prev = map.get(_ctx, "ports")
+        prev, _ = map.get(_ctx, "ports")
         combined = string.concat(prev, " ")
         combined = string.concat(combined, p)
         _e1 = map.put(_ctx, "ports", combined)
@@ -29,7 +29,7 @@ env(_ctx: ptr, key: string, val: string) {
     entry = string.concat(key, "=")
     entry = string.concat(entry, val)
     if map.has(_ctx, "env_vars") == 1 {
-        prev = map.get(_ctx, "env_vars")
+        prev, _ = map.get(_ctx, "env_vars")
         combined = string.concat(prev, "\n")
         combined = string.concat(combined, entry)
         _e1 = map.put(_ctx, "env_vars", combined)
@@ -58,7 +58,7 @@ copy(_ctx: ptr, src: string, dst: string) {
     entry = string.concat(src, ":")
     entry = string.concat(entry, dst)
     if map.has(_ctx, "copies") == 1 {
-        prev = map.get(_ctx, "copies")
+        prev, _ = map.get(_ctx, "copies")
         combined = string.concat(prev, "\n")
         combined = string.concat(combined, entry)
         _e1 = map.put(_ctx, "copies", combined)
@@ -88,7 +88,7 @@ dockerfile_content(artifact_path: string, opts: ptr) {
     base_img = "debian:bookworm-slim"
     if opts != null {
         if map.has(opts, "base") == 1 {
-            base_img = map.get(opts, "base")
+            base_img, _ = map.get(opts, "base")
         }
     }
     df = string.concat("FROM ", base_img)
@@ -98,7 +98,7 @@ dockerfile_content(artifact_path: string, opts: ptr) {
     wd = "/app"
     if opts != null {
         if map.has(opts, "workdir") == 1 {
-            wd = map.get(opts, "workdir")
+            wd, _ = map.get(opts, "workdir")
         }
     }
     df = string.concat(df, "WORKDIR ")
@@ -108,7 +108,7 @@ dockerfile_content(artifact_path: string, opts: ptr) {
     // Explicit copies
     if opts != null {
         if map.has(opts, "copies") == 1 {
-            copies = map.get(opts, "copies")
+            copies, _ = map.get(opts, "copies")
             cl_raw, _e1 = os.exec("echo '${copies}' | while IFS=: read -r s d; do echo \"COPY $s $d\"; done")
             copy_lines = string.trim(cl_raw)
             df = string.concat(df, copy_lines)
@@ -136,7 +136,7 @@ dockerfile_content(artifact_path: string, opts: ptr) {
     // Env vars
     if opts != null {
         if map.has(opts, "env_vars") == 1 {
-            env_raw = map.get(opts, "env_vars")
+            env_raw, _ = map.get(opts, "env_vars")
             el_raw, _e2 = os.exec("echo '${env_raw}' | while IFS='=' read -r k v; do echo \"ENV $k=$v\"; done")
             env_lines = string.trim(el_raw)
             df = string.concat(df, env_lines)
@@ -147,7 +147,7 @@ dockerfile_content(artifact_path: string, opts: ptr) {
     // Ports
     if opts != null {
         if map.has(opts, "ports") == 1 {
-            ports = map.get(opts, "ports")
+            ports, _ = map.get(opts, "ports")
             pl_raw, _e3 = os.exec("echo '${ports}' | tr ' ' '\n' | while read -r p; do echo \"EXPOSE $p\"; done")
             port_lines = string.trim(pl_raw)
             df = string.concat(df, port_lines)
@@ -158,7 +158,7 @@ dockerfile_content(artifact_path: string, opts: ptr) {
     // Entrypoint
     if opts != null {
         if map.has(opts, "entrypoint") == 1 {
-            ep = map.get(opts, "entrypoint")
+            ep, _ = map.get(opts, "entrypoint")
             df = string.concat(df, "ENTRYPOINT ")
             df = string.concat(df, ep)
             df = string.concat(df, "\n")
@@ -173,7 +173,7 @@ image_build_cmd(image_tag: string, context_dir: string, dockerfile_path: string,
     eng = "podman"
     if opts != null {
         if map.has(opts, "engine") == 1 {
-            eng = map.get(opts, "engine")
+            eng, _ = map.get(opts, "engine")
         }
     }
     cmd = string.concat(eng, " build")
@@ -184,7 +184,7 @@ image_build_cmd(image_tag: string, context_dir: string, dockerfile_path: string,
 
     if opts != null {
         if map.has(opts, "extra") == 1 {
-            val = map.get(opts, "extra")
+            val, _ = map.get(opts, "extra")
             cmd = string.concat(cmd, " ")
             cmd = string.concat(cmd, val)
         }
@@ -200,7 +200,7 @@ lxc_create_cmd(name: string, opts: ptr) {
     tmpl = "download"
     if opts != null {
         if map.has(opts, "template") == 1 {
-            tmpl = map.get(opts, "template")
+            tmpl, _ = map.get(opts, "template")
         }
     }
     cmd = string.concat("lxc-create -n ", name)
@@ -209,7 +209,7 @@ lxc_create_cmd(name: string, opts: ptr) {
 
     if opts != null {
         if map.has(opts, "extra") == 1 {
-            val = map.get(opts, "extra")
+            val, _ = map.get(opts, "extra")
             cmd = string.concat(cmd, " -- ")
             cmd = string.concat(cmd, val)
         }
@@ -221,10 +221,10 @@ lxc_create_cmd(name: string, opts: ptr) {
 // --- SDK functions ---
 
 builder image(ctx: ptr) {
-    root = map.get(ctx, "root")
-    target_dir = map.get(ctx, "target_dir")
-    mod_dir = map.get(ctx, "module_dir")
-    mod_name = map.get(ctx, "module")
+    root, _ = map.get(ctx, "root")
+    target_dir, _ = map.get(ctx, "target_dir")
+    mod_dir, _ = map.get(ctx, "module_dir")
+    mod_name, _ = map.get(ctx, "module")
 
     println("${mod_dir}: building container image")
 
@@ -232,7 +232,8 @@ builder image(ctx: ptr) {
     img_tag = mod_name
     if _builder != null {
         if map.has(_builder, "tag") == 1 {
-            img_tag = map.get(_builder, "tag")
+            _t, _ = map.get(_builder, "tag")
+            img_tag = _t
         }
     }
 
@@ -262,7 +263,7 @@ builder image(ctx: ptr) {
     df_path = ""
     if _builder != null {
         if map.has(_builder, "dockerfile") == 1 {
-            df_path = map.get(_builder, "dockerfile")
+            df_path, _ = map.get(_builder, "dockerfile")
         }
     }
     if string.length(df_path) == 0 {
@@ -283,13 +284,13 @@ builder image(ctx: ptr) {
 }
 
 builder lxc(ctx: ptr) {
-    mod_dir = map.get(ctx, "module_dir")
-    mod_name = map.get(ctx, "module")
+    mod_dir, _ = map.get(ctx, "module_dir")
+    mod_name, _ = map.get(ctx, "module")
 
     name = mod_name
     if _builder != null {
         if map.has(_builder, "lxc_name") == 1 {
-            name = map.get(_builder, "lxc_name")
+            name, _ = map.get(_builder, "lxc_name")
         }
     }
 

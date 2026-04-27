@@ -17,6 +17,15 @@ config(_ctx: ptr, path: string) {
     _e = map.put(_ctx, "webpack_config", path)
 }
 
+// --- Command builders (pure) ---
+
+// webpack_cmd — assemble a webpack invocation. Pure: caller resolves
+// the webpack binary path, the node_modules directory (for NODE_PATH
+// resolution), and the webpack config path.
+webpack_cmd(node_modules_dir: string, webpack_bin: string, config_path: string) {
+    return "NODE_PATH='${node_modules_dir}' ${webpack_bin} --config '${config_path}'"
+}
+
 // --- SDK functions ---
 
 builder bundle(ctx: ptr) {
@@ -31,7 +40,7 @@ builder bundle(ctx: ptr) {
     wp_config = path.join(source_dir, "webpack.aeb.config.js")
     if _builder != null {
         if map.has(_builder, "webpack_config") == 1 {
-            cfg = map.get(_builder, "webpack_config")
+            cfg, _ = map.get(_builder, "webpack_config")
             wp_config = path.join(source_dir, cfg)
         }
     }
@@ -41,7 +50,7 @@ builder bundle(ctx: ptr) {
     aeb_dir = path.join(root, ".aeb")
     webpack_bin = path.join(aeb_dir, "node_modules/.bin/webpack")
     nm_dir = path.join(aeb_dir, "node_modules")
-    cmd = "NODE_PATH='${nm_dir}' ${webpack_bin} --config '${wp_config}'"
+    cmd = webpack_cmd(nm_dir, webpack_bin, wp_config)
 
     exit_code = os.system(cmd)
     if exit_code != 0 {

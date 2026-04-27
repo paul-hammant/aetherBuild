@@ -1,0 +1,114 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+// Tests for python.pyproject_toml_content() — pyproject.toml generation
+
+import python
+import python (pyproject_toml_content)
+
+_assert_contains(label: string, actual: string, substring: string) {
+    if string_contains(actual, substring) == 1 {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected to contain: ${substring}")
+        println("  actual: ${actual}")
+    }
+}
+
+_assert_not_contains(label: string, actual: string, substring: string) {
+    if string_contains(actual, substring) == 0 {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected NOT to contain: ${substring}")
+        println("  actual: ${actual}")
+    }
+}
+
+main() {
+    // --- Test 1: minimal defaults ---
+    toml1 = pyproject_toml_content(null, null)
+    _assert_contains("minimal has [build-system]", toml1, "[build-system]")
+    _assert_contains("minimal has [project]", toml1, "[project]")
+    _assert_contains("minimal default name", toml1, "name = \"package\"")
+    _assert_contains("minimal default version", toml1, "version = \"0.1.0\"")
+    _assert_contains("minimal default where", toml1, "where = [\".\"]")
+    _assert_contains("minimal default include", toml1, "include = [\"package*\"]")
+    _assert_not_contains("minimal no requires-python", toml1, "requires-python")
+    _assert_not_contains("minimal no dependencies", toml1, "dependencies = [")
+
+    // --- Test 2: explicit name + version ---
+    opts2 = map_new()
+    map_put(opts2, "package_name", "monorepo-lib")
+    map_put(opts2, "version", "1.2.3")
+    toml2 = pyproject_toml_content(opts2, null)
+    _assert_contains("explicit name", toml2, "name = \"monorepo-lib\"")
+    _assert_contains("explicit version", toml2, "version = \"1.2.3\"")
+    _assert_contains("default include uses pkg name", toml2, "include = [\"monorepo-lib*\"]")
+
+    // --- Test 3: requires_python ---
+    opts3 = map_new()
+    map_put(opts3, "package_name", "lib")
+    map_put(opts3, "requires_python", ">=3.10")
+    toml3 = pyproject_toml_content(opts3, null)
+    _assert_contains("requires-python", toml3, "requires-python = \">=3.10\"")
+
+    // --- Test 4: dep specs included ---
+    opts4 = map_new()
+    map_put(opts4, "package_name", "service")
+    deps4 = list_new()
+    list_add(deps4, "requests==2.31.0")
+    list_add(deps4, "click>=8.0")
+    toml4 = pyproject_toml_content(opts4, deps4)
+    _assert_contains("dependencies header", toml4, "dependencies = [")
+    _assert_contains("dep requests", toml4, "\"requests==2.31.0\"")
+    _assert_contains("dep click", toml4, "\"click>=8.0\"")
+
+    // --- Test 5: empty dep_specs list omits dependencies block ---
+    opts5 = map_new()
+    map_put(opts5, "package_name", "lib")
+    deps5 = list_new()
+    toml5 = pyproject_toml_content(opts5, deps5)
+    _assert_not_contains("empty deps no dependencies block", toml5, "dependencies = [")
+
+    // --- Test 6: packages_where + packages_include override ---
+    opts6 = map_new()
+    map_put(opts6, "package_name", "monorepo")
+    map_put(opts6, "packages_where", "src")
+    map_put(opts6, "packages_include", "monorepo.*")
+    toml6 = pyproject_toml_content(opts6, null)
+    _assert_contains("custom where", toml6, "where = [\"src\"]")
+    _assert_contains("custom include", toml6, "include = [\"monorepo.*\"]")
+
+    // --- Test 7: full combo ---
+    opts7 = map_new()
+    map_put(opts7, "package_name", "data-pipeline")
+    map_put(opts7, "version", "0.5.2")
+    map_put(opts7, "requires_python", ">=3.11")
+    map_put(opts7, "packages_where", "src")
+    map_put(opts7, "packages_include", "pipeline*")
+    deps7 = list_new()
+    list_add(deps7, "pandas>=2.0")
+    list_add(deps7, "pyarrow==15.0.0")
+    list_add(deps7, "click")
+    toml7 = pyproject_toml_content(opts7, deps7)
+    _assert_contains("combo: name", toml7, "name = \"data-pipeline\"")
+    _assert_contains("combo: version", toml7, "version = \"0.5.2\"")
+    _assert_contains("combo: requires-python", toml7, "requires-python = \">=3.11\"")
+    _assert_contains("combo: pandas dep", toml7, "\"pandas>=2.0\"")
+    _assert_contains("combo: pyarrow dep", toml7, "\"pyarrow==15.0.0\"")
+    _assert_contains("combo: click dep", toml7, "\"click\"")
+    _assert_contains("combo: where src", toml7, "where = [\"src\"]")
+    _assert_contains("combo: include", toml7, "include = [\"pipeline*\"]")
+
+    println("pyproject_toml_content tests done")
+}

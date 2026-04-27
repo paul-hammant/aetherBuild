@@ -27,17 +27,34 @@ main_class(_ctx: ptr, cls: string) {
     _e = map.put(_ctx, "main_class", cls)
 }
 
+// --- Command builders (pure) ---
+
+// scalac_cmd — assemble a Dotty (Scala 3) compile invocation. Pure:
+// caller resolves the compiler classpath, output dir, the runtime
+// classpath (library + deps + maven), and the @argfile path.
+scalac_cmd(compiler_cp: string, classes_dir: string, classpath: string, argfile: string) {
+    return "java -cp '${compiler_cp}' dotty.tools.dotc.Main -d '${classes_dir}' -cp '${classpath}' @'${argfile}'"
+}
+
+// munit_cmd — assemble a JUnitCore invocation for munit-style Scala
+// tests. Pure: caller resolves the runtime classpath and produces a
+// space-separated list of fully-qualified test class names.
+munit_cmd(classpath: string, class_names: string) {
+    return "java -cp '${classpath}' org.junit.runner.JUnitCore ${class_names}"
+}
+
 // --- Internal helpers ---
 
 // Resolve the Scala compiler classpath (compiler + library jars)
 _compiler_classpath(ctx: ptr) {
     if map.has(ctx, "_scala_compiler_cp") == 1 {
-        return map.get(ctx, "_scala_compiler_cp")
+        v, _ = map.get(ctx, "_scala_compiler_cp")
+        return v
     }
 
     ver = "3.8.2"
     if map.has(ctx, "scala_version") == 1 {
-        ver = map.get(ctx, "scala_version")
+        ver, _ = map.get(ctx, "scala_version")
     }
 
     aeb_home = os.getenv("AEB_HOME")
@@ -52,12 +69,13 @@ _compiler_classpath(ctx: ptr) {
 // Resolve the Scala library classpath (needed at compile and runtime)
 _library_classpath(ctx: ptr) {
     if map.has(ctx, "_scala_library_cp") == 1 {
-        return map.get(ctx, "_scala_library_cp")
+        v, _ = map.get(ctx, "_scala_library_cp")
+        return v
     }
 
     ver = "3.8.2"
     if map.has(ctx, "scala_version") == 1 {
-        ver = map.get(ctx, "scala_version")
+        ver, _ = map.get(ctx, "scala_version")
     }
 
     aeb_home = os.getenv("AEB_HOME")
@@ -114,7 +132,7 @@ builder scalac(ctx: ptr) {
         cp = string.concat(tmp3, maven_cp)
     }
 
-    cmd = "java -cp '${compiler_cp}' dotty.tools.dotc.Main -d '${classes_dir}' -cp '${cp}' @'${argfile}'"
+    cmd = scalac_cmd(compiler_cp, classes_dir, cp, argfile)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: scalac failed")
@@ -180,7 +198,7 @@ builder scalac_test(ctx: ptr) {
         cp = string.concat(tmp3, maven_cp)
     }
 
-    cmd = "java -cp '${compiler_cp}' dotty.tools.dotc.Main -d '${test_classes}' -cp '${cp}' @'${argfile}'"
+    cmd = scalac_cmd(compiler_cp, test_classes, cp, argfile)
     exit_code = os.system(cmd)
     if exit_code != 0 {
         println("${mod_dir}: scalac (test) failed")
@@ -229,7 +247,7 @@ builder munit(ctx: ptr) {
 
     c_raw, _ec = os.exec("echo '${class_list}' | tr '\\n' ' '")
     classes = string.trim(c_raw)
-    cmd = "java -cp '${cp}' org.junit.runner.JUnitCore ${classes}"
+    cmd = munit_cmd(cp, classes)
 
     exit_code = os.system(cmd)
     if exit_code != 0 {

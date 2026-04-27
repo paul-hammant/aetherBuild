@@ -1,0 +1,70 @@
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+// Tests for pnpm.pnpm_spec_from_dep, pnpm.pnpm_add_cmd
+
+import pnpm
+import pnpm (pnpm_spec_from_dep, pnpm_add_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    // --- pnpm_spec_from_dep: name:version translation ---
+    _assert_eq("simple name:version",
+        pnpm_spec_from_dep("react:18.3.1"),
+        "react@18.3.1")
+
+    _assert_eq("scoped @angular/core:11.2.4",
+        pnpm_spec_from_dep("@angular/core:11.2.4"),
+        "@angular/core@11.2.4")
+
+    _assert_eq("scoped with caret @types/node:^20",
+        pnpm_spec_from_dep("@types/node:^20.0.0"),
+        "@types/node@^20.0.0")
+
+    _assert_eq("no colon — pass through",
+        pnpm_spec_from_dep("react"),
+        "react")
+
+    // --- pnpm_add_cmd: command assembly ---
+    _assert_eq("empty deps list",
+        pnpm_add_cmd("/proj/.aeb", null),
+        "COREPACK_ENABLE_STRICT=0 pnpm add --prefix '/proj/.aeb'")
+
+    deps2 = list_new()
+    _assert_eq("zero-size deps",
+        pnpm_add_cmd("/proj/.aeb", deps2),
+        "COREPACK_ENABLE_STRICT=0 pnpm add --prefix '/proj/.aeb'")
+
+    deps3 = list_new()
+    list_add(deps3, "react:18.3.1")
+    _assert_eq("single dep",
+        pnpm_add_cmd("/proj/.aeb", deps3),
+        "COREPACK_ENABLE_STRICT=0 pnpm add --prefix '/proj/.aeb' 'react@18.3.1'")
+
+    deps4 = list_new()
+    list_add(deps4, "react:18.3.1")
+    list_add(deps4, "@angular/core:11.2.4")
+    list_add(deps4, "lodash")
+    _assert_eq("mixed deps (versioned scoped + bare)",
+        pnpm_add_cmd("/proj/.aeb", deps4),
+        "COREPACK_ENABLE_STRICT=0 pnpm add --prefix '/proj/.aeb' 'react@18.3.1' '@angular/core@11.2.4' 'lodash'")
+
+    println("pnpm cmd tests done")
+}
