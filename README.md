@@ -334,6 +334,24 @@ bash.script(b) {            // non-test runner: codegen, asset prep, etc.
 }
 ```
 
+```aether
+import aether
+import aether (source, output, extra_sources, link_flags)
+
+aether.program(b) {                   // shells out to `ae build` by default —
+    source("main.ae")                 //   honours aether.toml [[bin]] for free
+    output("svn")                     //   (extra_sources, link_flags, regen).
+}
+aether.program(b) {                   // declaring extra_sources or link_flags
+    source("main.ae")                 //   opts into the manual aetherc + gcc
+    output("svn")                     //   path (.build.ae becomes the single
+    extra_sources("a_generated.c")    //   source of truth, aether.toml ignored
+    extra_sources("b_generated.c")    //   for this target).
+    link_flags("-pthread")
+}
+aether.program_test(b) { ... }        // same as program, plus runs the binary
+```
+
 ## Maven / BOM support
 
 A `.bom.ae` file at the repo root declares Maven BOMs and extra repos:

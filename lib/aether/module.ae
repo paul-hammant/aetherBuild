@@ -25,6 +25,32 @@ output(_ctx: ptr, bin_name: string) {
     _e = map.put(_ctx, "output", bin_name)
 }
 
+// extra_sources(c_path) — append one C file to the manual-link list.
+// Repeated calls accumulate. Presence of any extra_sources opts the
+// builder out of the `ae build` shell-out (which would read these
+// from aether.toml's [[bin]].extra_sources) and into the explicit
+// aetherc + gcc path. Mutually exclusive with aether.toml's
+// [[bin]] entry for the same target — declare in one place.
+extra_sources(_ctx: ptr, c_path: string) {
+    if map.has(_ctx, "extra_sources") == 0 {
+        _e1 = map.put(_ctx, "extra_sources", list.new())
+    }
+    extras, _ = map.get(_ctx, "extra_sources")
+    _e2 = list.add(extras, c_path)
+}
+
+// link_flags(flag) — append one gcc link flag (e.g. "-pthread",
+// "-lm", "-Wl,-rpath,/foo"). Like extra_sources, presence opts into
+// the manual-link path. Note: -L${aether_dir} -laether are already
+// added by the manual path; don't repeat them here.
+link_flags(_ctx: ptr, flag: string) {
+    if map.has(_ctx, "link_flags") == 0 {
+        _e1 = map.put(_ctx, "link_flags", list.new())
+    }
+    flags, _ = map.get(_ctx, "link_flags")
+    _e2 = list.add(flags, flag)
+}
+
 // --- Helpers ---
 
 _resolve_aether_dir() {
@@ -34,6 +60,39 @@ _resolve_aether_dir() {
     }
     raw, _eerr = os.exec("dirname $(command -v ${ae})")
     return string.trim(raw)
+}
+
+// Resolve the directory containing libaether.a — same probe order as
+// aeb-link's _resolve_libaether_dir (and Aether's tools/ae.c). Returns
+// the dir to pass to gcc's -L, or aether_dir as a last-resort fallback
+// (which preserves the historic behaviour for dev-tree installs).
+_resolve_libaether_dir(aether_dir: string) {
+    cand1 = string.concat(aether_dir, "/../lib/aether/libaether.a")
+    if fs.exists(cand1) == 1 {
+        return string.concat(aether_dir, "/../lib/aether")
+    }
+    cand2 = string.concat(aether_dir, "/../lib/libaether.a")
+    if fs.exists(cand2) == 1 {
+        return string.concat(aether_dir, "/../lib")
+    }
+    return aether_dir
+}
+
+// Resolve the Aether include root for nested-header installs. Same
+// shape as aeb-link's _resolve_aether_include. Returns "" if no
+// nested include tree (dev-tree layout) — caller skips the -I block.
+_resolve_aether_include(aether_dir: string) {
+    env_inc = os.getenv("AETHER_INCLUDE")
+    if string.length(env_inc) > 0 {
+        if dir.exists(env_inc) == 1 {
+            return env_inc
+        }
+    }
+    cand = string.concat(aether_dir, "/../include/aether")
+    if dir.exists(cand) == 1 {
+        return cand
+    }
+    return ""
 }
 
 _collect_shared_libs(ctx: ptr) {
@@ -67,7 +126,47 @@ _collect_ld_path(shared_libs_text: string) {
     return string.trim(out)
 }
 
-_compile_and_link(ctx: ptr, src_path: string, bin_path: string, c_path: string) {
+// Returns 1 if the user declared extra_sources(...) or link_flags(...)
+// in the builder block — i.e. wants the manual gcc path. Returns 0
+// otherwise (default: shell out to `ae build`). Takes the builder
+// map as a parameter because `_builder` is only in scope inside
+// `builder` functions, not regular helpers.
+_has_manual_overrides(builder_map: ptr) {
+    if builder_map == null { return 0 }
+    if map.has(builder_map, "extra_sources") == 1 { return 1 }
+    if map.has(builder_map, "link_flags") == 1 { return 1 }
+    return 0
+}
+
+// Default build path: shell out to `ae build`. Lets the Aether driver
+// apply its own logic — aether.toml [[bin]] lookup (including
+// extra_sources and link_flags), regen.sh, codegen ordering, and its
+// own up-to-date cache. aeb's job here is just orchestration: pick
+// the source and target paths, exec, propagate failures.
+//
+// `ae build` walks up from src_path to find aether.toml, so aeb
+// doesn't need to discover it.
+_shell_out_ae_build(ctx: ptr, src_path: string, bin_path: string) {
+    mod_dir = build._get(ctx, "module_dir")
+    ae_bin = os.getenv("AETHER")
+    if string.length(ae_bin) == 0 {
+        ae_bin = "ae"
+    }
+
+    cmd = "${ae_bin} build ${src_path} -o ${bin_path}"
+    rc = os.system(cmd)
+    if rc != 0 {
+        println("${mod_dir}: ae build failed")
+        return rc
+    }
+    return 0
+}
+
+// Manual build path: aetherc + gcc, with optional extra_sources and
+// link_flags from the builder block. Used when the .build.ae
+// declares either of those — bypasses aether.toml entirely so the
+// .build.ae is the single source of truth.
+_compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string, c_path: string) {
     mod_dir = build._get(ctx, "module_dir")
 
     ae_dir = _resolve_aether_dir()
@@ -81,7 +180,8 @@ _compile_and_link(ctx: ptr, src_path: string, bin_path: string, c_path: string) 
         return rc
     }
 
-    // Phase 2: gcc src.c + runtime → bin, plus any shared library deps.
+    // Phase 2: gcc src.c (+ extra_sources) + runtime → bin, plus any
+    // shared library deps and user-supplied link_flags.
     shared_libs = _collect_shared_libs(ctx)
     extra_link = ""
     rpath_link = ""
@@ -94,16 +194,71 @@ _compile_and_link(ctx: ptr, src_path: string, bin_path: string, c_path: string) 
         rpath_link = string.trim(rp_raw)
     }
 
+    // Concatenate user-declared extra_sources (if any).
+    extras_str = ""
+    if builder_map != null {
+        if map.has(builder_map, "extra_sources") == 1 {
+            extras, _ = map.get(builder_map, "extra_sources")
+            ne = list.size(extras)
+            ie = 0
+            while ie < ne {
+                ef, _ = list.get(extras, ie)
+                extras_str = string.concat(extras_str, " ")
+                extras_str = string.concat(extras_str, ef)
+                ie = ie + 1
+            }
+        }
+    }
+
+    // Concatenate user-declared link_flags (if any).
+    user_flags = ""
+    if builder_map != null {
+        if map.has(builder_map, "link_flags") == 1 {
+            flags, _ = map.get(builder_map, "link_flags")
+            nf = list.size(flags)
+            jf = 0
+            while jf < nf {
+                ff, _ = list.get(flags, jf)
+                user_flags = string.concat(user_flags, " ")
+                user_flags = string.concat(user_flags, ff)
+                jf = jf + 1
+            }
+        }
+    }
+
+    // -L: prefer FHS lib/aether/libaether.a over flat dev-tree.
+    lib_dir = _resolve_libaether_dir(ae_dir)
+
+    // -I: real installs nest headers under include/aether/{runtime,std}/...
+    // Generated C uses bare #include names, so add -I for every dir.
+    inc_root = _resolve_aether_include(ae_dir)
+    inc_flags = ""
+    if string.length(inc_root) > 0 {
+        inc_flags = " $(find ${inc_root} -type d -print | sed 's|^|-I|')"
+    }
+
     // Duplicate-symbol link flag — GNU ld uses --allow-multiple-definition,
     // macOS ld64 rejects that flag outright. See build._dup_symbol_link_flag.
     dup_flag = build._dup_symbol_link_flag()
-    gcc_cmd = "gcc -O2 -pipe -w ${c_path} -L${ae_dir} -laether ${extra_link} ${rpath_link} -o ${bin_path} -pthread -lm ${dup_flag}"
+    gcc_cmd = "gcc -O2 -pipe -w${inc_flags} ${c_path}${extras_str} -L${lib_dir} -laether ${extra_link} ${rpath_link}${user_flags} -o ${bin_path} -pthread -lm ${dup_flag}"
     rc = os.system(gcc_cmd)
     if rc != 0 {
         println("${mod_dir}: gcc link failed")
         return rc
     }
     return 0
+}
+
+// Router: shell out to `ae build` by default; take the manual path
+// only when the user declared extra_sources(...) or link_flags(...).
+// c_path is only consumed by the manual path (it's the intermediate
+// .c file aetherc emits); the shell-out lets `ae build` manage its
+// own scratch.
+_build_binary(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string, c_path: string) {
+    if _has_manual_overrides(builder_map) == 1 {
+        return _compile_and_link(ctx, builder_map, src_path, bin_path, c_path)
+    }
+    return _shell_out_ae_build(ctx, src_path, bin_path)
 }
 
 _default_source_name(ctx: ptr) {
@@ -143,7 +298,7 @@ builder program(ctx: ptr) {
     c_path = path.join(target_dir, string.concat(out_name, ".c"))
 
     println("${mod_dir}: compiling Aether program")
-    rc = _compile_and_link(ctx, src_path, bin_path, c_path)
+    rc = _build_binary(ctx, _builder, src_path, bin_path, c_path)
     if rc != 0 {
         return rc
     }
@@ -171,7 +326,7 @@ builder program_test(ctx: ptr) {
     c_path = path.join(target_dir, "test_program.c")
 
     println("${mod_dir}: compiling Aether test")
-    rc = _compile_and_link(ctx, src_path, bin_path, c_path)
+    rc = _build_binary(ctx, _builder, src_path, bin_path, c_path)
     if rc != 0 {
         println("${mod_dir}: tests FAILED (compile)")
         return rc
