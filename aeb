@@ -18,6 +18,13 @@ AEB_HOME="$(cd "$(dirname "$0")" && pwd)"
 export AEB_HOME
 ROOT="$(pwd)"
 
+# --- --version: print aeb version and underlying ae version ---
+if [[ "${1:-}" == "--version" ]]; then
+    echo "aeb 0.0.0-dev"
+    "$AETHER" --version 2>/dev/null | head -1
+    exit 0
+fi
+
 # Auto-detect podman socket for TestContainers
 if [[ -z "${DOCKER_HOST:-}" ]] && [[ -S "/run/user/$(id -u)/podman/podman.sock" ]]; then
     export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"

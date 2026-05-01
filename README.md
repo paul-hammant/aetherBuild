@@ -318,6 +318,22 @@ python.pytest(b)
 python.package(b) { … }     // generate pyproject.toml and build wheel
 ```
 
+```aether
+import bash
+bash.test(b) {              // exit 0 = PASS, non-zero = FAIL
+    script("test_a.sh")
+    script("test_b.sh")
+}
+bash.test(b)                // no script(...) → auto-discover test_*.sh
+bash.test(b) {              // run up to 4 scripts concurrently
+    jobs(4)
+}
+bash.test(b) { jobs(0) }    // 0 = auto = nproc/2
+bash.script(b) {            // non-test runner: codegen, asset prep, etc.
+    script("gen.sh")
+}
+```
+
 ## Maven / BOM support
 
 A `.bom.ae` file at the repo root declares Maven BOMs and extra repos:
@@ -389,6 +405,7 @@ aetherBuild/
 │   ├── dotnet/module.ae       # .csproj generation, nuget_vendored, nuget_registry
 │   ├── python/module.ae       # pyproject.toml generation, wheel_vendored, wheel_registry
 │   ├── aether/module.ae       # native Aether programs (program / program_test)
+│   ├── bash/module.ae         # bash test runner (exit 0 = PASS) and non-test script runner
 │   ├── maven/module.ae        # BOM parsing, Maven resolution wrapper
 │   ├── pnpm/module.ae         # pnpm-based npm resolution
 │   ├── jest/module.ae

@@ -26,6 +26,8 @@
 
 import std.string
 import std.file
+import std.dir
+import std.fs
 import std.io
 import std.os
 import std.list
@@ -41,6 +43,78 @@ _is_macos_link() {
     if eerr != "" { return 0 }
     if string.trim(out) == "Darwin" { return 1 }
     return 0
+}
+
+// Resolve the Aether runtime source directory. Layouts in the wild:
+//   1. $AETHER_RUNTIME (explicit override)
+//   2. ${aether_dir}/../runtime           (dev tree / non-FHS install)
+//   3. ${aether_dir}/../share/aether/runtime  (FHS-style install,
+//                                              e.g. ae in ~/.local/bin
+//                                              with runtime under
+//                                              ~/.local/share/aether)
+// Returns "" if none of the candidates exist; caller falls back to
+// the legacy path so the error message points at the historic layout.
+// Resolve the directory containing libaether.a. Aether's own driver
+// (tools/ae.c) probes both locations, so we mirror that:
+//   1. ${aether_dir}/../lib/aether/libaether.a   (FHS install)
+//   2. ${aether_dir}/../lib/libaether.a          (legacy / dev tree)
+//   3. ${aether_dir}/libaether.a                 (next to the driver)
+// Returns the dir to pass to -L, or "" if none found (fall through to
+// the from-source runtime build).
+_resolve_libaether_dir(aether_dir: string) {
+    cand1 = string.concat(aether_dir, "/../lib/aether/libaether.a")
+    if fs.exists(cand1) == 1 {
+        return string.concat(aether_dir, "/../lib/aether")
+    }
+    cand2 = string.concat(aether_dir, "/../lib/libaether.a")
+    if fs.exists(cand2) == 1 {
+        return string.concat(aether_dir, "/../lib")
+    }
+    cand3 = string.concat(aether_dir, "/libaether.a")
+    if fs.exists(cand3) == 1 {
+        return aether_dir
+    }
+    return ""
+}
+
+// Resolve the Aether include root. Generated C files include headers
+// with bare names (#include "aether_panic.h"), but a real install
+// nests them under include/aether/{runtime,std}/<subdir>/. We probe
+// for the include root and the caller adds -I for every subdir.
+//   1. $AETHER_INCLUDE (explicit override)
+//   2. ${aether_dir}/../include/aether
+//   3. "" if neither exists (caller falls back to no -I, which works
+//      only on dev-tree layouts where the headers sit beside the .c)
+_resolve_aether_include(aether_dir: string) {
+    env_inc = os.getenv("AETHER_INCLUDE")
+    if string.length(env_inc) > 0 {
+        if dir.exists(env_inc) == 1 {
+            return env_inc
+        }
+    }
+    cand = string.concat(aether_dir, "/../include/aether")
+    if dir.exists(cand) == 1 {
+        return cand
+    }
+    return ""
+}
+
+_resolve_aether_runtime(aether_dir: string) {
+    env_rt = os.getenv("AETHER_RUNTIME")
+    if string.length(env_rt) > 0 {
+        if dir.exists(env_rt) == 1 {
+            return env_rt
+        }
+    }
+    cand1 = string.concat(aether_dir, "/../runtime")
+    if dir.exists(cand1) == 1 {
+        return cand1
+    }
+    cand2 = string.concat(aether_dir, "/../share/aether/runtime")
+    if dir.exists(cand2) == 1 {
+        return cand2
+    }
+    return ""
 }
 
 // --- Inline helpers (deliberate duplication; we don't yet have a shared lib) ---
@@ -167,7 +241,7 @@ main() {
     }
 
     aetherc        = string.concat(aether_dir, "/aetherc")
-    aether_lib_a   = string.concat(aether_dir, "/libaether.a")
+    libaether_dir  = _resolve_libaether_dir(aether_dir)
     transform_ae   = string.concat(aebhome, "/tools/transform-ae")
     gen_orchestrator = string.concat(aebhome, "/tools/gen-orchestrator")
 
@@ -238,7 +312,6 @@ main() {
         ac_cmd = string.concat(ac_cmd, ae_tmp)
         ac_cmd = string.concat(ac_cmd, " ")
         ac_cmd = string.concat(ac_cmd, c_out)
-        ac_cmd = string.concat(ac_cmd, " 2>/dev/null")
         os.system(ac_cmd)
 
         _lc = list.add(c_files, c_out)
@@ -282,17 +355,41 @@ main() {
         cc = string.concat(cc, _cf)
         k = k + 1
     }
-    if file.exists(aether_lib_a) == 1 {
+    // Include path: generated C files use bare #include names but
+    // real installs nest headers under include/aether/{runtime,std}/...
+    // Add -I for every dir under the include root.
+    inc_root = _resolve_aether_include(aether_dir)
+    if string.length(inc_root) > 0 {
+        cc = string.concat(cc, " $(find ")
+        cc = string.concat(cc, inc_root)
+        cc = string.concat(cc, " -type d -print | sed 's|^|-I|')")
+    }
+
+    if string.length(libaether_dir) > 0 {
         cc = string.concat(cc, " -L")
-        cc = string.concat(cc, aether_dir)
+        cc = string.concat(cc, libaether_dir)
         cc = string.concat(cc, " -laether")
     } else {
-        // Fall back to compiling runtime from source.
+        // Fall back to compiling runtime from source. Path layout
+        // varies by install — see _resolve_aether_runtime.
+        //
+        // NOTE: this fallback is brittle. It only works for the
+        // historic flat-runtime layout (all .c at runtime/ root, no
+        // platform-variant selection). FHS installs that nest
+        // sources under runtime/{actors,io,...} and ship multiple
+        // platform variants of the same module (e.g. aether_poller_{poll,epoll,kqueue}.c)
+        // need a build manifest from the Aether install — we can't
+        // reliably reverse-engineer which .c files to include. Right
+        // long-term fix is for Aether to ship libaether.a so this
+        // branch is never taken. See for-aether-team*.md.
+        rt = _resolve_aether_runtime(aether_dir)
+        if string.length(rt) == 0 {
+            rt = string.concat(aether_dir, "/../runtime")
+        }
         cc = string.concat(cc, " ")
-        cc = string.concat(cc, aether_dir)
-        cc = string.concat(cc, "/../runtime/*.c -I")
-        cc = string.concat(cc, aether_dir)
-        cc = string.concat(cc, "/../runtime")
+        cc = string.concat(cc, rt)
+        cc = string.concat(cc, "/*.c -I")
+        cc = string.concat(cc, rt)
     }
     cc = string.concat(cc, " -o ")
     cc = string.concat(cc, out_bin)

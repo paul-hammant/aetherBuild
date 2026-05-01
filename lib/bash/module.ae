@@ -1,0 +1,414 @@
+// bash — Bash/shell SDK for aether.build
+//
+// Treats `.sh` files as the universal "exit 0 = PASS" test contract.
+// `bash.test(b)` runs each declared script, prints a per-test
+// PASS/FAIL line, and a summary. Exits non-zero if any test failed.
+//
+// `bash.script(b)` is the non-test variant — runs a shell script as
+// part of the build (codegen, asset prep, etc.) without
+// PASS/FAIL counting.
+//
+// Convention: if no `script(...)` entries are declared in a `bash.test`
+// builder block, every `test_*.sh` file in the module's source dir is
+// auto-discovered (mirrors `aether.program_test`'s convention default).
+import build
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+
+// --- DSL setters ---
+
+// Append a script path to the builder's script list. Used inside both
+// `bash.test(b) { script(...) }` and `bash.script(b) { script(...) }`.
+script(_ctx: ptr, script_path: string) {
+    if map.has(_ctx, "scripts") == 0 {
+        _e1 = map.put(_ctx, "scripts", list.new())
+    }
+    scripts, _ = map.get(_ctx, "scripts")
+    _e2 = list.add(scripts, script_path)
+}
+
+// jobs(N) — run up to N scripts concurrently in `bash.test(b)`.
+// Default (unset or N<=1) keeps the historic sequential loop. N=0
+// means "auto" — half the host's logical CPUs (matches the
+// run_tests.sh convention used by svn-aether). Stored as a string
+// since the builder map is string-valued; parsed back in the
+// builder body.
+jobs(_ctx: ptr, n: int) {
+    s = string.from_int(n)
+    _e = map.put(_ctx, "jobs", s)
+}
+
+// --- Helpers ---
+
+_collect_scripts(source_dir: string) {
+    // Auto-discovery default: every test_*.sh under source_dir.
+    cmd = "ls '${source_dir}'/test_*.sh 2>/dev/null | sort"
+    raw, _err = os.exec(cmd)
+    out = string.trim(raw)
+    found = list.new()
+    if string.length(out) == 0 {
+        return found
+    }
+    // Split on newline; only the basename is stored so error
+    // messages stay short and runs are reproducible across machines.
+    n = string.length(out)
+    start = 0
+    i = 0
+    while i < n {
+        c = string.substring(out, i, i + 1)
+        if string.equals(c, "\n") == 1 {
+            line = string.substring(out, start, i)
+            base_raw, _b = os.exec("basename '${line}'")
+            base = string.trim(base_raw)
+            _e = list.add(found, base)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        line = string.substring(out, start, n)
+        base_raw, _b = os.exec("basename '${line}'")
+        base = string.trim(base_raw)
+        _e = list.add(found, base)
+    }
+    return found
+}
+
+_resolve_script_path(source_dir: string, script_ref: string) {
+    // If absolute, leave alone; otherwise resolve relative to module dir.
+    if string.length(script_ref) > 0 {
+        first = string.substring(script_ref, 0, 1)
+        if string.equals(first, "/") == 1 {
+            return script_ref
+        }
+    }
+    return path.join(source_dir, script_ref)
+}
+
+// --- SDK builders ---
+
+// bash.script(b) — non-test runner. Runs each declared script as
+// part of the build. Exits non-zero on the first failure.
+builder script(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    scripts = list.new()
+    if _builder != null {
+        if map.has(_builder, "scripts") == 1 {
+            scripts, _ = map.get(_builder, "scripts")
+        }
+    }
+
+    n = list.size(scripts)
+    if n == 0 {
+        println("${mod_dir}: no scripts declared")
+        return 1
+    }
+
+    i = 0
+    while i < n {
+        s, _ = list.get(scripts, i)
+        full = _resolve_script_path(source_dir, s)
+        println("${mod_dir}: running ${s}")
+        rc = os.system("bash ${full}")
+        if rc != 0 {
+            // Forward-compat: pre-feat/aeocha-importable Aether returned
+            // POSIX wait-status (exit code in high byte); newer Aether
+            // returns the exit code directly. The shift recovers the old
+            // case; the fallthrough handles the new one. Once the
+            // os.system fix is in every supported Aether, drop the
+            // shift and use rc directly.
+            exit_code = rc / 256
+            if exit_code == 0 { exit_code = rc }
+            println("${mod_dir}: ${s} FAILED (exit ${exit_code})")
+            return rc
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _run_parallel — fan out scripts to `xargs -P N` and parse
+// per-child PASS/FAIL lines from stdout. Returns the number of
+// failed tests; caller computes passed = total - failed.
+//
+// Each child runs:
+//   bash <fullpath> >/dev/null 2>&1
+//   echo "PASS:<basename>" || echo "FAIL:<basename>:<exitcode>"
+//
+// We capture stdout (which is line-buffered enough for our use:
+// individual `echo` writes are atomic on POSIX up to PIPE_BUF) and
+// parse it into PASS / FAIL counts. Output order reflects child
+// completion order, not declaration order — matches what the
+// porter's run_tests.sh does today.
+_run_parallel(mod_dir: string, source_dir: string, scripts: ptr, jobs_str: string) {
+    n = list.size(scripts)
+
+    // jobs="0" → auto = $(nproc)/2, min 1. xargs -P0 means
+    // "as many as possible" which is rarely what users want for
+    // disk-bound tests, so substitute via shell.
+    jobs_arg = jobs_str
+    if string.equals(jobs_str, "0") == 1 {
+        np_raw, _np = os.exec("nproc 2>/dev/null || echo 2")
+        np_str = string.trim(np_raw)
+        np_cmd = "echo $(( ${np_str} / 2 ))"
+        if np_str == "1" { np_cmd = "echo 1" }
+        ja_raw, _ja = os.exec(np_cmd)
+        jobs_arg = string.trim(ja_raw)
+        if string.length(jobs_arg) == 0 { jobs_arg = "1" }
+    }
+
+    // Build newline-separated "basename|fullpath" list. Basename is
+    // the user-declared script ref (preserved in PASS/FAIL output);
+    // fullpath is the resolved absolute path actually executed.
+    items = ""
+    i = 0
+    while i < n {
+        s, _ = list.get(scripts, i)
+        full = _resolve_script_path(source_dir, s)
+        if i > 0 { items = string.concat(items, "\n") }
+        items = string.concat(items, s)
+        items = string.concat(items, "|")
+        items = string.concat(items, full)
+        i = i + 1
+    }
+
+    // Write item list and runner script to temp files via
+    // fs.write_atomic — bypasses any shell heredoc/quoting hazards
+    // when the body contains $1, ${1%%|*}, etc.
+    list_file_raw, _lf = os.exec("mktemp")
+    list_file = string.trim(list_file_raw)
+    runner_raw, _rf = os.exec("mktemp")
+    runner_file = string.trim(runner_raw)
+
+    list_body = string.concat(items, "\n")
+    _ewl = fs.write_atomic(list_file, list_body, string.length(list_body))
+
+    // Runner: receives one "name|fullpath" arg, runs it, emits
+    // tab-separated PASS/FAIL line.
+    //
+    // Built via concat because Aether's string interpolation grabs
+    // `${...}` patterns at parse time — embedding a literal
+    // `${1%%|*}` directly in a string doesn't make it to the file.
+    // Splitting the `$` from the `{` keeps the parser away.
+    dol = "$"
+    pos1_name = string.concat(dol, "{1%%|*}")
+    pos1_full = string.concat(dol, "{1#*|}")
+    pos_full  = string.concat(dol, "full")
+    pos_q     = string.concat(dol, "?")
+    pos_name  = string.concat(dol, "name")
+    pos_rc    = string.concat(dol, "rc")
+    rb = "#!/bin/bash\n"
+    rb = string.concat(rb, "name=\"")
+    rb = string.concat(rb, pos1_name)
+    rb = string.concat(rb, "\"\nfull=\"")
+    rb = string.concat(rb, pos1_full)
+    rb = string.concat(rb, "\"\nbash \"")
+    rb = string.concat(rb, pos_full)
+    rb = string.concat(rb, "\" >/dev/null 2>&1\nrc=")
+    rb = string.concat(rb, pos_q)
+    rb = string.concat(rb, "\nif [ ")
+    rb = string.concat(rb, pos_rc)
+    rb = string.concat(rb, " -eq 0 ]; then\n  printf 'PASS\\t%s\\n' \"")
+    rb = string.concat(rb, pos_name)
+    rb = string.concat(rb, "\"\nelse\n  printf 'FAIL\\t%s\\t%d\\n' \"")
+    rb = string.concat(rb, pos_name)
+    rb = string.concat(rb, "\" \"")
+    rb = string.concat(rb, pos_rc)
+    rb = string.concat(rb, "\"\nfi\n")
+    runner_body = rb
+    _ewr = fs.write_atomic(runner_file, runner_body, string.length(runner_body))
+    os.system(string.concat("chmod +x ", runner_file))
+
+    pipe = "xargs -a "
+    pipe = string.concat(pipe, list_file)
+    pipe = string.concat(pipe, " -P ")
+    pipe = string.concat(pipe, jobs_arg)
+    pipe = string.concat(pipe, " -I{} ")
+    pipe = string.concat(pipe, runner_file)
+    pipe = string.concat(pipe, " {}")
+
+    out, _err = os.exec(pipe)
+    os.system(string.concat("rm -f ", list_file))
+    os.system(string.concat("rm -f ", runner_file))
+
+    // Parse output line by line, render in completion order, count.
+    failed = _parse_xargs_output(out)
+    return failed
+}
+
+// Each line is either "PASS\t<name>" or "FAIL\t<name>\t<rc>".
+// Renders the user-facing PASS:/FAIL: lines and returns the FAIL count.
+_parse_xargs_output(out: string) {
+    failed = 0
+    out_n = string.length(out)
+    start = 0
+    j = 0
+    while j < out_n {
+        c = string.substring(out, j, j + 1)
+        if string.equals(c, "\n") == 1 {
+            if _render_line(out, start, j) == 1 { failed = failed + 1 }
+            start = j + 1
+        }
+        j = j + 1
+    }
+    if start < out_n {
+        if _render_line(out, start, out_n) == 1 { failed = failed + 1 }
+    }
+    return failed
+}
+
+// Render one PASS/FAIL line. Returns 1 if it was a FAIL, 0 otherwise.
+_render_line(buf: string, lo: int, hi: int) {
+    if hi <= lo { return 0 }
+    line = string.substring(buf, lo, hi)
+    if string.length(line) == 0 { return 0 }
+    tab1 = string.index_of(line, "\t")
+    if tab1 < 0 { return 0 }
+    tag = string.substring(line, 0, tab1)
+    rest = string.substring(line, tab1 + 1, string.length(line))
+    if string.equals(tag, "PASS") == 1 {
+        println("  PASS: ${rest}")
+        return 0
+    }
+    if string.equals(tag, "FAIL") == 1 {
+        tab2 = string.index_of(rest, "\t")
+        if tab2 < 0 {
+            println("  FAIL: ${rest}")
+        } else {
+            name = string.substring(rest, 0, tab2)
+            rc_s = string.substring(rest, tab2 + 1, string.length(rest))
+            println("  FAIL: ${name} (exit ${rc_s})")
+        }
+        return 1
+    }
+    return 0
+}
+
+// bash.test(b) — test runner. Each declared script is treated as a
+// single test. Exit 0 = PASS, non-zero = FAIL. Prints a one-line
+// summary and exits non-zero if any test failed.
+//
+// If no scripts are declared, auto-discovers `test_*.sh` in the
+// module source dir.
+builder test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    scripts = list.new()
+    if _builder != null {
+        if map.has(_builder, "scripts") == 1 {
+            scripts, _ = map.get(_builder, "scripts")
+        }
+    }
+
+    if list.size(scripts) == 0 {
+        scripts = _collect_scripts(source_dir)
+    }
+
+    n = list.size(scripts)
+    if n == 0 {
+        println("${mod_dir}: no bash tests found")
+        return 0
+    }
+
+    // jobs(N) routing. "" / "1" stays sequential; "0" auto-sizes to
+    // half the host's logical CPUs (run_tests.sh convention); any
+    // other value is passed straight to xargs -P.
+    jobs_str = ""
+    if _builder != null {
+        if map.has(_builder, "jobs") == 1 {
+            jobs_str, _ = map.get(_builder, "jobs")
+        }
+    }
+    parallel = 1
+    if string.length(jobs_str) == 0 { parallel = 0 }
+    if string.equals(jobs_str, "1") == 1 { parallel = 0 }
+
+    println("${mod_dir}: running ${n} bash tests")
+    passed = 0
+    failed = 0
+
+    if parallel == 1 {
+        failed = _run_parallel(mod_dir, source_dir, scripts, jobs_str)
+        passed = n - failed
+    } else {
+        i = 0
+        while i < n {
+            s, _ = list.get(scripts, i)
+            full = _resolve_script_path(source_dir, s)
+            rc = os.system("bash ${full}")
+            if rc == 0 {
+                println("  PASS: ${s}")
+                passed = passed + 1
+            } else {
+                // Forward-compat exit-code recovery — see bash.script for
+                // the full note. Drop once the os.system fix is universal.
+                exit_code = rc / 256
+                if exit_code == 0 { exit_code = rc }
+                println("  FAIL: ${s} (exit ${exit_code})")
+                failed = failed + 1
+            }
+            i = i + 1
+        }
+    }
+
+    if failed > 0 {
+        println("${mod_dir}: tests FAILED (${passed} passed, ${failed} failed)")
+        return 1
+    }
+    println("${mod_dir}: tests PASSED (${passed}/${n})")
+    return 0
+}
+
+// bash.test_discover(b, dir) — convenience: explicitly add every
+// `test_*.sh` in `dir` (relative to module source) to the script
+// list. Useful when callers want auto-discovery from a sub-directory
+// rather than the module root, or want to combine discovery with
+// explicit `script(...)` entries.
+test_discover(_ctx: ptr, sub_dir: string) {
+    if map.has(_ctx, "scripts") == 0 {
+        _e1 = map.put(_ctx, "scripts", list.new())
+    }
+    scripts, _ = map.get(_ctx, "scripts")
+
+    source_dir = build._get(_ctx, "source_dir")
+    full_dir = path.join(source_dir, sub_dir)
+    cmd = "ls '${full_dir}'/test_*.sh 2>/dev/null | sort"
+    raw, _err = os.exec(cmd)
+    out = string.trim(raw)
+    if string.length(out) == 0 {
+        return 0
+    }
+
+    n = string.length(out)
+    start = 0
+    i = 0
+    while i < n {
+        c = string.substring(out, i, i + 1)
+        if string.equals(c, "\n") == 1 {
+            line = string.substring(out, start, i)
+            base_raw, _b = os.exec("basename '${line}'")
+            base = string.trim(base_raw)
+            rel = path.join(sub_dir, base)
+            _e = list.add(scripts, rel)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        line = string.substring(out, start, n)
+        base_raw, _b = os.exec("basename '${line}'")
+        base = string.trim(base_raw)
+        rel = path.join(sub_dir, base)
+        _e = list.add(scripts, rel)
+    }
+    return 0
+}

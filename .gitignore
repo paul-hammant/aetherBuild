@@ -1,6 +1,10 @@
 tools/aeb-resolve.jar
 tools/resolver/target
 
+# aetherc intermediate C output left behind by failed/aborted builds
+/*.c
+tools/*.c
+
 # Built tool binaries (rebuilt lazily by aeb on first run)
 tools/aeb-init
 tools/aeb-link
