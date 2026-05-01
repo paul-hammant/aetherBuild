@@ -320,6 +320,8 @@ python.package(b) { … }     // generate pyproject.toml and build wheel
 
 ```aether
 import bash
+import bash (script, jobs)  // bring setters into bare scope (see note below)
+
 bash.test(b) {              // exit 0 = PASS, non-zero = FAIL
     script("test_a.sh")
     script("test_b.sh")
@@ -351,6 +353,15 @@ aether.program(b) {                   // declaring extra_sources or link_flags
 }
 aether.program_test(b) { ... }        // same as program, plus runs the binary
 ```
+
+> **Note on the two `import` lines.** Aether resolves identifiers
+> inside a `receiver.method(args) { block }` body as plain top-level
+> calls, not against the receiver's namespace. So `bash.test(b) {
+> script("…") }` won't find `script` unless it's also in scope at the
+> top level — hence the second `import bash (script, jobs)` line.
+> The alternative is to fully qualify every setter
+> (`bash.test(b) { bash.script("…") }`), which works but reads
+> noisily.
 
 ## Maven / BOM support
 
