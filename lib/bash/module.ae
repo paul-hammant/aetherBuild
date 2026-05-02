@@ -44,7 +44,109 @@ jobs(_ctx: ptr, n: int) {
     _e = map.put(_ctx, "jobs", s)
 }
 
+// pre_command(cmd) — append a shell command to run before each
+// script(...) in `bash.test(b)`. Repeated calls accumulate; commands
+// run in declaration order. Each command is `source`'d in the same
+// shell as the script, so env vars / functions / aliases set by
+// `pre_command` are visible inside the script.
+//
+// If a pre_command exits non-zero, the script is marked ERROR
+// (counted as a failure) and skipped — don't run the script body
+// against a half-set-up environment. post_command still runs so
+// cleanup happens regardless.
+//
+// Use case: spawning long-running fixtures (servers, databases),
+// seeding test data, exporting fixture-specific env vars. Anything
+// domain-specific (e.g. svn server orchestration) lives in the
+// caller's own helper script that pre_command sources — aeb stays
+// out of the domain logic.
+pre_command(_ctx: ptr, cmd: string) {
+    if map.has(_ctx, "pre_commands") == 0 {
+        _e1 = map.put(_ctx, "pre_commands", list.new())
+    }
+    pres, _ = map.get(_ctx, "pre_commands")
+    _e2 = list.add(pres, cmd)
+}
+
+// post_command(cmd) — append a shell command to run after each
+// script(...) in `bash.test(b)`. Repeated calls accumulate; commands
+// run in declaration order. Always runs, regardless of script
+// pass/fail or pre_command outcome — cleanup must happen. Non-zero
+// exit from post_command is logged but does not change the test
+// result (cleanup hiccups shouldn't fail tests).
+//
+// Pairs with pre_command: pre spawns, post tears down.
+post_command(_ctx: ptr, cmd: string) {
+    if map.has(_ctx, "post_commands") == 0 {
+        _e1 = map.put(_ctx, "post_commands", list.new())
+    }
+    posts, _ = map.get(_ctx, "post_commands")
+    _e2 = list.add(posts, cmd)
+}
+
 // --- Helpers ---
+
+// Build the bash invocation chain for one script with optional pre
+// and post commands. Returns a single shell command suitable for
+// `os.system`.
+//
+// Shape (pre/post present):
+//   bash -c '<pre1>; <pre2>; ...; bash <script>; rc=$?; <post1>; <post2>; ...; exit $rc'
+//
+// Shape (no pre/post):
+//   bash <script>
+//
+// Semantics:
+//   - pre and post commands are joined with `;` (not `&&`), so a
+//     failing pre does NOT abort the script and a failing post
+//     does NOT change the test result. Cleanup always runs.
+//   - The script's exit code is captured into `rc=$?` immediately
+//     and re-exited at the end, so post commands can't accidentally
+//     mask a real test failure.
+//
+// Quoting note: pre_cmds and post_cmds are inserted verbatim into
+// the bash -c '...' body. Single-quotes inside a command string
+// will close the outer quote prematurely. For commands that need
+// apostrophes, source a separate .sh file (`pre_command("source
+// setup.sh")`). Documented limitation; not a correctness bug.
+//
+// pre_cmds and post_cmds are lists of strings; either may be empty
+// or null. Pure: just string assembly. Tested in
+// tests/test_bash_chain_cmd.ae.
+bash_chain_cmd(pre_cmds: ptr, script_path: string, post_cmds: ptr) {
+    pre_n = 0
+    if pre_cmds != null { pre_n = list.size(pre_cmds) }
+    post_n = 0
+    if post_cmds != null { post_n = list.size(post_cmds) }
+
+    if pre_n == 0 {
+        if post_n == 0 {
+            return "bash ${script_path}"
+        }
+    }
+
+    dol_q  = string.concat("$", "?")
+    dol_rc = string.concat("$", "rc")
+
+    body = ""
+    i = 0
+    while i < pre_n {
+        c, _ = list.get(pre_cmds, i)
+        body = string.concat(body, c)
+        body = string.concat(body, "; ")
+        i = i + 1
+    }
+    body = string.concat(body, "bash ${script_path}; rc=${dol_q}")
+    j = 0
+    while j < post_n {
+        pc, _ = list.get(post_cmds, j)
+        body = string.concat(body, "; ")
+        body = string.concat(body, pc)
+        j = j + 1
+    }
+    body = string.concat(body, "; exit ${dol_rc}")
+    return "bash -c '${body}'"
+}
 
 // Build the xargs pipeline for parallel test dispatch. Pure: just
 // string assembly. Tested in tests/test_bash_xargs_cmd.ae.
@@ -330,6 +432,35 @@ builder test(ctx: ptr) {
     if string.length(jobs_str) == 0 { parallel = 0 }
     if string.equals(jobs_str, "1") == 1 { parallel = 0 }
 
+    // pre_command / post_command lookup. May be null (none declared).
+    pre_cmds = null
+    post_cmds = null
+    if _builder != null {
+        if map.has(_builder, "pre_commands") == 1 {
+            pre_cmds, _ = map.get(_builder, "pre_commands")
+        }
+        if map.has(_builder, "post_commands") == 1 {
+            post_cmds, _ = map.get(_builder, "post_commands")
+        }
+    }
+    has_hooks = 0
+    if pre_cmds != null {
+        if list.size(pre_cmds) > 0 { has_hooks = 1 }
+    }
+    if post_cmds != null {
+        if list.size(post_cmds) > 0 { has_hooks = 1 }
+    }
+
+    // pre/post hooks not yet supported in parallel mode — the
+    // parallel runner's per-child runner script doesn't thread
+    // hooks through. Force sequential when hooks are declared.
+    if has_hooks == 1 {
+        if parallel == 1 {
+            println("${mod_dir}: pre_command/post_command forces sequential mode (jobs=${jobs_str} ignored)")
+            parallel = 0
+        }
+    }
+
     println("${mod_dir}: running ${n} bash tests")
     passed = 0
     failed = 0
@@ -342,7 +473,8 @@ builder test(ctx: ptr) {
         while i < n {
             s, _ = list.get(scripts, i)
             full = _resolve_script_path(source_dir, s)
-            rc = os.system("bash ${full}")
+            cmd = bash_chain_cmd(pre_cmds, full, post_cmds)
+            rc = os.system(cmd)
             if rc == 0 {
                 println("  PASS: ${s}")
                 passed = passed + 1

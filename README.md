@@ -323,7 +323,7 @@ python.package(b) { … }     // generate pyproject.toml and build wheel
 
 ```aether
 import bash
-import bash (script, jobs)  // bring setters into bare scope (see note below)
+import bash (script, jobs, pre_command, post_command)  // see note below
 
 bash.test(b) {              // exit 0 = PASS, non-zero = FAIL
     script("test_a.sh")
@@ -334,6 +334,13 @@ bash.test(b) {              // run up to 4 scripts concurrently
     jobs(4)
 }
 bash.test(b) { jobs(0) }    // 0 = auto = nproc/2
+
+bash.test(b) {              // pre/post commands run around every script.
+    pre_command("source setup.sh")    // pres always run before each script
+    post_command("source teardown.sh") // posts always run after, pass or fail
+    script("test_acl.sh")
+}                           // (forces sequential mode if jobs(N>1) also set)
+
 bash.script(b) {            // non-test runner: codegen, asset prep, etc.
     script("gen.sh")
 }

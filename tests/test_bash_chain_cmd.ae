@@ -1,0 +1,111 @@
+// Tests for bash_chain_cmd() in lib/bash/module.ae — assembles a
+// `bash -c '...'` invocation that runs zero-or-more pre commands,
+// the script, then zero-or-more post commands, preserving the
+// script's exit code.
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+import bash (bash_chain_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: '${expected}'")
+        println("  actual:   '${actual}'")
+    }
+}
+
+_lst() {
+    return list.new()
+}
+
+_lst1(a: string) {
+    l = list.new()
+    list.add(l, a)
+    return l
+}
+
+_lst2(a: string, b: string) {
+    l = list.new()
+    list.add(l, a)
+    list.add(l, b)
+    return l
+}
+
+_lst3(a: string, b: string, c: string) {
+    l = list.new()
+    list.add(l, a)
+    list.add(l, b)
+    list.add(l, c)
+    return l
+}
+
+main() {
+    // --- fast path: no hooks → plain `bash <script>` ---
+    _assert_eq("no hooks (both null)",
+        bash_chain_cmd(null, "/tmp/x.sh", null),
+        "bash /tmp/x.sh")
+    _assert_eq("no hooks (empty lists)",
+        bash_chain_cmd(_lst(), "/tmp/x.sh", _lst()),
+        "bash /tmp/x.sh")
+    _assert_eq("no hooks: paths with spaces (caller's problem)",
+        bash_chain_cmd(null, "/tmp/foo bar.sh", null),
+        "bash /tmp/foo bar.sh")
+
+    // --- pre only ---
+    _assert_eq("one pre",
+        bash_chain_cmd(_lst1("source setup.sh"), "/tmp/test.sh", null),
+        "bash -c 'source setup.sh; bash /tmp/test.sh; rc=$?; exit $rc'")
+    _assert_eq("two pres in order",
+        bash_chain_cmd(_lst2("export X=1", "echo starting"), "/tmp/t.sh", null),
+        "bash -c 'export X=1; echo starting; bash /tmp/t.sh; rc=$?; exit $rc'")
+
+    // --- post only ---
+    _assert_eq("one post",
+        bash_chain_cmd(null, "/tmp/test.sh", _lst1("rm -f /tmp/lockfile")),
+        "bash -c 'bash /tmp/test.sh; rc=$?; rm -f /tmp/lockfile; exit $rc'")
+    _assert_eq("two posts in order",
+        bash_chain_cmd(null, "/tmp/t.sh",
+                       _lst2("kill $SRV_PID", "rm -rf /tmp/work")),
+        "bash -c 'bash /tmp/t.sh; rc=$?; kill $SRV_PID; rm -rf /tmp/work; exit $rc'")
+
+    // --- pre + post (the canonical fixture-shaped case) ---
+    _assert_eq("pre+post",
+        bash_chain_cmd(_lst1("source setup.sh"),
+                       "/tmp/test_acl.sh",
+                       _lst1("source teardown.sh")),
+        "bash -c 'source setup.sh; bash /tmp/test_acl.sh; rc=$?; source teardown.sh; exit $rc'")
+
+    // --- multiple of each ---
+    _assert_eq("3 pres, 2 posts",
+        bash_chain_cmd(_lst3("a", "b", "c"), "/tmp/t.sh", _lst2("d", "e")),
+        "bash -c 'a; b; c; bash /tmp/t.sh; rc=$?; d; e; exit $rc'")
+
+    // --- empty pre list with non-empty post (defensive) ---
+    _assert_eq("empty pre list + non-empty post",
+        bash_chain_cmd(_lst(), "/tmp/t.sh", _lst1("cleanup")),
+        "bash -c 'bash /tmp/t.sh; rc=$?; cleanup; exit $rc'")
+
+    // --- realistic fixture-style invocation ---
+    pres = _lst2(
+        "rm -rf /tmp/svnae_repo",
+        "/repo/target/.../svnae-seed /tmp/svnae_repo")
+    posts = _lst2(
+        "kill $SRV 2>/dev/null || true",
+        "rm -rf /tmp/svnae_repo")
+    _assert_eq("realistic svn-shaped fixture",
+        bash_chain_cmd(pres, "/repo/ae/svn/test_acl.sh", posts),
+        "bash -c 'rm -rf /tmp/svnae_repo; /repo/target/.../svnae-seed /tmp/svnae_repo; bash /repo/ae/svn/test_acl.sh; rc=$?; kill $SRV 2>/dev/null || true; rm -rf /tmp/svnae_repo; exit $rc'")
+
+    println("bash_chain_cmd tests done")
+}
