@@ -296,6 +296,42 @@ for testability. Every command that gets `os.system`'d should go
 through one. Inline assembly in builder bodies isn't testable in
 isolation.
 
+## Out-of-repo SDKs (consumer-local libs)
+
+Not every SDK belongs in `lib/<name>/` here. A consumer repo that
+wants domain-specific build/test grammar can ship its own SDK
+in-tree at `.aeb/lib/<name>/module.ae`, tracked in that repo:
+
+```
+.gitignore:
+  /.aeb/lib/*
+  !/.aeb/lib/<name>/
+```
+
+`aeb --init` writes the shipped-SDK symlinks but explicitly skips
+non-symlink paths it finds at `.aeb/lib/<x>/`, so a tracked
+consumer SDK coexists fine.
+
+Typical shape: the consumer SDK's setters wrap aeb's generic
+primitives (especially `pre_command(...)` / `post_command(...)`
+from `lib/bash`) with domain-specific lifecycle, then call into
+the consumer's own bash helpers. The bash glue lives in the
+consumer repo (e.g. `tests/lib.sh`), invoked via
+`pre_command("source tests/lib.sh && my_fixture_helper ...")`.
+
+Example in the wild: **svn-aether** (~/scm/subversion/subversion)
+ships `.aeb/lib/svnae/module.ae` with setters like
+`svn_server(NAME, PORT)` and `empty_repo_with_algos(NAME, ALGOS)`
+that wrap its Subversion-server fixture lifecycle. The .tests.ae
+files there read as canonical aeb DSL; the bash plumbing
+(server spawn, repo seed, kill/wait) lives in `tests/lib.sh`
+under the surface.
+
+This is the pressure-relief valve for the "don't accept
+domain-specific into core" rule. If a downstream's domain isn't
+generic, the SDK lives in its tree, not ours. aeb's core stays
+small; consumer ergonomics still ratchet up.
+
 ## Design principles when extending aeb
 
 A handful of recurring decisions shape what gets accepted into the
@@ -388,3 +424,9 @@ parse them. When in doubt, prefer adding a setter that the user
 calls inside the `.ae` file over adding a parser to aeb. This is
 what keeps the build-graph extraction text-only and the
 configuration typeable / IDE-friendly / introspectable from `grep`.
+
+Setters can come from aeb's `lib/` (the generic SDKs we ship) or
+from a consumer's own `.aeb/lib/<name>/module.ae` (domain-specific
+SDKs that wrap our primitives). Both feed the same `.ae`-as-truth
+contract; the boundary between them is generic-vs-domain, not
+core-vs-extension.
