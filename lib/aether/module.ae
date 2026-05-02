@@ -267,6 +267,19 @@ aether_link_cmd(opts: ptr) {
     return "gcc -O2 -pipe -w${inc_flags} ${c_path}${extras_str} -L${lib_dir} -laether ${extra_link} ${rpath_link}${user_flags} -o ${bin_path} -pthread -lm ${dup_flag}"
 }
 
+// Decide whether a regen entry needs aetherc work, given the .ae and
+// .c mtimes (0 = file does not exist; otherwise unix timestamp).
+// Returns one of:
+//   "missing"  — .c file does not exist; must regenerate
+//   "stale"    — .c older than .ae; must regenerate
+//   "skip"     — .c is fresh; no work
+// Pure: just integer comparisons. Tested in tests/test_aether_helpers.ae.
+_regen_action(ae_mtime: int, c_mtime: int) {
+    if c_mtime == 0 { return "missing" }
+    if c_mtime < ae_mtime { return "stale" }
+    return "skip"
+}
+
 // Replace .ae extension with _generated.c. "foo/bar.ae" → "foo/bar_generated.c".
 // Returns "" if path doesn't end in .ae.
 _paired_generated_c(ae_path: string) {
@@ -361,16 +374,15 @@ _run_regen_pass(builder_map: ptr, source_dir: string, aetherc: string, mod_dir: 
             return 1
         }
         c_mtime = file.mtime(c_abs)
-        needs_regen = 0
-        if c_mtime == 0 {
+        action = _regen_action(ae_mtime, c_mtime)
+        if string.equals(action, "missing") == 1 {
             println("${mod_dir}: regen ${rel} → ${c_rel} (missing)")
-            needs_regen = 1
-        } else {
-            if c_mtime < ae_mtime {
-                println("${mod_dir}: regen ${rel} → ${c_rel} (stale)")
-                needs_regen = 1
-            }
         }
+        if string.equals(action, "stale") == 1 {
+            println("${mod_dir}: regen ${rel} → ${c_rel} (stale)")
+        }
+        needs_regen = 0
+        if string.equals(action, "skip") == 0 { needs_regen = 1 }
 
         if needs_regen == 1 {
             // Capability resolution: explicit regen_with(...) caps win.

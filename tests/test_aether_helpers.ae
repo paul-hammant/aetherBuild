@@ -12,7 +12,7 @@ import std.path
 import std.dir
 
 import build
-import aether (_paired_generated_c, _detect_caps_from_content)
+import aether (_paired_generated_c, _detect_caps_from_content, _regen_action)
 
 _assert_eq(label: string, actual: string, expected: string) {
     if actual == expected {
@@ -84,6 +84,20 @@ main() {
     src = "import std.io\nimport std.http\nimport std.fs\nextern println(s: string)\n"
     _assert_eq("caps: realistic mix",
         _detect_caps_from_content(src), "net,fs")
+
+    // --- _regen_action: mtime-driven dispatch ---
+    _assert_eq("regen: missing (c_mtime=0)",
+        _regen_action(1000, 0), "missing")
+    _assert_eq("regen: stale (c older than ae)",
+        _regen_action(2000, 1500), "stale")
+    _assert_eq("regen: stale by 1 second",
+        _regen_action(2000, 1999), "stale")
+    _assert_eq("regen: fresh (c newer)",
+        _regen_action(1000, 2000), "skip")
+    _assert_eq("regen: equal mtimes → skip (no work needed)",
+        _regen_action(1500, 1500), "skip")
+    _assert_eq("regen: very fresh c_mtime",
+        _regen_action(1, 9999999), "skip")
 
     println("aether helpers tests done")
 }
