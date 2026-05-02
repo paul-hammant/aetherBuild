@@ -31,6 +31,10 @@ output(_ctx: ptr, bin_name: string) {
 // from aether.toml's [[bin]].extra_sources) and into the explicit
 // aetherc + gcc path. Mutually exclusive with aether.toml's
 // [[bin]] entry for the same target — declare in one place.
+//
+// Relative paths are resolved against source_dir at gcc time
+// (consistent with regen(...)). Absolute paths pass through
+// verbatim.
 extra_sources(_ctx: ptr, c_path: string) {
     if map.has(_ctx, "extra_sources") == 0 {
         _e1 = map.put(_ctx, "extra_sources", list.new())
@@ -385,7 +389,13 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
         rpath_link = string.trim(rp_raw)
     }
 
-    // Concatenate user-declared extra_sources (if any).
+    // Concatenate user-declared extra_sources (if any). Relative
+    // entries are resolved against source_dir for parity with
+    // regen(...) — both setters now treat their string args as
+    // module-relative. Absolute paths (anything starting with /)
+    // are passed through verbatim, which is also how
+    // _run_regen_pass already pushes its absolute generated.c
+    // entries into this same list.
     extras_str = ""
     if builder_map != null {
         if map.has(builder_map, "extra_sources") == 1 {
@@ -394,8 +404,15 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
             ie = 0
             while ie < ne {
                 ef, _ = list.get(extras, ie)
+                resolved = ef
+                if string.length(ef) > 0 {
+                    first = string.substring(ef, 0, 1)
+                    if string.equals(first, "/") == 0 {
+                        resolved = path.join(source_dir, ef)
+                    }
+                }
                 extras_str = string.concat(extras_str, " ")
-                extras_str = string.concat(extras_str, ef)
+                extras_str = string.concat(extras_str, resolved)
                 ie = ie + 1
             }
         }
