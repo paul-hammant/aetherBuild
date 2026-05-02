@@ -338,18 +338,26 @@ bash.script(b) {            // non-test runner: codegen, asset prep, etc.
 
 ```aether
 import aether
-import aether (source, output, extra_sources, link_flags)
+import aether (source, output, extra_sources, link_flags, regen)
 
 aether.program(b) {                   // shells out to `ae build` by default —
-    source("main.ae")                 //   honours aether.toml [[bin]] for free
-    output("svn")                     //   (extra_sources, link_flags, regen).
+    source("main.ae")                 //   honours aether.toml [[bin]].
+    output("svn")
 }
-aether.program(b) {                   // declaring extra_sources or link_flags
-    source("main.ae")                 //   opts into the manual aetherc + gcc
-    output("svn")                     //   path (.build.ae becomes the single
-    extra_sources("a_generated.c")    //   source of truth, aether.toml ignored
-    extra_sources("b_generated.c")    //   for this target).
-    link_flags("-pthread")
+aether.program(b) {                   // declaring any of extra_sources /
+    source("main.ae")                 //   link_flags / regen opts into the
+    output("svn")                     //   manual aetherc + gcc path (.build.ae
+    regen("ae/client/accessors.ae")   //   becomes the single source of truth,
+    regen("ae/client/handlers.ae")    //   aether.toml ignored for this target).
+    link_flags("-pthread")            //
+}                                     // regen(X.ae) runs `aetherc --emit=lib`
+                                      // when the paired X_generated.c is missing
+                                      // or older than X.ae, then links it in.
+aether.program(b) {                   // hand-written extras still work via
+    source("main.ae")                 //   extra_sources(...) — combine freely
+    output("svn")                     //   with regen(...) entries.
+    extra_sources("legacy_helper.c")
+    regen("ae/client/accessors.ae")
 }
 aether.program_test(b) { ... }        // same as program, plus runs the binary
 ```

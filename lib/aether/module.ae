@@ -51,6 +51,30 @@ link_flags(_ctx: ptr, flag: string) {
     _e2 = list.add(flags, flag)
 }
 
+// regen(ae_path) — declare an Aether source whose paired
+// `_generated.c` should be (re)built via `aetherc --emit=lib` before
+// linking. Path is module-relative (resolved against source_dir).
+//
+// Each regen(...) implicitly contributes its paired _generated.c to
+// extra_sources, so callers don't need to declare both. The pairing
+// rule is `X.ae` → `X_generated.c` in the same directory.
+//
+// mtime-driven: skipped if the .c exists and is newer than the .ae.
+// Presence of any regen(...) opts the builder into the manual
+// aetherc + gcc path (same as extra_sources / link_flags).
+//
+// This is the closure-DSL replacement for `aether.toml`'s
+// [[bin]].extra_sources + an external regen.sh: declare your
+// generated sources here, in the same .build.ae that already declares
+// `source` and `output`, and aeb runs codegen + link in one pass.
+regen(_ctx: ptr, ae_path: string) {
+    if map.has(_ctx, "regen") == 0 {
+        _e1 = map.put(_ctx, "regen", list.new())
+    }
+    regens, _ = map.get(_ctx, "regen")
+    _e2 = list.add(regens, ae_path)
+}
+
 // --- Helpers ---
 
 _resolve_aether_dir() {
@@ -139,14 +163,20 @@ _has_manual_overrides(builder_map: ptr) {
     if builder_map == null { return 0 }
     if map.has(builder_map, "extra_sources") == 1 { return 1 }
     if map.has(builder_map, "link_flags") == 1 { return 1 }
+    if map.has(builder_map, "regen") == 1 { return 1 }
     return 0
 }
 
 // Default build path: shell out to `ae build`. Lets the Aether driver
-// apply its own logic — aether.toml [[bin]] lookup (including
-// extra_sources and link_flags), regen.sh, codegen ordering, and its
-// own up-to-date cache. aeb's job here is just orchestration: pick
-// the source and target paths, exec, propagate failures.
+// apply its own logic — aether.toml [[bin]] lookup (extra_sources +
+// link_flags), final link, and its own up-to-date cache.
+//
+// What `ae build` does NOT do: regen .ae→_generated.c. It treats every
+// extra_sources entry as a path that must already exist on disk. To
+// drive codegen-then-link from a single .build.ae, declare the
+// generated sources via `regen("foo.ae")` in the builder block —
+// that opts into the manual path below, which runs aetherc per .ae
+// and then links.
 //
 // `ae build` walks up from src_path to find aether.toml, so aeb
 // doesn't need to discover it.
@@ -166,15 +196,96 @@ _shell_out_ae_build(ctx: ptr, src_path: string, bin_path: string) {
     return 0
 }
 
-// Manual build path: aetherc + gcc, with optional extra_sources and
-// link_flags from the builder block. Used when the .build.ae
-// declares either of those — bypasses aether.toml entirely so the
-// .build.ae is the single source of truth.
+// Replace .ae extension with _generated.c. "foo/bar.ae" → "foo/bar_generated.c".
+// Returns "" if path doesn't end in .ae.
+_paired_generated_c(ae_path: string) {
+    n = string.length(ae_path)
+    if n < 3 { return "" }
+    suffix = string.substring(ae_path, n - 3, n)
+    if string.equals(suffix, ".ae") == 0 { return "" }
+    stem = string.substring(ae_path, 0, n - 3)
+    return string.concat(stem, "_generated.c")
+}
+
+// Walk the regen list, run `aetherc --emit=lib X.ae X_generated.c`
+// for each entry whose paired .c is missing or older than the .ae,
+// and append the generated .c paths to extra_sources so the gcc step
+// links them in. Paths in regen(...) are resolved against source_dir.
+//
+// Hard-fails the build on the first aetherc error — surfaces aetherc
+// stderr to the user (no 2>/dev/null suppression) so codegen errors
+// are visible.
+_run_regen_pass(builder_map: ptr, source_dir: string, aetherc: string, mod_dir: string) {
+    if builder_map == null { return 0 }
+    if map.has(builder_map, "regen") == 0 { return 0 }
+    regens, _ = map.get(builder_map, "regen")
+    n = list.size(regens)
+    if n == 0 { return 0 }
+
+    // Ensure extra_sources list exists so we can append generated paths.
+    if map.has(builder_map, "extra_sources") == 0 {
+        _ee = map.put(builder_map, "extra_sources", list.new())
+    }
+    extras, _ = map.get(builder_map, "extra_sources")
+
+    i = 0
+    while i < n {
+        rel, _ = list.get(regens, i)
+        ae_abs = path.join(source_dir, rel)
+        c_rel = _paired_generated_c(rel)
+        if string.length(c_rel) == 0 {
+            println("${mod_dir}: regen entry must end in .ae: ${rel}")
+            return 1
+        }
+        c_abs = path.join(source_dir, c_rel)
+
+        ae_mtime = file.mtime(ae_abs)
+        if ae_mtime == 0 {
+            println("${mod_dir}: regen source not found: ${ae_abs}")
+            return 1
+        }
+        c_mtime = file.mtime(c_abs)
+        needs_regen = 0
+        if c_mtime == 0 {
+            println("${mod_dir}: regen ${rel} → ${c_rel} (missing)")
+            needs_regen = 1
+        } else {
+            if c_mtime < ae_mtime {
+                println("${mod_dir}: regen ${rel} → ${c_rel} (stale)")
+                needs_regen = 1
+            }
+        }
+
+        if needs_regen == 1 {
+            cmd = "${aetherc} --emit=lib ${ae_abs} ${c_abs}"
+            rc = os.system(cmd)
+            if rc != 0 {
+                println("${mod_dir}: aetherc --emit=lib failed for ${rel}")
+                return rc
+            }
+        }
+        _e1 = list.add(extras, c_abs)
+        i = i + 1
+    }
+    return 0
+}
+
+// Manual build path: aetherc + gcc, with optional extra_sources,
+// link_flags, and regen entries from the builder block. Used when the
+// .build.ae declares any of those — bypasses aether.toml entirely so
+// the .build.ae is the single source of truth.
 _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string, c_path: string) {
     mod_dir = build._get(ctx, "module_dir")
+    source_dir = build._get(ctx, "source_dir")
 
     ae_dir = _resolve_aether_dir()
     aetherc = path.join(ae_dir, "aetherc")
+
+    // Phase 0: regen .ae → _generated.c for each declared regen(...) entry.
+    rrc = _run_regen_pass(builder_map, source_dir, aetherc, mod_dir)
+    if rrc != 0 {
+        return rrc
+    }
 
     // Phase 1: aetherc src.ae → src.c
     ac_cmd = "${aetherc} ${src_path} ${c_path}"
