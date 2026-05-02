@@ -86,12 +86,15 @@ main() {
 
 A module's build intent lives in one or more dot-prefixed `.ae` files:
 
-| File                  | Role                                      |
-|-----------------------|-------------------------------------------|
-| `.build.ae`           | compile the module                        |
-| `.tests.ae`           | compile + run tests                       |
-| `.dist.ae`            | package (fat jar, Docker image, wheel…)   |
-| `.{name}.jar.ae`      | vendored JVM jar                          |
+| File                       | Role                                      |
+|----------------------------|-------------------------------------------|
+| `.build.ae`                | compile the module                        |
+| `.build-<tag>.ae`          | additional binary in the same module dir  |
+| `.tests.ae`                | compile + run tests                       |
+| `.tests-<tag>.ae`          | additional test binary in the same dir    |
+| `.dist.ae`                 | package (fat jar, Docker image, wheel…)   |
+| `.dist-<tag>.ae`           | additional packaging variant              |
+| `.{name}.jar.ae`           | vendored JVM jar                          |
 | `.{name}.crate.ae`    | vendored / registry Rust crate            |
 | `.{name}.npm.ae`      | vendored / registry npm package           |
 | `.{name}.nupkg.ae`    | vendored / registry NuGet package         |

@@ -2,9 +2,17 @@
 //
 // Pure-Aether port of the bash `file_to_label` in aeb. Cross-platform.
 //
-//   path/to/.build.ae → "path/to"
-//   path/to/.tests.ae → "test:path/to"
-//   path/to/.dist.ae  → "dist:path/to"
+//   path/to/.build.ae          → "path/to"
+//   path/to/.build-seed.ae     → "path/to:seed"
+//   path/to/.tests.ae          → "test:path/to"
+//   path/to/.tests-extra.ae    → "test:path/to:extra"
+//   path/to/.dist.ae           → "dist:path/to"
+//   path/to/.dist-fat.ae       → "dist:path/to:fat"
+//
+// The tag suffix lets multiple .build*.ae / .tests*.ae / .dist*.ae
+// files coexist in the same directory without colliding on
+// build.begin's visited-set dedup. Canonical names (no tag) keep
+// today's labels unchanged so existing repos see no behaviour change.
 //
 // dirname is computed inline (no shell `dirname` call):
 //   - find last '/'
@@ -25,6 +33,12 @@ infer_type(file: string) {
         return string.concat("test", "")
     }
     if string.ends_with(file, ".dist.ae") == 1 {
+        return string.concat("dist", "")
+    }
+    if string.index_of(file, ".tests-") >= 0 {
+        return string.concat("test", "")
+    }
+    if string.index_of(file, ".dist-") >= 0 {
         return string.concat("dist", "")
     }
     return string.concat("build", "")
@@ -51,16 +65,73 @@ dirname_pure(path: string) {
     return string.substring(path, 0, last)
 }
 
+// Extract the tag suffix from a .build*.ae / .tests*.ae / .dist*.ae filename.
+// Returns "" when the file is the canonical .{type}.ae (no tag), or the
+// tag part otherwise.
+//
+//   .build.ae        → ""
+//   .build-seed.ae   → "seed"
+//   .build-foo-bar.ae → "foo-bar"   (tag may itself contain dashes)
+//   .tests.ae        → ""
+//   .tests-int.ae    → "int"
+//   .dist-fat.ae     → "fat"
+basename_pure(path: string) {
+    n = string.length(path)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(path, i, i + 1)
+        if string.index_of(ch, "/") == 0 {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 { return path }
+    return string.substring(path, last + 1, n)
+}
+
+extract_tag(file: string) {
+    base = basename_pure(file)
+    n = string.length(base)
+    // Strip trailing ".ae"
+    if n < 4 { return string.concat("", "") }
+    if string.ends_with(base, ".ae") == 0 { return string.concat("", "") }
+    stem = string.substring(base, 0, n - 3)
+    // Strip leading "."
+    sn = string.length(stem)
+    if sn == 0 { return string.concat("", "") }
+    first = string.substring(stem, 0, 1)
+    if string.equals(first, ".") == 0 { return string.concat("", "") }
+    body = string.substring(stem, 1, sn)
+    // body is now "build" / "build-seed" / "tests-int" / "dist" / etc.
+    // Look for first '-'; everything after it is the tag.
+    bn = string.length(body)
+    j = 0
+    while j < bn {
+        ch = string.substring(body, j, j + 1)
+        if string.equals(ch, "-") == 1 {
+            return string.substring(body, j + 1, bn)
+        }
+        j = j + 1
+    }
+    return string.concat("", "")
+}
+
 file_to_label(file: string) {
     type = infer_type(file)
     dir = dirname_pure(file)
+    tag = extract_tag(file)
+    suffix = string.concat("", "")
+    if string.length(tag) > 0 {
+        suffix = string.concat(":", tag)
+    }
     if type == "test" {
-        return string.concat("test:", dir)
+        return string.concat(string.concat("test:", dir), suffix)
     }
     if type == "dist" {
-        return string.concat("dist:", dir)
+        return string.concat(string.concat("dist:", dir), suffix)
     }
-    return string.concat(dir, "")
+    return string.concat(dir, suffix)
 }
 
 main() {

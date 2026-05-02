@@ -133,6 +133,12 @@ infer_type(file: string) {
             return string.concat("dist", "")
         }
     }
+    if string.index_of(file, ".tests-") >= 0 {
+        return string.concat("test", "")
+    }
+    if string.index_of(file, ".dist-") >= 0 {
+        return string.concat("dist", "")
+    }
     return string.concat("build", "")
 }
 
@@ -152,12 +158,60 @@ dirname_pure(path: string) {
     return string.substring(path, 0, last)
 }
 
+basename_pure(path: string) {
+    n = string.length(path)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(path, i, i + 1)
+        if ch == "/" {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 { return path }
+    return string.substring(path, last + 1, n)
+}
+
+// Tag suffix for .{build,tests,dist}-<tag>.ae filenames. Returns "" for
+// canonical names. See tools/file-to-label.ae for the full spec.
+extract_tag(file: string) {
+    base = basename_pure(file)
+    n = string.length(base)
+    if n < 4 { return string.concat("", "") }
+    if string.ends_with(base, ".ae") == 0 { return string.concat("", "") }
+    stem = string.substring(base, 0, n - 3)
+    sn = string.length(stem)
+    if sn == 0 { return string.concat("", "") }
+    if string.equals(string.substring(stem, 0, 1), ".") == 0 { return string.concat("", "") }
+    body = string.substring(stem, 1, sn)
+    bn = string.length(body)
+    j = 0
+    while j < bn {
+        ch = string.substring(body, j, j + 1)
+        if ch == "-" {
+            return string.substring(body, j + 1, bn)
+        }
+        j = j + 1
+    }
+    return string.concat("", "")
+}
+
 file_to_label(file: string) {
     type = infer_type(file)
     dir = dirname_pure(file)
-    if type == "test" { return string.concat("test:", dir) }
-    if type == "dist" { return string.concat("dist:", dir) }
-    return string.concat(dir, "")
+    tag = extract_tag(file)
+    suffix = string.concat("", "")
+    if string.length(tag) > 0 {
+        suffix = string.concat(":", tag)
+    }
+    if type == "test" {
+        return string.concat(string.concat("test:", dir), suffix)
+    }
+    if type == "dist" {
+        return string.concat(string.concat("dist:", dir), suffix)
+    }
+    return string.concat(dir, suffix)
 }
 
 // First word of a space-separated string
@@ -258,10 +312,15 @@ main() {
         ae_tmp    = string.concat(string.concat(build_dir, "/"), string.concat(fname, ".ae"))
         c_out     = string.concat(string.concat(build_dir, "/"), string.concat(fname, ".c"))
         dir       = dirname_pure(file_path)
+        tag       = extract_tag(file_path)
+        display   = dir
+        if string.length(tag) > 0 {
+            display = string.concat(string.concat(dir, ":"), tag)
+        }
 
-        if type == "build" { println("  compile: ${dir}") }
-        if type == "test"  { println("  test:    ${dir}") }
-        if type == "dist"  { println("  dist:    ${dir}") }
+        if type == "build" { println("  compile: ${display}") }
+        if type == "test"  { println("  test:    ${display}") }
+        if type == "dist"  { println("  dist:    ${display}") }
 
         // transform-ae <src> <fname> <label> <out> <aeb-lib> <aeb-home>
         tr_cmd = string.concat(transform_ae, " ")

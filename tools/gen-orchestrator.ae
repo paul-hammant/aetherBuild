@@ -25,7 +25,8 @@ encode_name(input: string) {
     return string.trim(out)
 }
 
-// infer_type: filename → "test" | "dist" | "build"
+// infer_type: filename → "test" | "dist" | "build". Recognises both
+// the canonical `.{type}.ae` and the tagged `.{type}-<tag>.ae` shapes.
 infer_type(file: string) {
     if string.contains(file, ".tests.ae") == 1 {
         return "test"
@@ -33,7 +34,53 @@ infer_type(file: string) {
     if string.contains(file, ".dist.ae") == 1 {
         return "dist"
     }
+    if string.contains(file, ".tests-") == 1 {
+        return "test"
+    }
+    if string.contains(file, ".dist-") == 1 {
+        return "dist"
+    }
     return "build"
+}
+
+// basename_pure: strip the directory prefix, keeping the filename only.
+basename_pure(path: string) {
+    n = string.length(path)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(path, i, i + 1)
+        if string.equals(ch, "/") == 1 {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 { return path }
+    return string.substring(path, last + 1, n)
+}
+
+// extract_tag: returns "" for canonical .{type}.ae, or the tag part
+// for .{type}-<tag>.ae. See tools/file-to-label.ae for the full spec.
+extract_tag(file: string) {
+    base = basename_pure(file)
+    n = string.length(base)
+    if n < 4 { return "" }
+    if string.ends_with(base, ".ae") == 0 { return "" }
+    stem = string.substring(base, 0, n - 3)
+    sn = string.length(stem)
+    if sn == 0 { return "" }
+    if string.equals(string.substring(stem, 0, 1), ".") == 0 { return "" }
+    body = string.substring(stem, 1, sn)
+    bn = string.length(body)
+    j = 0
+    while j < bn {
+        ch = string.substring(body, j, j + 1)
+        if string.equals(ch, "-") == 1 {
+            return string.substring(body, j + 1, bn)
+        }
+        j = j + 1
+    }
+    return ""
 }
 
 // file_to_label: file path → module_dir label for build.begin()
@@ -45,13 +92,18 @@ file_to_label(file: string) {
     if eerr == "" {
         dir = string.trim(out)
     }
+    tag = extract_tag(file)
+    suffix = ""
+    if string.length(tag) > 0 {
+        suffix = string.concat(":", tag)
+    }
     if type == "test" {
-        return string.concat("test:", dir)
+        return string.concat(string.concat("test:", dir), suffix)
     }
     if type == "dist" {
-        return string.concat("dist:", dir)
+        return string.concat(string.concat("dist:", dir), suffix)
     }
-    return dir
+    return string.concat(dir, suffix)
 }
 
 main() {

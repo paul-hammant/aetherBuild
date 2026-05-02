@@ -60,6 +60,17 @@ begin(s: ptr, module_dir: string) {
     if dist_prefix == 0 {
         fs_dir = string.substring(module_dir, 5, string.length(module_dir))
     }
+    // Strip the optional ":tag" suffix used to disambiguate multiple
+    // .build*.ae files in the same directory (e.g. .build-seed.ae →
+    // label "ae/svnserver:seed"). The tag exists for visited-set
+    // dedup and human-readable display only — paths on disk
+    // (source_dir, target_dir) never include it. The label itself
+    // (module_dir) keeps the tag so println() output stays
+    // distinguishable.
+    colon = string.index_of(fs_dir, ":")
+    if colon >= 0 {
+        fs_dir = string.substring(fs_dir, 0, colon)
+    }
 
     mod_name = fs_dir
     lang_prefix = ""
