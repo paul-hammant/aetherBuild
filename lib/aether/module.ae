@@ -63,16 +63,44 @@ link_flags(_ctx: ptr, flag: string) {
 // Presence of any regen(...) opts the builder into the manual
 // aetherc + gcc path (same as extra_sources / link_flags).
 //
+// Capabilities: aetherc rejects --emit=lib on a source that imports
+// std.http / std.tcp / std.net / std.fs / std.os without a matching
+// --with=net|fs|os. By default aeb scans the .ae file's `import std.X`
+// lines and infers the capability set. If the file pulls in a cap
+// transitively (through another module the scan doesn't see), use
+// `regen_with(path, "net,fs")` to declare caps explicitly.
+//
 // This is the closure-DSL replacement for `aether.toml`'s
 // [[bin]].extra_sources + an external regen.sh: declare your
 // generated sources here, in the same .build.ae that already declares
 // `source` and `output`, and aeb runs codegen + link in one pass.
 regen(_ctx: ptr, ae_path: string) {
+    _regen_append(_ctx, ae_path, "")
+}
+
+// regen_with(ae_path, caps) — explicit-capability variant.
+// `caps` is a comma-separated list passed verbatim to aetherc as
+// --with=<caps> (e.g. "net", "fs", "net,os"). Use this when the
+// auto-detection in regen(...) misses a capability — typically when
+// the .ae file pulls a cap-bearing module transitively rather than
+// via a direct `import std.<X>` line.
+//
+// Empty `caps` is equivalent to plain regen(...) (auto-detect).
+regen_with(_ctx: ptr, ae_path: string, caps: string) {
+    _regen_append(_ctx, ae_path, caps)
+}
+
+// Internal: append a (path, caps) pair to two parallel lists keyed
+// "regen" and "regen_caps". Same-index entries belong together.
+_regen_append(_ctx: ptr, ae_path: string, caps: string) {
     if map.has(_ctx, "regen") == 0 {
         _e1 = map.put(_ctx, "regen", list.new())
+        _e2 = map.put(_ctx, "regen_caps", list.new())
     }
     regens, _ = map.get(_ctx, "regen")
-    _e2 = list.add(regens, ae_path)
+    regen_caps, _ = map.get(_ctx, "regen_caps")
+    _e3 = list.add(regens, ae_path)
+    _e4 = list.add(regen_caps, caps)
 }
 
 // --- Helpers ---
@@ -207,6 +235,42 @@ _paired_generated_c(ae_path: string) {
     return string.concat(stem, "_generated.c")
 }
 
+// Scan an .ae source for `import std.X` lines and return a comma-
+// separated capability list suitable for `aetherc --with=...`.
+//
+// Mapping (from aetherc's --emit=lib gating, verified against
+// ae 0.111):
+//   import std.http | std.tcp | std.net  → net
+//   import std.fs                        → fs
+//   import std.os                        → os
+//
+// Imports through transitive modules aren't seen — caller falls
+// back to regen_with(path, "net,fs,...") for those. Returns "" when
+// no cap-bearing import is detected.
+_detect_caps(ae_path: string) {
+    content, _err = fs.read(ae_path)
+    if string.length(content) == 0 { return "" }
+    has_net = 0
+    has_fs = 0
+    has_os = 0
+    if string.index_of(content, "import std.http") >= 0 { has_net = 1 }
+    if string.index_of(content, "import std.tcp")  >= 0 { has_net = 1 }
+    if string.index_of(content, "import std.net")  >= 0 { has_net = 1 }
+    if string.index_of(content, "import std.fs")   >= 0 { has_fs  = 1 }
+    if string.index_of(content, "import std.os")   >= 0 { has_os  = 1 }
+    out = ""
+    if has_net == 1 { out = "net" }
+    if has_fs == 1 {
+        if string.length(out) > 0 { out = string.concat(out, ",") }
+        out = string.concat(out, "fs")
+    }
+    if has_os == 1 {
+        if string.length(out) > 0 { out = string.concat(out, ",") }
+        out = string.concat(out, "os")
+    }
+    return out
+}
+
 // Walk the regen list, run `aetherc --emit=lib X.ae X_generated.c`
 // for each entry whose paired .c is missing or older than the .ae,
 // and append the generated .c paths to extra_sources so the gcc step
@@ -219,6 +283,7 @@ _run_regen_pass(builder_map: ptr, source_dir: string, aetherc: string, mod_dir: 
     if builder_map == null { return 0 }
     if map.has(builder_map, "regen") == 0 { return 0 }
     regens, _ = map.get(builder_map, "regen")
+    regen_caps, _ = map.get(builder_map, "regen_caps")
     n = list.size(regens)
     if n == 0 { return 0 }
 
@@ -231,6 +296,7 @@ _run_regen_pass(builder_map: ptr, source_dir: string, aetherc: string, mod_dir: 
     i = 0
     while i < n {
         rel, _ = list.get(regens, i)
+        explicit_caps, _ = list.get(regen_caps, i)
         ae_abs = path.join(source_dir, rel)
         c_rel = _paired_generated_c(rel)
         if string.length(c_rel) == 0 {
@@ -257,7 +323,17 @@ _run_regen_pass(builder_map: ptr, source_dir: string, aetherc: string, mod_dir: 
         }
 
         if needs_regen == 1 {
-            cmd = "${aetherc} --emit=lib ${ae_abs} ${c_abs}"
+            // Capability resolution: explicit regen_with(...) caps win.
+            // Otherwise scan the .ae for `import std.<X>` and infer.
+            caps = explicit_caps
+            if string.length(caps) == 0 {
+                caps = _detect_caps(ae_abs)
+            }
+            with_flag = ""
+            if string.length(caps) > 0 {
+                with_flag = " --with=${caps}"
+            }
+            cmd = "${aetherc} --emit=lib${with_flag} ${ae_abs} ${c_abs}"
             rc = os.system(cmd)
             if rc != 0 {
                 println("${mod_dir}: aetherc --emit=lib failed for ${rel}")

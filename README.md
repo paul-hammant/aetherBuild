@@ -338,7 +338,7 @@ bash.script(b) {            // non-test runner: codegen, asset prep, etc.
 
 ```aether
 import aether
-import aether (source, output, extra_sources, link_flags, regen)
+import aether (source, output, extra_sources, link_flags, regen, regen_with)
 
 aether.program(b) {                   // shells out to `ae build` by default —
     source("main.ae")                 //   honours aether.toml [[bin]].
@@ -349,10 +349,23 @@ aether.program(b) {                   // declaring any of extra_sources /
     output("svn")                     //   manual aetherc + gcc path (.build.ae
     regen("ae/client/accessors.ae")   //   becomes the single source of truth,
     regen("ae/client/handlers.ae")    //   aether.toml ignored for this target).
-    link_flags("-pthread")            //
-}                                     // regen(X.ae) runs `aetherc --emit=lib`
+    link_flags("-pthread")
+}
+                                      // regen(X.ae) runs `aetherc --emit=lib`
                                       // when the paired X_generated.c is missing
                                       // or older than X.ae, then links it in.
+                                      // Capabilities (--with=net|fs|os) are
+                                      // auto-detected from the .ae's
+                                      // `import std.X` lines: std.http /
+                                      // std.tcp / std.net → net, std.fs → fs,
+                                      // std.os → os.
+
+aether.program(b) {                   // regen_with overrides auto-detection —
+    source("main.ae")                 //   use when caps come in transitively
+    output("svn")                     //   and the import scan misses them.
+    regen_with("ae/client/auth.ae", "net,fs")
+}
+
 aether.program(b) {                   // hand-written extras still work via
     source("main.ae")                 //   extra_sources(...) — combine freely
     output("svn")                     //   with regen(...) entries.
