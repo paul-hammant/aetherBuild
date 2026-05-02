@@ -338,18 +338,18 @@ bash.script(b) {            // non-test runner: codegen, asset prep, etc.
 
 ```aether
 import aether
-import aether (source, output, extra_sources, link_flags, regen, regen_with)
+import aether (source, output, extra_source, link_flag, regen, regen_with)
 
 aether.program(b) {                   // shells out to `ae build` by default —
     source("main.ae")                 //   honours aether.toml [[bin]].
     output("svn")
 }
-aether.program(b) {                   // declaring any of extra_sources /
-    source("main.ae")                 //   link_flags / regen opts into the
+aether.program(b) {                   // declaring any of extra_source /
+    source("main.ae")                 //   link_flag / regen opts into the
     output("svn")                     //   manual aetherc + gcc path (.build.ae
     regen("ae/client/accessors.ae")   //   becomes the single source of truth,
     regen("ae/client/handlers.ae")    //   aether.toml ignored for this target).
-    link_flags("-pthread")
+    link_flag("-pthread")
 }
                                       // regen(X.ae) runs `aetherc --emit=lib`
                                       // when the paired X_generated.c is missing
@@ -367,9 +367,9 @@ aether.program(b) {                   // regen_with overrides auto-detection —
 }
 
 aether.program(b) {                   // hand-written extras still work via
-    source("main.ae")                 //   extra_sources(...) — combine freely
+    source("main.ae")                 //   extra_source(...) — combine freely
     output("svn")                     //   with regen(...) entries.
-    extra_sources("legacy_helper.c")
+    extra_source("legacy_helper.c")
     regen("ae/client/accessors.ae")
 }
 aether.program_test(b) { ... }        // same as program, plus runs the binary

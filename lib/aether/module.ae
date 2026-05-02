@@ -25,8 +25,8 @@ output(_ctx: ptr, bin_name: string) {
     _e = map.put(_ctx, "output", bin_name)
 }
 
-// extra_sources(c_path) — append one C file to the manual-link list.
-// Repeated calls accumulate. Presence of any extra_sources opts the
+// extra_source(c_path) — append one C file to the manual-link list.
+// Repeated calls accumulate. Presence of any extra_source opts the
 // builder out of the `ae build` shell-out (which would read these
 // from aether.toml's [[bin]].extra_sources) and into the explicit
 // aetherc + gcc path. Mutually exclusive with aether.toml's
@@ -35,23 +35,23 @@ output(_ctx: ptr, bin_name: string) {
 // Relative paths are resolved against source_dir at gcc time
 // (consistent with regen(...)). Absolute paths pass through
 // verbatim.
-extra_sources(_ctx: ptr, c_path: string) {
-    if map.has(_ctx, "extra_sources") == 0 {
-        _e1 = map.put(_ctx, "extra_sources", list.new())
+extra_source(_ctx: ptr, c_path: string) {
+    if map.has(_ctx, "extra_source") == 0 {
+        _e1 = map.put(_ctx, "extra_source", list.new())
     }
-    extras, _ = map.get(_ctx, "extra_sources")
+    extras, _ = map.get(_ctx, "extra_source")
     _e2 = list.add(extras, c_path)
 }
 
-// link_flags(flag) — append one gcc link flag (e.g. "-pthread",
-// "-lm", "-Wl,-rpath,/foo"). Like extra_sources, presence opts into
+// link_flag(flag) — append one gcc link flag (e.g. "-pthread",
+// "-lm", "-Wl,-rpath,/foo"). Like extra_source, presence opts into
 // the manual-link path. Note: -L${aether_dir} -laether are already
 // added by the manual path; don't repeat them here.
-link_flags(_ctx: ptr, flag: string) {
-    if map.has(_ctx, "link_flags") == 0 {
-        _e1 = map.put(_ctx, "link_flags", list.new())
+link_flag(_ctx: ptr, flag: string) {
+    if map.has(_ctx, "link_flag") == 0 {
+        _e1 = map.put(_ctx, "link_flag", list.new())
     }
-    flags, _ = map.get(_ctx, "link_flags")
+    flags, _ = map.get(_ctx, "link_flag")
     _e2 = list.add(flags, flag)
 }
 
@@ -60,12 +60,12 @@ link_flags(_ctx: ptr, flag: string) {
 // linking. Path is module-relative (resolved against source_dir).
 //
 // Each regen(...) implicitly contributes its paired _generated.c to
-// extra_sources, so callers don't need to declare both. The pairing
+// extra_source, so callers don't need to declare both. The pairing
 // rule is `X.ae` → `X_generated.c` in the same directory.
 //
 // mtime-driven: skipped if the .c exists and is newer than the .ae.
 // Presence of any regen(...) opts the builder into the manual
-// aetherc + gcc path (same as extra_sources / link_flags).
+// aetherc + gcc path (same as extra_source / link_flag).
 //
 // Capabilities: aetherc rejects --emit=lib on a source that imports
 // std.http / std.tcp / std.net / std.fs / std.os without a matching
@@ -186,15 +186,15 @@ _collect_ld_path(shared_libs_text: string) {
     return string.trim(out)
 }
 
-// Returns 1 if the user declared extra_sources(...) or link_flags(...)
+// Returns 1 if the user declared extra_source(...) or link_flag(...)
 // in the builder block — i.e. wants the manual gcc path. Returns 0
 // otherwise (default: shell out to `ae build`). Takes the builder
 // map as a parameter because `_builder` is only in scope inside
 // `builder` functions, not regular helpers.
 _has_manual_overrides(builder_map: ptr) {
     if builder_map == null { return 0 }
-    if map.has(builder_map, "extra_sources") == 1 { return 1 }
-    if map.has(builder_map, "link_flags") == 1 { return 1 }
+    if map.has(builder_map, "extra_source") == 1 { return 1 }
+    if map.has(builder_map, "link_flag") == 1 { return 1 }
     if map.has(builder_map, "regen") == 1 { return 1 }
     return 0
 }
@@ -277,7 +277,7 @@ _detect_caps(ae_path: string) {
 
 // Walk the regen list, run `aetherc --emit=lib X.ae X_generated.c`
 // for each entry whose paired .c is missing or older than the .ae,
-// and append the generated .c paths to extra_sources so the gcc step
+// and append the generated .c paths to extra_source so the gcc step
 // links them in. Paths in regen(...) are resolved against source_dir.
 //
 // Hard-fails the build on the first aetherc error — surfaces aetherc
@@ -291,11 +291,11 @@ _run_regen_pass(builder_map: ptr, source_dir: string, aetherc: string, mod_dir: 
     n = list.size(regens)
     if n == 0 { return 0 }
 
-    // Ensure extra_sources list exists so we can append generated paths.
-    if map.has(builder_map, "extra_sources") == 0 {
-        _ee = map.put(builder_map, "extra_sources", list.new())
+    // Ensure extra_source list exists so we can append generated paths.
+    if map.has(builder_map, "extra_source") == 0 {
+        _ee = map.put(builder_map, "extra_source", list.new())
     }
-    extras, _ = map.get(builder_map, "extra_sources")
+    extras, _ = map.get(builder_map, "extra_source")
 
     i = 0
     while i < n {
@@ -350,8 +350,8 @@ _run_regen_pass(builder_map: ptr, source_dir: string, aetherc: string, mod_dir: 
     return 0
 }
 
-// Manual build path: aetherc + gcc, with optional extra_sources,
-// link_flags, and regen entries from the builder block. Used when the
+// Manual build path: aetherc + gcc, with optional extra_source,
+// link_flag, and regen entries from the builder block. Used when the
 // .build.ae declares any of those — bypasses aether.toml entirely so
 // the .build.ae is the single source of truth.
 _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string, c_path: string) {
@@ -375,8 +375,8 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
         return rc
     }
 
-    // Phase 2: gcc src.c (+ extra_sources) + runtime → bin, plus any
-    // shared library deps and user-supplied link_flags.
+    // Phase 2: gcc src.c (+ extra_source) + runtime → bin, plus any
+    // shared library deps and user-supplied link_flag.
     shared_libs = _collect_shared_libs(ctx)
     extra_link = ""
     rpath_link = ""
@@ -389,7 +389,7 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
         rpath_link = string.trim(rp_raw)
     }
 
-    // Concatenate user-declared extra_sources (if any). Relative
+    // Concatenate user-declared extra_source (if any). Relative
     // entries are resolved against source_dir for parity with
     // regen(...) — both setters now treat their string args as
     // module-relative. Absolute paths (anything starting with /)
@@ -398,8 +398,8 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
     // entries into this same list.
     extras_str = ""
     if builder_map != null {
-        if map.has(builder_map, "extra_sources") == 1 {
-            extras, _ = map.get(builder_map, "extra_sources")
+        if map.has(builder_map, "extra_source") == 1 {
+            extras, _ = map.get(builder_map, "extra_source")
             ne = list.size(extras)
             ie = 0
             while ie < ne {
@@ -418,11 +418,11 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
         }
     }
 
-    // Concatenate user-declared link_flags (if any).
+    // Concatenate user-declared link_flag (if any).
     user_flags = ""
     if builder_map != null {
-        if map.has(builder_map, "link_flags") == 1 {
-            flags, _ = map.get(builder_map, "link_flags")
+        if map.has(builder_map, "link_flag") == 1 {
+            flags, _ = map.get(builder_map, "link_flag")
             nf = list.size(flags)
             jf = 0
             while jf < nf {
@@ -462,7 +462,7 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
 }
 
 // Router: shell out to `ae build` by default; take the manual path
-// only when the user declared extra_sources(...) or link_flags(...).
+// only when the user declared extra_source(...) or link_flag(...).
 // c_path is only consumed by the manual path (it's the intermediate
 // .c file aetherc emits); the shell-out lets `ae build` manage its
 // own scratch.
