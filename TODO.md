@@ -336,6 +336,80 @@ All language SDKs now use `defer` functions with trailing-block DSL:
 - [x] `tsc()` — strict, ts_target, module_kind, out_dir
 - [x] `mocha()` — mocha_timeout, reporter, mocha_grep
 
+## Test coverage gaps (this session, deliberately deferred)
+
+The round-218 backfill (`tests/test_aether_*.ae`, `tests/test_bash_*.ae`,
+`tests/test_file_to_label.ae`) covered the pure string-builders for
+this session's SDK additions: `aetherc_emit_lib_cmd`,
+`aether_link_cmd`, `bash_xargs_cmd`, `bash_runner_body`, plus the
+mtime-driven `_regen_action` and the install-layout resolvers (with
+filesystem fixtures). Three behaviours are still uncovered. None
+blocks svn-aether; all need either a refactor or harness work that
+wasn't worth doing in-session.
+
+### `_run_regen_pass` integration
+
+`_run_regen_pass` in `lib/aether/module.ae` orchestrates the full
+.ae → _generated.c regen flow: derive paired paths, mtime-check via
+`file.mtime`, resolve caps (explicit or auto-detect), invoke real
+`aetherc --emit=lib` via `os.system`, append to `extra_source`,
+hard-fail on aetherc error.
+
+The pure parts are already factored out (`_paired_generated_c`,
+`_regen_action`, `_detect_caps_from_content`, `aetherc_emit_lib_cmd`)
+and unit-tested. The orchestration loop itself isn't testable
+without either:
+
+- Stubbing aetherc with a recording wrapper script that captures
+  args. Doable; needs a small bash fixture under `tests/fixtures/`
+  and a per-test PATH override.
+- Or extracting a "planner" function that returns a list of
+  `(ae_path, c_path, caps, action)` records without invoking
+  aetherc, then testing the planner. Simpler but means the actual
+  aetherc-invocation loop is still uncovered.
+
+End-to-end smoke (`/tmp/aeb-regen-smoke`) covers the integration
+today. Worth formalising into a `tests/integration/` directory if
+this gap bites.
+
+### `bash.test` parallel-mode end-to-end
+
+`bash.test(b) { jobs(N) }` writes scratch files (item list, runner
+script), invokes `xargs -P` via `os.exec`, parses stdout with
+`_parse_xargs_output`. The string-builders (`bash_xargs_cmd`,
+`bash_runner_body`) and the parser are unit-tested. The dispatch
+loop isn't — would need a fixture tree of `test_*.sh` files plus
+a way to assert the resulting parallel runtime ordering, which is
+non-deterministic. End-to-end smoke (`/tmp/aeb-bash-smoke`) covers
+this today.
+
+### Three-copy `file_to_label` drift detection
+
+The label-derivation logic exists in three places that must stay in
+sync: `tools/file-to-label.ae`, `tools/gen-orchestrator.ae`,
+`tools/aeb-link.ae`. Round-218 commit `41d5ffa` updated all three
+together; nothing today catches drift if a future change touches
+one but not the others.
+
+A drift-detection test would `import` all three `file_to_label`
+implementations and assert they produce identical output for a
+representative input set — but `tests/run.sh` builds each test
+with `--lib lib`, and `tools/` isn't on that path. Two options:
+
+- Make `tests/run.sh` add `tools/` to `--lib` for tests that
+  import from there. Touches the harness.
+- Consolidate the three copies into one shared library function
+  (probably under `lib/build/` or a new `lib/aeb_internal/`).
+  Harder — `gen-orchestrator` and `aeb-link` are standalone tools
+  built independently, so the shared helper has to be a pure-Aether
+  source-import, not a runtime dependency. This is the right
+  long-term fix.
+
+Until either lands, the test_file_to_label.ae file pins the
+canonical implementation's behaviour, and a future drift in
+`gen-orchestrator.ae` or `aeb-link.ae` would only surface as a
+runtime bug, not a test failure.
+
 ## Container SDK — Proxmox support
 
 The container module currently supports OCI images (podman/docker) and
