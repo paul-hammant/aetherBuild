@@ -46,6 +46,50 @@ jobs(_ctx: ptr, n: int) {
 
 // --- Helpers ---
 
+// Build the xargs pipeline for parallel test dispatch. Pure: just
+// string assembly. Tested in tests/test_bash_xargs_cmd.ae.
+bash_xargs_cmd(list_file: string, runner_file: string, jobs_arg: string) {
+    return "xargs -a ${list_file} -P ${jobs_arg} -I{} ${runner_file} {}"
+}
+
+// Build the runner script body that each xargs child executes.
+// Static (no args) — the script structure is fixed; only the input
+// data (the "name|fullpath" line passed as $1) varies. Pure: returns
+// a string. Tested in tests/test_bash_runner_body.ae.
+//
+// Built via string.concat because Aether's interpolation grabs
+// `${...}` patterns at parse time — embedding a literal `${1%%|*}`
+// directly in a string doesn't make it to the file. Splitting `$`
+// from `{` keeps the parser away.
+bash_runner_body() {
+    dol = "$"
+    pos1_name = string.concat(dol, "{1%%|*}")
+    pos1_full = string.concat(dol, "{1#*|}")
+    pos_full  = string.concat(dol, "full")
+    pos_q     = string.concat(dol, "?")
+    pos_name  = string.concat(dol, "name")
+    pos_rc    = string.concat(dol, "rc")
+    rb = "#!/bin/bash\n"
+    rb = string.concat(rb, "name=\"")
+    rb = string.concat(rb, pos1_name)
+    rb = string.concat(rb, "\"\nfull=\"")
+    rb = string.concat(rb, pos1_full)
+    rb = string.concat(rb, "\"\nbash \"")
+    rb = string.concat(rb, pos_full)
+    rb = string.concat(rb, "\" >/dev/null 2>&1\nrc=")
+    rb = string.concat(rb, pos_q)
+    rb = string.concat(rb, "\nif [ ")
+    rb = string.concat(rb, pos_rc)
+    rb = string.concat(rb, " -eq 0 ]; then\n  printf 'PASS\\t%s\\n' \"")
+    rb = string.concat(rb, pos_name)
+    rb = string.concat(rb, "\"\nelse\n  printf 'FAIL\\t%s\\t%d\\n' \"")
+    rb = string.concat(rb, pos_name)
+    rb = string.concat(rb, "\" \"")
+    rb = string.concat(rb, pos_rc)
+    rb = string.concat(rb, "\"\nfi\n")
+    return rb
+}
+
 _collect_scripts(source_dir: string) {
     // Auto-discovery default: every test_*.sh under source_dir.
     cmd = "ls '${source_dir}'/test_*.sh 2>/dev/null | sort"
@@ -183,49 +227,11 @@ _run_parallel(mod_dir: string, source_dir: string, scripts: ptr, jobs_str: strin
     list_body = string.concat(items, "\n")
     _ewl = fs.write_atomic(list_file, list_body, string.length(list_body))
 
-    // Runner: receives one "name|fullpath" arg, runs it, emits
-    // tab-separated PASS/FAIL line.
-    //
-    // Built via concat because Aether's string interpolation grabs
-    // `${...}` patterns at parse time — embedding a literal
-    // `${1%%|*}` directly in a string doesn't make it to the file.
-    // Splitting the `$` from the `{` keeps the parser away.
-    dol = "$"
-    pos1_name = string.concat(dol, "{1%%|*}")
-    pos1_full = string.concat(dol, "{1#*|}")
-    pos_full  = string.concat(dol, "full")
-    pos_q     = string.concat(dol, "?")
-    pos_name  = string.concat(dol, "name")
-    pos_rc    = string.concat(dol, "rc")
-    rb = "#!/bin/bash\n"
-    rb = string.concat(rb, "name=\"")
-    rb = string.concat(rb, pos1_name)
-    rb = string.concat(rb, "\"\nfull=\"")
-    rb = string.concat(rb, pos1_full)
-    rb = string.concat(rb, "\"\nbash \"")
-    rb = string.concat(rb, pos_full)
-    rb = string.concat(rb, "\" >/dev/null 2>&1\nrc=")
-    rb = string.concat(rb, pos_q)
-    rb = string.concat(rb, "\nif [ ")
-    rb = string.concat(rb, pos_rc)
-    rb = string.concat(rb, " -eq 0 ]; then\n  printf 'PASS\\t%s\\n' \"")
-    rb = string.concat(rb, pos_name)
-    rb = string.concat(rb, "\"\nelse\n  printf 'FAIL\\t%s\\t%d\\n' \"")
-    rb = string.concat(rb, pos_name)
-    rb = string.concat(rb, "\" \"")
-    rb = string.concat(rb, pos_rc)
-    rb = string.concat(rb, "\"\nfi\n")
-    runner_body = rb
+    runner_body = bash_runner_body()
     _ewr = fs.write_atomic(runner_file, runner_body, string.length(runner_body))
     os.system(string.concat("chmod +x ", runner_file))
 
-    pipe = "xargs -a "
-    pipe = string.concat(pipe, list_file)
-    pipe = string.concat(pipe, " -P ")
-    pipe = string.concat(pipe, jobs_arg)
-    pipe = string.concat(pipe, " -I{} ")
-    pipe = string.concat(pipe, runner_file)
-    pipe = string.concat(pipe, " {}")
+    pipe = bash_xargs_cmd(list_file, runner_file, jobs_arg)
 
     out, _err = os.exec(pipe)
     os.system(string.concat("rm -f ", list_file))

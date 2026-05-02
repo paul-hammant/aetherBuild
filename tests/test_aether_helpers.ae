@@ -1,0 +1,89 @@
+// Tests for the pure helpers in lib/aether/module.ae:
+//   _paired_generated_c   — .ae path → _generated.c sibling
+//   _detect_caps_from_content — `import std.X` → --with cap mapping
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+import aether (_paired_generated_c, _detect_caps_from_content)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: '${expected}'")
+        println("  actual:   '${actual}'")
+    }
+}
+
+main() {
+    // --- _paired_generated_c ---
+    _assert_eq("paired: simple",
+        _paired_generated_c("foo.ae"), "foo_generated.c")
+    _assert_eq("paired: with dir",
+        _paired_generated_c("ae/svnserver/auth.ae"), "ae/svnserver/auth_generated.c")
+    _assert_eq("paired: relative-up path",
+        _paired_generated_c("../../ae/client/handlers.ae"),
+        "../../ae/client/handlers_generated.c")
+    _assert_eq("paired: not .ae returns empty",
+        _paired_generated_c("foo.txt"), "")
+    _assert_eq("paired: no extension returns empty",
+        _paired_generated_c("foo"), "")
+    _assert_eq("paired: too short returns empty",
+        _paired_generated_c("ae"), "")
+    _assert_eq("paired: empty input",
+        _paired_generated_c(""), "")
+
+    // --- _detect_caps_from_content: empty / no caps ---
+    _assert_eq("caps: empty content", _detect_caps_from_content(""), "")
+    _assert_eq("caps: only std.io",
+        _detect_caps_from_content("import std.io\nmain() {}"), "")
+    _assert_eq("caps: only std.string",
+        _detect_caps_from_content("import std.string"), "")
+
+    // --- _detect_caps_from_content: single caps ---
+    _assert_eq("caps: std.http → net",
+        _detect_caps_from_content("import std.http"), "net")
+    _assert_eq("caps: std.tcp → net",
+        _detect_caps_from_content("import std.tcp"), "net")
+    _assert_eq("caps: std.net → net",
+        _detect_caps_from_content("import std.net"), "net")
+    _assert_eq("caps: std.fs → fs",
+        _detect_caps_from_content("import std.fs"), "fs")
+    _assert_eq("caps: std.os → os",
+        _detect_caps_from_content("import std.os"), "os")
+
+    // --- combinations: order is fixed (net,fs,os) ---
+    _assert_eq("caps: net+fs",
+        _detect_caps_from_content("import std.http\nimport std.fs"), "net,fs")
+    _assert_eq("caps: net+os",
+        _detect_caps_from_content("import std.http\nimport std.os"), "net,os")
+    _assert_eq("caps: fs+os",
+        _detect_caps_from_content("import std.fs\nimport std.os"), "fs,os")
+    _assert_eq("caps: all three",
+        _detect_caps_from_content("import std.http\nimport std.fs\nimport std.os"),
+        "net,fs,os")
+    _assert_eq("caps: order of imports doesn't change output order",
+        _detect_caps_from_content("import std.os\nimport std.http\nimport std.fs"),
+        "net,fs,os")
+
+    // --- net dedup: multiple net-grant imports collapse to one "net" ---
+    _assert_eq("caps: http+tcp+net dedup",
+        _detect_caps_from_content("import std.http\nimport std.tcp\nimport std.net"),
+        "net")
+
+    // --- realistic source file ---
+    src = "import std.io\nimport std.http\nimport std.fs\nextern println(s: string)\n"
+    _assert_eq("caps: realistic mix",
+        _detect_caps_from_content(src), "net,fs")
+
+    println("aether helpers tests done")
+}

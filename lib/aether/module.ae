@@ -228,6 +228,45 @@ _shell_out_ae_build(ctx: ptr, src_path: string, bin_path: string) {
     return 0
 }
 
+// Build the aetherc command for codegen-mode (--emit=lib) compilation
+// of an .ae source. `caps` is a comma-separated capability list
+// (e.g. "net,fs"); empty → no --with= flag is emitted. Pure: no I/O,
+// just string assembly. Tested in tests/test_aetherc_emit_lib_cmd.ae.
+aetherc_emit_lib_cmd(aetherc: string, ae_path: string, c_path: string, caps: string) {
+    with_flag = ""
+    if string.length(caps) > 0 {
+        with_flag = " --with=${caps}"
+    }
+    return "${aetherc} --emit=lib${with_flag} ${ae_path} ${c_path}"
+}
+
+// Build the gcc link command for the manual aether.program path.
+// Pure: takes already-resolved strings via an opts map and assembles
+// them. Tested in tests/test_aether_link_cmd.ae.
+//
+// Required keys in opts:
+//   c_path      — generated .c for the program's main .ae source
+//   bin_path    — output binary path
+//   lib_dir     — dir containing libaether.a (-L)
+//   inc_flags   — leading-space-prefixed -I block (or "")
+//   extras_str  — leading-space-prefixed list of extra .c paths (or "")
+//   extra_link  — shared-library deps (space-separated, no leading space)
+//   rpath_link  — -Wl,-rpath,... entries (space-separated, no leading space)
+//   user_flags  — leading-space-prefixed user link_flag entries (or "")
+//   dup_flag    — duplicate-symbol linker flag (platform-dependent)
+aether_link_cmd(opts: ptr) {
+    c_path, _      = map.get(opts, "c_path")
+    bin_path, _    = map.get(opts, "bin_path")
+    lib_dir, _     = map.get(opts, "lib_dir")
+    inc_flags, _   = map.get(opts, "inc_flags")
+    extras_str, _  = map.get(opts, "extras_str")
+    extra_link, _  = map.get(opts, "extra_link")
+    rpath_link, _  = map.get(opts, "rpath_link")
+    user_flags, _  = map.get(opts, "user_flags")
+    dup_flag, _    = map.get(opts, "dup_flag")
+    return "gcc -O2 -pipe -w${inc_flags} ${c_path}${extras_str} -L${lib_dir} -laether ${extra_link} ${rpath_link}${user_flags} -o ${bin_path} -pthread -lm ${dup_flag}"
+}
+
 // Replace .ae extension with _generated.c. "foo/bar.ae" → "foo/bar_generated.c".
 // Returns "" if path doesn't end in .ae.
 _paired_generated_c(ae_path: string) {
@@ -253,6 +292,13 @@ _paired_generated_c(ae_path: string) {
 // no cap-bearing import is detected.
 _detect_caps(ae_path: string) {
     content, _err = fs.read(ae_path)
+    return _detect_caps_from_content(content)
+}
+
+// Pure helper — same logic as _detect_caps, but takes the source
+// content directly. Split out so unit tests can exercise the
+// import→cap mapping without touching the filesystem.
+_detect_caps_from_content(content: string) {
     if string.length(content) == 0 { return "" }
     has_net = 0
     has_fs = 0
@@ -333,11 +379,7 @@ _run_regen_pass(builder_map: ptr, source_dir: string, aetherc: string, mod_dir: 
             if string.length(caps) == 0 {
                 caps = _detect_caps(ae_abs)
             }
-            with_flag = ""
-            if string.length(caps) > 0 {
-                with_flag = " --with=${caps}"
-            }
-            cmd = "${aetherc} --emit=lib${with_flag} ${ae_abs} ${c_abs}"
+            cmd = aetherc_emit_lib_cmd(aetherc, ae_abs, c_abs, caps)
             rc = os.system(cmd)
             if rc != 0 {
                 println("${mod_dir}: aetherc --emit=lib failed for ${rel}")
@@ -452,7 +494,18 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
     // Duplicate-symbol link flag — GNU ld uses --allow-multiple-definition,
     // macOS ld64 rejects that flag outright. See build._dup_symbol_link_flag.
     dup_flag = build._dup_symbol_link_flag()
-    gcc_cmd = "gcc -O2 -pipe -w${inc_flags} ${c_path}${extras_str} -L${lib_dir} -laether ${extra_link} ${rpath_link}${user_flags} -o ${bin_path} -pthread -lm ${dup_flag}"
+
+    opts = map.new()
+    _eo1 = map.put(opts, "c_path", c_path)
+    _eo2 = map.put(opts, "bin_path", bin_path)
+    _eo3 = map.put(opts, "lib_dir", lib_dir)
+    _eo4 = map.put(opts, "inc_flags", inc_flags)
+    _eo5 = map.put(opts, "extras_str", extras_str)
+    _eo6 = map.put(opts, "extra_link", extra_link)
+    _eo7 = map.put(opts, "rpath_link", rpath_link)
+    _eo8 = map.put(opts, "user_flags", user_flags)
+    _eo9 = map.put(opts, "dup_flag", dup_flag)
+    gcc_cmd = aether_link_cmd(opts)
     rc = os.system(gcc_cmd)
     if rc != 0 {
         println("${mod_dir}: gcc link failed")

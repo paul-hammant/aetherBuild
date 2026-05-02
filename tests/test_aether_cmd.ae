@@ -1,0 +1,142 @@
+// Tests for the command-string builders in lib/aether/module.ae:
+//   aetherc_emit_lib_cmd  — `aetherc --emit=lib [--with=...] X.ae X.c`
+//   aether_link_cmd       — full gcc link command
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+import aether (aetherc_emit_lib_cmd, aether_link_cmd)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: '${expected}'")
+        println("  actual:   '${actual}'")
+    }
+}
+
+_link_opts(c_path: string, bin_path: string, lib_dir: string, inc_flags: string,
+           extras_str: string, extra_link: string, rpath_link: string,
+           user_flags: string, dup_flag: string) {
+    o = map_new()
+    map_put(o, "c_path", c_path)
+    map_put(o, "bin_path", bin_path)
+    map_put(o, "lib_dir", lib_dir)
+    map_put(o, "inc_flags", inc_flags)
+    map_put(o, "extras_str", extras_str)
+    map_put(o, "extra_link", extra_link)
+    map_put(o, "rpath_link", rpath_link)
+    map_put(o, "user_flags", user_flags)
+    map_put(o, "dup_flag", dup_flag)
+    return o
+}
+
+main() {
+    // --- aetherc_emit_lib_cmd: no caps ---
+    _assert_eq("aetherc: no caps",
+        aetherc_emit_lib_cmd("/usr/bin/aetherc", "lib.ae", "lib_generated.c", ""),
+        "/usr/bin/aetherc --emit=lib lib.ae lib_generated.c")
+
+    // --- aetherc_emit_lib_cmd: single cap ---
+    _assert_eq("aetherc: --with=net",
+        aetherc_emit_lib_cmd("aetherc", "auth.ae", "auth_generated.c", "net"),
+        "aetherc --emit=lib --with=net auth.ae auth_generated.c")
+    _assert_eq("aetherc: --with=fs",
+        aetherc_emit_lib_cmd("aetherc", "x.ae", "x.c", "fs"),
+        "aetherc --emit=lib --with=fs x.ae x.c")
+
+    // --- aetherc_emit_lib_cmd: multi-cap ---
+    _assert_eq("aetherc: --with=net,fs",
+        aetherc_emit_lib_cmd("aetherc", "x.ae", "x.c", "net,fs"),
+        "aetherc --emit=lib --with=net,fs x.ae x.c")
+    _assert_eq("aetherc: all three caps",
+        aetherc_emit_lib_cmd("aetherc", "x.ae", "x.c", "net,fs,os"),
+        "aetherc --emit=lib --with=net,fs,os x.ae x.c")
+
+    // --- aetherc_emit_lib_cmd: absolute paths ---
+    _assert_eq("aetherc: absolute paths",
+        aetherc_emit_lib_cmd("/home/u/.local/bin/aetherc",
+                             "/repo/ae/svnserver/auth.ae",
+                             "/repo/ae/svnserver/auth_generated.c", "net"),
+        "/home/u/.local/bin/aetherc --emit=lib --with=net /repo/ae/svnserver/auth.ae /repo/ae/svnserver/auth_generated.c")
+
+    // --- aether_link_cmd: minimal (no extras, no inc, no shared libs) ---
+    o1 = _link_opts(
+        "target/_aeb/main.c", "target/hello/bin/hello",
+        "/usr/lib/aether",
+        "", "", "", "", "",
+        "-Wl,--allow-multiple-definition")
+    _assert_eq("link: minimal",
+        aether_link_cmd(o1),
+        "gcc -O2 -pipe -w target/_aeb/main.c -L/usr/lib/aether -laether   -o target/hello/bin/hello -pthread -lm -Wl,--allow-multiple-definition")
+
+    // --- aether_link_cmd: with one extra source (relative) ---
+    o2 = _link_opts(
+        "target/_aeb/main.c", "target/hello/bin/hello",
+        "/usr/lib/aether",
+        "", " /repo/contrib/extra.c", "", "", "",
+        "-Wl,--allow-multiple-definition")
+    _assert_eq("link: one extra_source",
+        aether_link_cmd(o2),
+        "gcc -O2 -pipe -w target/_aeb/main.c /repo/contrib/extra.c -L/usr/lib/aether -laether   -o target/hello/bin/hello -pthread -lm -Wl,--allow-multiple-definition")
+
+    // --- aether_link_cmd: with user link_flags ---
+    o3 = _link_opts(
+        "main.c", "out/bin",
+        "/lib", "", "", "", "", " -pthread -lm",
+        "-Wl,--allow-multiple-definition")
+    _assert_eq("link: user link_flags",
+        aether_link_cmd(o3),
+        "gcc -O2 -pipe -w main.c -L/lib -laether   -pthread -lm -o out/bin -pthread -lm -Wl,--allow-multiple-definition")
+
+    // --- aether_link_cmd: macOS dup_flag (empty) ---
+    o4 = _link_opts(
+        "main.c", "out/bin", "/lib", "", "", "", "", "", "")
+    _assert_eq("link: macOS (no dup_flag)",
+        aether_link_cmd(o4),
+        "gcc -O2 -pipe -w main.c -L/lib -laether   -o out/bin -pthread -lm ")
+
+    // --- aether_link_cmd: with shared-lib deps + rpath ---
+    o5 = _link_opts(
+        "main.c", "out/bin", "/lib", "",
+        "", "/repo/target/rust/libfoo.so", "-Wl,-rpath,/repo/target/rust", "",
+        "-Wl,--allow-multiple-definition")
+    _assert_eq("link: shared lib + rpath",
+        aether_link_cmd(o5),
+        "gcc -O2 -pipe -w main.c -L/lib -laether /repo/target/rust/libfoo.so -Wl,-rpath,/repo/target/rust -o out/bin -pthread -lm -Wl,--allow-multiple-definition")
+
+    // --- aether_link_cmd: with -I include block (FHS install) ---
+    o6 = _link_opts(
+        "main.c", "out/bin", "/lib",
+        " -I/inc/runtime -I/inc/runtime/actors -I/inc/std",
+        "", "", "", "",
+        "-Wl,--allow-multiple-definition")
+    _assert_eq("link: nested -I block",
+        aether_link_cmd(o6),
+        "gcc -O2 -pipe -w -I/inc/runtime -I/inc/runtime/actors -I/inc/std main.c -L/lib -laether   -o out/bin -pthread -lm -Wl,--allow-multiple-definition")
+
+    // --- aether_link_cmd: kitchen sink ---
+    o7 = _link_opts(
+        "target/_aeb/main.c", "target/hello/bin/svn",
+        "/home/u/.local/lib/aether",
+        " $(find /home/u/.local/include/aether -type d -print | sed 's|^|-I|')",
+        " /repo/contrib/sqlite.c /repo/ae/svn/auth_generated.c",
+        "/repo/target/rust/libnative.so",
+        "-Wl,-rpath,/repo/target/rust",
+        " -pthread",
+        "-Wl,--allow-multiple-definition")
+    _assert_eq("link: kitchen sink",
+        aether_link_cmd(o7),
+        "gcc -O2 -pipe -w $(find /home/u/.local/include/aether -type d -print | sed 's|^|-I|') target/_aeb/main.c /repo/contrib/sqlite.c /repo/ae/svn/auth_generated.c -L/home/u/.local/lib/aether -laether /repo/target/rust/libnative.so -Wl,-rpath,/repo/target/rust -pthread -o target/hello/bin/svn -pthread -lm -Wl,--allow-multiple-definition")
+
+    println("aether cmd tests done")
+}

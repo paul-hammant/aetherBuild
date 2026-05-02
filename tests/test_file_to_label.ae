@@ -1,0 +1,143 @@
+// Tests for file_to_label() and extract_tag() — the label/tag
+// derivation that disambiguates multiple .build*.ae / .tests*.ae /
+// .dist*.ae files in the same directory.
+//
+// The logic exists in three places (tools/file-to-label.ae,
+// tools/gen-orchestrator.ae, tools/aeb-link.ae) — this test file
+// exercises tools/file-to-label.ae as the canonical version.
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+extern println(s: string)
+
+// Inline copies of the helpers under test. Tests/run.sh builds
+// each test_*.ae standalone with --lib pointing at the project
+// lib/ — but tools/ isn't on that path, so the helpers can't be
+// imported. Inlining matches the existing test convention (see
+// test_encode_name.ae).
+
+infer_type(file: string) {
+    if string.ends_with(file, ".tests.ae") == 1 { return "test" }
+    if string.ends_with(file, ".dist.ae") == 1 { return "dist" }
+    if string.index_of(file, ".tests-") >= 0 { return "test" }
+    if string.index_of(file, ".dist-") >= 0 { return "dist" }
+    return "build"
+}
+
+dirname_pure(p: string) {
+    n = string.length(p)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(p, i, i + 1)
+        if string.index_of(ch, "/") == 0 { last = i }
+        i = i + 1
+    }
+    if last < 0 { return "." }
+    if last == 0 { return "/" }
+    return string.substring(p, 0, last)
+}
+
+basename_pure(p: string) {
+    n = string.length(p)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(p, i, i + 1)
+        if string.index_of(ch, "/") == 0 { last = i }
+        i = i + 1
+    }
+    if last < 0 { return p }
+    return string.substring(p, last + 1, n)
+}
+
+extract_tag(file: string) {
+    base = basename_pure(file)
+    n = string.length(base)
+    if n < 4 { return "" }
+    if string.ends_with(base, ".ae") == 0 { return "" }
+    stem = string.substring(base, 0, n - 3)
+    sn = string.length(stem)
+    if sn == 0 { return "" }
+    if string.equals(string.substring(stem, 0, 1), ".") == 0 { return "" }
+    body = string.substring(stem, 1, sn)
+    bn = string.length(body)
+    j = 0
+    while j < bn {
+        ch = string.substring(body, j, j + 1)
+        if string.equals(ch, "-") == 1 {
+            return string.substring(body, j + 1, bn)
+        }
+        j = j + 1
+    }
+    return ""
+}
+
+file_to_label(file: string) {
+    type = infer_type(file)
+    dir = dirname_pure(file)
+    tag = extract_tag(file)
+    suffix = ""
+    if string.length(tag) > 0 { suffix = string.concat(":", tag) }
+    if type == "test" { return string.concat(string.concat("test:", dir), suffix) }
+    if type == "dist" { return string.concat(string.concat("dist:", dir), suffix) }
+    return string.concat(dir, suffix)
+}
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: '${expected}'")
+        println("  actual:   '${actual}'")
+    }
+}
+
+main() {
+    // --- extract_tag: basics ---
+    _assert_eq("tag: canonical .build.ae",      extract_tag("ae/svnserver/.build.ae"),      "")
+    _assert_eq("tag: canonical .tests.ae",      extract_tag("ae/svnserver/.tests.ae"),      "")
+    _assert_eq("tag: canonical .dist.ae",       extract_tag("ae/svnserver/.dist.ae"),       "")
+    _assert_eq("tag: .build-seed.ae",            extract_tag("ae/svnserver/.build-seed.ae"), "seed")
+    _assert_eq("tag: .tests-int.ae",             extract_tag("ae/x/.tests-int.ae"),          "int")
+    _assert_eq("tag: .dist-fat.ae",              extract_tag("ae/x/.dist-fat.ae"),           "fat")
+    _assert_eq("tag: multi-word .build-foo-bar", extract_tag("ae/x/.build-foo-bar.ae"),      "foo-bar")
+    _assert_eq("tag: bare .build.ae no dir",     extract_tag(".build.ae"),                    "")
+    _assert_eq("tag: bare .build-seed.ae no dir",extract_tag(".build-seed.ae"),               "seed")
+    _assert_eq("tag: not a build file",          extract_tag("ae/x/main.ae"),                "")
+    _assert_eq("tag: no .ae extension",          extract_tag("ae/x/.build"),                  "")
+    _assert_eq("tag: empty",                     extract_tag(""),                              "")
+
+    // --- file_to_label: canonical names match historical behaviour ---
+    _assert_eq("label: .build.ae", file_to_label("ae/svnserver/.build.ae"), "ae/svnserver")
+    _assert_eq("label: .tests.ae", file_to_label("ae/svnserver/.tests.ae"), "test:ae/svnserver")
+    _assert_eq("label: .dist.ae",  file_to_label("ae/svnserver/.dist.ae"),  "dist:ae/svnserver")
+    _assert_eq("label: top-level .build.ae", file_to_label(".build.ae"),    ".")
+    _assert_eq("label: deep path",            file_to_label("a/b/c/d/.build.ae"), "a/b/c/d")
+
+    // --- file_to_label: tagged variants ---
+    _assert_eq("label: .build-seed.ae",  file_to_label("ae/svnserver/.build-seed.ae"),
+        "ae/svnserver:seed")
+    _assert_eq("label: .tests-int.ae",   file_to_label("ae/x/.tests-int.ae"),
+        "test:ae/x:int")
+    _assert_eq("label: .dist-fat.ae",    file_to_label("ae/x/.dist-fat.ae"),
+        "dist:ae/x:fat")
+    _assert_eq("label: .build-foo-bar.ae",file_to_label("ae/x/.build-foo-bar.ae"),
+        "ae/x:foo-bar")
+
+    // --- the porter's exact failing case from round 218#4 ---
+    _assert_eq("porter: .build.ae",
+        file_to_label("ae/svnserver/.build.ae"), "ae/svnserver")
+    _assert_eq("porter: .build-seed.ae",
+        file_to_label("ae/svnserver/.build-seed.ae"), "ae/svnserver:seed")
+
+    println("file_to_label tests done")
+}
