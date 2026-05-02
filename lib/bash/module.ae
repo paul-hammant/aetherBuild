@@ -119,15 +119,7 @@ builder script(ctx: ptr) {
         println("${mod_dir}: running ${s}")
         rc = os.system("bash ${full}")
         if rc != 0 {
-            // Forward-compat: pre-feat/aeocha-importable Aether returned
-            // POSIX wait-status (exit code in high byte); newer Aether
-            // returns the exit code directly. The shift recovers the old
-            // case; the fallthrough handles the new one. Once the
-            // os.system fix is in every supported Aether, drop the
-            // shift and use rc directly.
-            exit_code = rc / 256
-            if exit_code == 0 { exit_code = rc }
-            println("${mod_dir}: ${s} FAILED (exit ${exit_code})")
+            println("${mod_dir}: ${s} FAILED (exit ${rc})")
             return rc
         }
         i = i + 1
@@ -349,11 +341,7 @@ builder test(ctx: ptr) {
                 println("  PASS: ${s}")
                 passed = passed + 1
             } else {
-                // Forward-compat exit-code recovery — see bash.script for
-                // the full note. Drop once the os.system fix is universal.
-                exit_code = rc / 256
-                if exit_code == 0 { exit_code = rc }
-                println("  FAIL: ${s} (exit ${exit_code})")
+                println("  FAIL: ${s} (exit ${rc})")
                 failed = failed + 1
             }
             i = i + 1

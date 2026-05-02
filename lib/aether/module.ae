@@ -64,8 +64,8 @@ _resolve_aether_dir() {
 
 // Resolve the directory containing libaether.a — same probe order as
 // aeb-link's _resolve_libaether_dir (and Aether's tools/ae.c). Returns
-// the dir to pass to gcc's -L, or aether_dir as a last-resort fallback
-// (which preserves the historic behaviour for dev-tree installs).
+// the dir to pass to gcc's -L, or "" if no libaether.a found — caller
+// treats that as a misconfigured Aether install.
 _resolve_libaether_dir(aether_dir: string) {
     cand1 = string.concat(aether_dir, "/../lib/aether/libaether.a")
     if fs.exists(cand1) == 1 {
@@ -75,7 +75,11 @@ _resolve_libaether_dir(aether_dir: string) {
     if fs.exists(cand2) == 1 {
         return string.concat(aether_dir, "/../lib")
     }
-    return aether_dir
+    cand3 = string.concat(aether_dir, "/libaether.a")
+    if fs.exists(cand3) == 1 {
+        return aether_dir
+    }
+    return ""
 }
 
 // Resolve the Aether include root for nested-header installs. Same
@@ -228,6 +232,10 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
 
     // -L: prefer FHS lib/aether/libaether.a over flat dev-tree.
     lib_dir = _resolve_libaether_dir(ae_dir)
+    if string.length(lib_dir) == 0 {
+        println("${mod_dir}: libaether.a not found near ${ae_dir} — your Aether install looks incomplete")
+        return 1
+    }
 
     // -I: real installs nest headers under include/aether/{runtime,std}/...
     // Generated C uses bare #include names, so add -I for every dir.
