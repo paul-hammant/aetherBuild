@@ -1,0 +1,288 @@
+// Tests for the pure render helpers in tools/aeb-graph.ae.
+//
+// node_id and mermaid_id are pure path→identifier munging. dot_render
+// and mermaid_render take an edges-text string (the same format
+// aeb-main writes to target/_aeb/_edges.txt) and return a complete
+// graph file.
+//
+// Inlines the helpers because tests/run.sh builds with --lib lib/,
+// and tools/ isn't on that path. Same pattern as test_file_to_label.
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+extern println(s: string)
+
+// --- helpers under test (kept in lockstep with tools/aeb-graph.ae) ---
+
+node_id(path: string) {
+    return string.concat(string.concat("\"", path), "\"")
+}
+
+mermaid_id(path: string) {
+    n = string.length(path)
+    out = ""
+    i = 0
+    while i < n {
+        ch = string.substring(path, i, i + 1)
+        if string.equals(ch, "/") == 1 {
+            out = string.concat(out, "_")
+        } else {
+            if string.equals(ch, ".") == 1 {
+                out = string.concat(out, "_")
+            } else {
+                if string.equals(ch, "-") == 1 {
+                    out = string.concat(out, "_")
+                } else {
+                    out = string.concat(out, ch)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+_split_lines(buf: string) {
+    lines = list.new()
+    n = string.length(buf)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(buf, i, i + 1)
+        if string.equals(ch, "\n") == 1 {
+            line = string.substring(buf, start, i)
+            list.add(lines, line)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(lines, string.substring(buf, start, n))
+    }
+    return lines
+}
+
+_split_tokens(line: string) {
+    tokens = list.new()
+    n = string.length(line)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(line, i, i + 1)
+        if string.equals(ch, " ") == 1 {
+            if i > start {
+                list.add(tokens, string.substring(line, start, i))
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(tokens, string.substring(line, start, n))
+    }
+    return tokens
+}
+
+_collect_nodes(edges_text: string) {
+    nodes = list.new()
+    seen = map.new()
+    lines = _split_lines(edges_text)
+    n = list.size(lines)
+    i = 0
+    while i < n {
+        line, _ = list.get(lines, i)
+        if string.length(line) > 0 {
+            tokens = _split_tokens(line)
+            tn = list.size(tokens)
+            j = 0
+            while j < tn {
+                tok, _ = list.get(tokens, j)
+                if map.has(seen, tok) == 0 {
+                    list.add(nodes, tok)
+                    map.put(seen, tok, "1")
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return nodes
+}
+
+dot_render(edges_text: string) {
+    out = "digraph aeb {\n"
+    out = string.concat(out, "  rankdir=LR;\n")
+    out = string.concat(out, "  node [shape=box, fontname=\"Helvetica\"];\n")
+    nodes = _collect_nodes(edges_text)
+    nn = list.size(nodes)
+    k = 0
+    while k < nn {
+        node, _ = list.get(nodes, k)
+        out = string.concat(out, "  ")
+        out = string.concat(out, node_id(node))
+        out = string.concat(out, ";\n")
+        k = k + 1
+    }
+    lines = _split_lines(edges_text)
+    n = list.size(lines)
+    i = 0
+    while i < n {
+        line, _ = list.get(lines, i)
+        if string.length(line) > 0 {
+            tokens = _split_tokens(line)
+            tn = list.size(tokens)
+            if tn >= 1 {
+                src, _ = list.get(tokens, 0)
+                src_id = node_id(src)
+                j = 1
+                while j < tn {
+                    dep, _ = list.get(tokens, j)
+                    out = string.concat(out, "  ")
+                    out = string.concat(out, src_id)
+                    out = string.concat(out, " -> ")
+                    out = string.concat(out, node_id(dep))
+                    out = string.concat(out, ";\n")
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "}\n")
+    return out
+}
+
+mermaid_render(edges_text: string) {
+    out = "graph TD\n"
+    nodes = _collect_nodes(edges_text)
+    nn = list.size(nodes)
+    k = 0
+    while k < nn {
+        node, _ = list.get(nodes, k)
+        out = string.concat(out, "    ")
+        out = string.concat(out, mermaid_id(node))
+        out = string.concat(out, "[\"")
+        out = string.concat(out, node)
+        out = string.concat(out, "\"]\n")
+        k = k + 1
+    }
+    lines = _split_lines(edges_text)
+    n = list.size(lines)
+    i = 0
+    while i < n {
+        line, _ = list.get(lines, i)
+        if string.length(line) > 0 {
+            tokens = _split_tokens(line)
+            tn = list.size(tokens)
+            if tn >= 1 {
+                src, _ = list.get(tokens, 0)
+                src_id = mermaid_id(src)
+                j = 1
+                while j < tn {
+                    dep, _ = list.get(tokens, j)
+                    out = string.concat(out, "    ")
+                    out = string.concat(out, src_id)
+                    out = string.concat(out, " --> ")
+                    out = string.concat(out, mermaid_id(dep))
+                    out = string.concat(out, "\n")
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: '${expected}'")
+        println("  actual:   '${actual}'")
+    }
+}
+
+main() {
+    // --- node_id ---
+    _assert_eq("node_id: simple",
+        node_id("foo.ae"), "\"foo.ae\"")
+    _assert_eq("node_id: with dir",
+        node_id("ae/svnserver/.build.ae"), "\"ae/svnserver/.build.ae\"")
+    _assert_eq("node_id: with dash and tag",
+        node_id("ae/svnserver/.build-seed.ae"), "\"ae/svnserver/.build-seed.ae\"")
+    _assert_eq("node_id: empty",
+        node_id(""), "\"\"")
+
+    // --- mermaid_id: punctuation gets munged to _ ---
+    _assert_eq("mermaid_id: simple .ae",
+        mermaid_id("foo.ae"), "foo_ae")
+    _assert_eq("mermaid_id: nested path",
+        mermaid_id("ae/svnserver/.build.ae"), "ae_svnserver__build_ae")
+    _assert_eq("mermaid_id: dash in tag",
+        mermaid_id("ae/x/.build-seed.ae"), "ae_x__build_seed_ae")
+    _assert_eq("mermaid_id: empty",
+        mermaid_id(""), "")
+    _assert_eq("mermaid_id: alphanumerics survive",
+        mermaid_id("abc123XYZ"), "abc123XYZ")
+
+    // --- dot_render: empty edges → just the wrapper ---
+    _assert_eq("dot: empty",
+        dot_render(""),
+        "digraph aeb {\n  rankdir=LR;\n  node [shape=box, fontname=\"Helvetica\"];\n}\n")
+
+    // --- dot_render: single isolated target (no deps) ---
+    _assert_eq("dot: single isolated target",
+        dot_render("lib/.build.ae\n"),
+        "digraph aeb {\n  rankdir=LR;\n  node [shape=box, fontname=\"Helvetica\"];\n  \"lib/.build.ae\";\n}\n")
+
+    // --- dot_render: two-node edge ---
+    _assert_eq("dot: one edge",
+        dot_render("app/.build.ae lib/.build.ae\n"),
+        "digraph aeb {\n  rankdir=LR;\n  node [shape=box, fontname=\"Helvetica\"];\n  \"app/.build.ae\";\n  \"lib/.build.ae\";\n  \"app/.build.ae\" -> \"lib/.build.ae\";\n}\n")
+
+    // --- dot_render: realistic 3-node fan ---
+    edges3 = "app/.build.ae lib/.build.ae\ntests/.tests.ae app/.build.ae\n"
+    _assert_eq("dot: 3-node fan (lib<-app<-tests)",
+        dot_render(edges3),
+        "digraph aeb {\n  rankdir=LR;\n  node [shape=box, fontname=\"Helvetica\"];\n  \"app/.build.ae\";\n  \"lib/.build.ae\";\n  \"tests/.tests.ae\";\n  \"app/.build.ae\" -> \"lib/.build.ae\";\n  \"tests/.tests.ae\" -> \"app/.build.ae\";\n}\n")
+
+    // --- dot_render: multi-dep target ---
+    _assert_eq("dot: target with two deps",
+        dot_render("app/.build.ae lib1/.build.ae lib2/.build.ae\n"),
+        "digraph aeb {\n  rankdir=LR;\n  node [shape=box, fontname=\"Helvetica\"];\n  \"app/.build.ae\";\n  \"lib1/.build.ae\";\n  \"lib2/.build.ae\";\n  \"app/.build.ae\" -> \"lib1/.build.ae\";\n  \"app/.build.ae\" -> \"lib2/.build.ae\";\n}\n")
+
+    // --- mermaid_render: empty ---
+    _assert_eq("mermaid: empty",
+        mermaid_render(""), "graph TD\n")
+
+    // --- mermaid_render: single isolated target ---
+    _assert_eq("mermaid: single isolated target",
+        mermaid_render("lib/.build.ae\n"),
+        "graph TD\n    lib__build_ae[\"lib/.build.ae\"]\n")
+
+    // --- mermaid_render: two-node edge ---
+    _assert_eq("mermaid: one edge",
+        mermaid_render("app/.build.ae lib/.build.ae\n"),
+        "graph TD\n    app__build_ae[\"app/.build.ae\"]\n    lib__build_ae[\"lib/.build.ae\"]\n    app__build_ae --> lib__build_ae\n")
+
+    // --- mermaid_render: realistic 3-node fan ---
+    _assert_eq("mermaid: 3-node fan (lib<-app<-tests)",
+        mermaid_render(edges3),
+        "graph TD\n    app__build_ae[\"app/.build.ae\"]\n    lib__build_ae[\"lib/.build.ae\"]\n    tests__tests_ae[\"tests/.tests.ae\"]\n    app__build_ae --> lib__build_ae\n    tests__tests_ae --> app__build_ae\n")
+
+    // --- mermaid_render: tag-disambiguated build files ---
+    _assert_eq("mermaid: tagged .build-seed.ae node",
+        mermaid_render("ae/svnserver/.build-seed.ae\n"),
+        "graph TD\n    ae_svnserver__build_seed_ae[\"ae/svnserver/.build-seed.ae\"]\n")
+
+    println("aeb-graph render tests done")
+}

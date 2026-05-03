@@ -56,4 +56,4 @@ AEB_MAIN_BIN="$AEB_HOME/tools/aeb-main"
 if [[ ! -x "$AEB_MAIN_BIN" ]]; then
     "$AETHER" build "$AEB_HOME/tools/aeb-main.ae" -o "$AEB_MAIN_BIN" 2>/dev/null
 fi
-exec "$AEB_MAIN_BIN" "$AETHER" "$AEB_HOME" "$ROOT" "${1:-}"
+exec "$AEB_MAIN_BIN" "$AETHER" "$AEB_HOME" "$ROOT" "${1:-}" "${2:-}"

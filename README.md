@@ -188,6 +188,30 @@ aeb: 18 compile + 2 dist + 17 test
 javatests/components/vowelbase: tests PASSED
 ```
 
+### Build graph visualisation (`aeb --graph`)
+
+`aeb --graph` emits the build-file DAG as a graphviz DOT description
+on stdout. `aeb --graph mermaid` emits a Mermaid flowchart suitable
+for Markdown.
+
+```bash
+# Render to SVG via graphviz
+aeb --graph | dot -Tsvg > deps.svg
+
+# Render to PNG
+aeb --graph | dot -Tpng > deps.png
+
+# Embed in Markdown via Mermaid (renders inline on GitHub)
+aeb --graph mermaid > deps.md
+```
+
+The graph reflects exactly what the build pipeline sees: every
+dot-prefixed `.ae` target under cwd, with edges drawn from each
+`build.dep("path/.foo.ae")` line. No render-only data; this is the
+authoritative DAG. Useful for debugging "why isn't X depending on
+Y", reviewing dep changes in a PR, or onboarding someone to a
+monorepo's structure.
+
 ## Dependencies
 
 Every dependency — local module, third-party library, Maven coordinate, npm

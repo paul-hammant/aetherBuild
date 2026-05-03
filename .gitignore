@@ -9,6 +9,7 @@ tools/*.c
 tools/aeb-init
 tools/aeb-link
 tools/aeb-main
+tools/aeb-graph
 tools/encode-name
 tools/extract-deps
 tools/file-to-label

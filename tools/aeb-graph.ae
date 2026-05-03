@@ -1,0 +1,269 @@
+// aeb-graph — render the build-file DAG as DOT or Mermaid.
+//
+// Reads an edges file in the same format aeb-main writes
+// (target/_aeb/_edges.txt) — one line per build file, formatted as
+// `<file> <space-separated dep paths>`. Emits a graph description on
+// stdout suitable for piping to graphviz (`dot -Tsvg`) or pasting into
+// a Markdown file (Mermaid mode renders inline on GitHub).
+//
+// Usage: aeb-graph <edges-file> [dot|mermaid]
+//
+// Default format is DOT. `mermaid` emits a `graph TD` Mermaid flowchart.
+//
+// Pure helpers (node_id, mermaid_id, dot_render, mermaid_render) are
+// covered by tests/test_aeb_graph.ae.
+
+import std.string
+import std.file
+import std.fs
+import std.io
+import std.os
+import std.list
+import std.map
+
+extern println(s: string)
+extern exit(code: int)
+
+// Convert a file path to a DOT-safe identifier. DOT IDs containing /
+// or . need quoting; the simplest safe form is to wrap in double
+// quotes and escape any embedded quotes (rare in build paths).
+node_id(path: string) {
+    return string.concat(string.concat("\"", path), "\"")
+}
+
+// Convert a file path to a Mermaid-safe identifier. Mermaid IDs are
+// strict: no /, no ., no -. Replace each disallowed char with _.
+// The display label is rendered separately via id["label"] so the
+// munged ID is only ever a graph internal.
+mermaid_id(path: string) {
+    n = string.length(path)
+    out = ""
+    i = 0
+    while i < n {
+        ch = string.substring(path, i, i + 1)
+        if string.equals(ch, "/") == 1 {
+            out = string.concat(out, "_")
+        } else {
+            if string.equals(ch, ".") == 1 {
+                out = string.concat(out, "_")
+            } else {
+                if string.equals(ch, "-") == 1 {
+                    out = string.concat(out, "_")
+                } else {
+                    out = string.concat(out, ch)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Split a buffer on '\n' into a list. Trailing empty line ignored.
+_split_lines(buf: string) {
+    lines = list.new()
+    n = string.length(buf)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(buf, i, i + 1)
+        if string.equals(ch, "\n") == 1 {
+            line = string.substring(buf, start, i)
+            list.add(lines, line)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(lines, string.substring(buf, start, n))
+    }
+    return lines
+}
+
+// Split a single edges line "<file> <dep1> <dep2> ..." into a list.
+// First token is the source; remainder are deps. Returns the list
+// (always at least one element if the line is non-empty).
+_split_tokens(line: string) {
+    tokens = list.new()
+    n = string.length(line)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(line, i, i + 1)
+        if string.equals(ch, " ") == 1 {
+            if i > start {
+                list.add(tokens, string.substring(line, start, i))
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(tokens, string.substring(line, start, n))
+    }
+    return tokens
+}
+
+// Walk the parsed edges and collect every node that appears either
+// as a source (line head) or a referenced dep. Used for the node-
+// declaration section of the graph (Mermaid needs explicit nodes
+// with display labels; DOT can also use them but doesn't require it).
+_collect_nodes(edges_text: string) {
+    nodes = list.new()
+    seen = map.new()
+    lines = _split_lines(edges_text)
+    n = list.size(lines)
+    i = 0
+    while i < n {
+        line, _ = list.get(lines, i)
+        if string.length(line) > 0 {
+            tokens = _split_tokens(line)
+            tn = list.size(tokens)
+            j = 0
+            while j < tn {
+                tok, _ = list.get(tokens, j)
+                if map.has(seen, tok) == 0 {
+                    list.add(nodes, tok)
+                    map.put(seen, tok, "1")
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return nodes
+}
+
+// Render the edges text as a DOT digraph. Output is a complete file
+// (digraph + brace block + nodes + edges + closing brace) suitable for
+// piping to graphviz `dot`. Nodes are explicitly declared (DOT would
+// auto-declare from edge usage, but explicit lines make per-node
+// styling/attribute additions trivial later).
+dot_render(edges_text: string) {
+    out = "digraph aeb {\n"
+    out = string.concat(out, "  rankdir=LR;\n")
+    out = string.concat(out, "  node [shape=box, fontname=\"Helvetica\"];\n")
+
+    nodes = _collect_nodes(edges_text)
+    nn = list.size(nodes)
+    k = 0
+    while k < nn {
+        node, _ = list.get(nodes, k)
+        out = string.concat(out, "  ")
+        out = string.concat(out, node_id(node))
+        out = string.concat(out, ";\n")
+        k = k + 1
+    }
+
+    lines = _split_lines(edges_text)
+    n = list.size(lines)
+    i = 0
+    while i < n {
+        line, _ = list.get(lines, i)
+        if string.length(line) > 0 {
+            tokens = _split_tokens(line)
+            tn = list.size(tokens)
+            if tn >= 1 {
+                src, _ = list.get(tokens, 0)
+                src_id = node_id(src)
+                j = 1
+                while j < tn {
+                    dep, _ = list.get(tokens, j)
+                    out = string.concat(out, "  ")
+                    out = string.concat(out, src_id)
+                    out = string.concat(out, " -> ")
+                    out = string.concat(out, node_id(dep))
+                    out = string.concat(out, ";\n")
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "}\n")
+    return out
+}
+
+// Render the edges text as a Mermaid flowchart. Output is a complete
+// `graph TD` block suitable for embedding in a Markdown ```mermaid
+// fence. Node IDs are munged (no / or . allowed); display labels
+// preserve the original path via `id["path"]` declarations.
+mermaid_render(edges_text: string) {
+    out = "graph TD\n"
+
+    // Emit node declarations with display labels first, so the
+    // edges below render against named nodes rather than introducing
+    // anonymous ones with no label.
+    nodes = _collect_nodes(edges_text)
+    nn = list.size(nodes)
+    k = 0
+    while k < nn {
+        node, _ = list.get(nodes, k)
+        out = string.concat(out, "    ")
+        out = string.concat(out, mermaid_id(node))
+        out = string.concat(out, "[\"")
+        out = string.concat(out, node)
+        out = string.concat(out, "\"]\n")
+        k = k + 1
+    }
+
+    lines = _split_lines(edges_text)
+    n = list.size(lines)
+    i = 0
+    while i < n {
+        line, _ = list.get(lines, i)
+        if string.length(line) > 0 {
+            tokens = _split_tokens(line)
+            tn = list.size(tokens)
+            if tn >= 1 {
+                src, _ = list.get(tokens, 0)
+                src_id = mermaid_id(src)
+                j = 1
+                while j < tn {
+                    dep, _ = list.get(tokens, j)
+                    out = string.concat(out, "    ")
+                    out = string.concat(out, src_id)
+                    out = string.concat(out, " --> ")
+                    out = string.concat(out, mermaid_id(dep))
+                    out = string.concat(out, "\n")
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+main() {
+    argc = aether_args_count()
+    if argc < 2 {
+        println("Usage: aeb-graph <edges-file> [dot|mermaid]")
+        exit(1)
+    }
+    edges_path = aether_args_get(1)
+    format = "dot"
+    if argc >= 3 {
+        f = aether_args_get(2)
+        if string.length(f) > 0 { format = f }
+    }
+
+    edges_text, _err = fs.read(edges_path)
+    if string.length(edges_text) == 0 {
+        println("aeb-graph: no edges to render (empty or missing edges file)")
+        exit(1)
+    }
+
+    out = ""
+    if string.equals(format, "mermaid") == 1 {
+        out = mermaid_render(edges_text)
+    } else {
+        if string.equals(format, "dot") == 1 {
+            out = dot_render(edges_text)
+        } else {
+            println(string.concat("aeb-graph: unknown format: ", format))
+            exit(1)
+        }
+    }
+    println(out)
+}

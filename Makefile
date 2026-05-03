@@ -11,11 +11,11 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 SHAREDIR ?= $(PREFIX)/share/aeb
 
-TOOLS := tools/aeb-main tools/aeb-init tools/aeb-link tools/gcheckout
+TOOLS := tools/aeb-main tools/aeb-init tools/aeb-link tools/aeb-graph tools/gcheckout
 # tools/gcheckout currently fails to link against the Aether stdlib
 # (extern symbols not pulled in); the trampoline will lazy-build it
 # at first use. Install only requires the tools that build cleanly.
-INSTALL_TOOLS := tools/aeb-main tools/aeb-init tools/aeb-link
+INSTALL_TOOLS := tools/aeb-main tools/aeb-init tools/aeb-link tools/aeb-graph
 
 .PHONY: all build install uninstall clean
 
@@ -30,6 +30,9 @@ tools/aeb-init: tools/aeb-init.ae
 	$(AETHER) build $< -o $@
 
 tools/aeb-link: tools/aeb-link.ae
+	$(AETHER) build $< -o $@
+
+tools/aeb-graph: tools/aeb-graph.ae
 	$(AETHER) build $< -o $@
 
 tools/gcheckout: tools/gcheckout.ae

@@ -68,27 +68,50 @@ main() {
     aether_bin = aether_args_get(1)
     aebhome    = aether_args_get(2)
     root       = aether_args_get(3)
+
+    // argv[4] is either a target path (compile this and its deps) or
+    // a `--<flag>` (modal action that uses the same scan/extract
+    // pipeline as a build but exits before linking). argv[5] is an
+    // optional flag argument (currently only `--graph <format>`).
     target = string.concat("", "")
+    flag = string.concat("", "")
+    flag_arg = string.concat("", "")
     if aether_args_count() >= 5 {
-        target = strip_trailing_slash(aether_args_get(4))
+        a4 = aether_args_get(4)
+        if string.length(a4) >= 2 {
+            if string.equals(string.substring(a4, 0, 2), "--") == 1 {
+                flag = a4
+            } else {
+                target = strip_trailing_slash(a4)
+            }
+        } else {
+            target = strip_trailing_slash(a4)
+        }
+    }
+    if aether_args_count() >= 6 {
+        flag_arg = aether_args_get(5)
     }
 
     // --- Lazy-build helper tools ---
     extract_deps_bin = string.concat(aebhome, "/tools/extract-deps")
     if file.exists(extract_deps_bin) == 0 {
-        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/extract-deps.ae -o "), string.concat(extract_deps_bin, " 2>/dev/null"))))
+        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/extract-deps.ae -o "), string.concat(extract_deps_bin, " >/dev/null 2>&1"))))
     }
     scan_ae_files_bin = string.concat(aebhome, "/tools/scan-ae-files")
     if file.exists(scan_ae_files_bin) == 0 {
-        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/scan-ae-files.ae -o "), string.concat(scan_ae_files_bin, " 2>/dev/null"))))
+        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/scan-ae-files.ae -o "), string.concat(scan_ae_files_bin, " >/dev/null 2>&1"))))
     }
     topo_sort_bin = string.concat(aebhome, "/tools/topo-sort")
     if file.exists(topo_sort_bin) == 0 {
-        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/topo-sort.ae -o "), string.concat(topo_sort_bin, " 2>/dev/null"))))
+        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/topo-sort.ae -o "), string.concat(topo_sort_bin, " >/dev/null 2>&1"))))
     }
     aeb_link_bin = string.concat(aebhome, "/tools/aeb-link")
     if file.exists(aeb_link_bin) == 0 {
-        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/aeb-link.ae -o "), string.concat(aeb_link_bin, " 2>/dev/null"))))
+        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/aeb-link.ae -o "), string.concat(aeb_link_bin, " >/dev/null 2>&1"))))
+    }
+    aeb_graph_bin = string.concat(aebhome, "/tools/aeb-graph")
+    if file.exists(aeb_graph_bin) == 0 {
+        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/aeb-graph.ae -o "), string.concat(aeb_graph_bin, " >/dev/null 2>&1"))))
     }
 
     // --- Discover the file set ---
@@ -213,6 +236,17 @@ main() {
     if werr != "" {
         println(string.concat("aeb-main: ", werr))
         exit(1)
+    }
+
+    // --- --graph: emit DAG as DOT or Mermaid, then exit ---
+    if string.equals(flag, "--graph") == 1 {
+        gfmt = "dot"
+        if string.length(flag_arg) > 0 { gfmt = flag_arg }
+        gcmd = string.concat(string.concat(aeb_graph_bin, " "), edges_path)
+        gcmd = string.concat(gcmd, " ")
+        gcmd = string.concat(gcmd, gfmt)
+        os.system(gcmd)
+        return 0
     }
 
     // --- Run topo-sort, capture output, write sorted edges file ---

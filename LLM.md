@@ -128,7 +128,7 @@ status" is the unembellished current state, not the roadmap.
 | Lockfiles for reproducibility      | Pin every transitive dep to exact version + hash                | ✗ TODO. Resolver computes the closure but doesn't write/check a lockfile.                                |
 | Test orchestration                 | Discover, run, report, parallelise, isolate                     | ◐ Partial. `bash.test` (jobs/pre/post hooks), `*.junit5` etc. exist; structured XML reports TODO.       |
 | Artifact publishing                | Push to npm / Maven Central / NuGet feed / OCI registry         | ✗ TODO. `shade()` builds fat jars; no `.dist`-side publish step yet.                                    |
-| Build graph visualisation          | DOT / Mermaid / interactive graph                               | ✗ TODO. Graph is computed, just no render path.                                                          |
+| Build graph visualisation          | DOT / Mermaid / interactive graph                               | ✓ Done. `aeb --graph` (DOT) / `aeb --graph mermaid`. Pipe to `dot -Tsvg` or paste into a Markdown fence. |
 | IDE / LSP integration              | Editor knows about build targets, jump-to-source                | ✗ TODO. No `aeb-lsp` yet; `.build.ae` files use the Aether LSP for syntax only.                          |
 | Watch mode                         | Rebuild on file change                                          | ✗ TODO. Roadmap entry (`aeb --watch`).                                                                   |
 | Sandboxing / isolation             | Build steps see only declared inputs                            | ✗ TODO. Aether's runtime sandbox is per-process, not per-build-step. Roadmap.                            |
@@ -179,6 +179,10 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
 - `tools/aeb-link.ae` — the per-build orchestration. THE largest
   Aether file. If a build fails between scan and link, the bug is
   here.
+- `tools/aeb-graph.ae` — `aeb --graph` renderer. Reads
+  `target/_aeb/_edges.txt` and emits DOT (default) or Mermaid.
+  Pure-render: no I/O beyond reading the edges file. Pattern model
+  for future render-from-edges tools (e.g. telemetry).
 - `tools/file-to-label.ae` / `tools/aeb-link.ae` / `tools/gen-orchestrator.ae`
   — three copies of the `file_to_label` logic that disambiguates
   multiple `.build*.ae` per directory. **They must stay in sync.**
