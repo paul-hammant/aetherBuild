@@ -600,6 +600,21 @@ aether.program(b) {                   // extra_source_glob expands a glob at
     extra_source_glob("gen/*.c")      //   matched files invalidates the cache.
 }
 aether.program_test(b) { ... }        // same as program, plus runs the binary
+
+aether.driver_test(b) {               // Aether driver program that exercises a
+    driver("test_svn_driver.ae")      //   *separate* compiled binary built
+    output("svn_driver")              //   elsewhere in the graph (e.g. a server,
+    binary_under_test("svn",          //   a CLI). The driver imports
+                       "target/svn/bin/svn") //   contrib.aeocha (or whatever),
+                                      //   spawns $SVN_BIN via os.run_capture,
+    fixture_seed("primary",           //   asserts about its output. Same fixture
+                  "/tmp/svnae_repo",  //   grammar as bash.test (fixture_seed /
+                  "")                 //   fixture_server) — env vars exposed to
+    fixture_server("primary",         //   the driver are $PRIMARY_REPO,
+                    "$PRIMARY_BIN",   //   $PRIMARY_PORT, $PRIMARY_BIN, $PRIMARY_PID,
+                    "demo $PRIMARY_REPO 9540", // plus $<NAME>_BIN for each
+                    9540, 1500)       //   binary_under_test. Driver's exit code
+}                                     //   is the PASS/FAIL signal.
 ```
 
 > **Note on the two `import` lines.** Aether resolves identifiers

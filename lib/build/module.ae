@@ -613,6 +613,74 @@ _synth_fixture_post(seeds: ptr, servers: ptr) {
     return out
 }
 
+// _exec_chain_cmd(pre_cmds, exec_cmd, post_cmds) — wrap an
+// executable invocation with optional pre/post shell statements.
+// Returns a single command string suitable for `os.system`.
+//
+// Shape (pre/post present):
+//   bash -c '<pre1>; <pre2>; ...; <exec_cmd>; rc=$?; <post1>; ...; exit $rc'
+//
+// Shape (no pre/post):
+//   <exec_cmd>
+//
+// Semantics:
+//   - pre and post commands are joined with `;` (not `&&`), so a
+//     failing pre does NOT abort the script and a failing post
+//     does NOT change the result. Cleanup always runs.
+//   - The exec's exit code is captured into `rc=$?` immediately and
+//     re-exited at the end, so post commands can't accidentally
+//     mask a real test failure.
+//
+// `exec_cmd` is the middle command — typically `bash <script>` for
+// bash.test or `"<bin_path>"` for compiled-binary test runners. The
+// caller is responsible for any quoting needed inside exec_cmd.
+//
+// Quoting note: pre_cmds, exec_cmd, and post_cmds are inserted
+// verbatim into the bash -c '...' body. Single-quotes inside any
+// of them will close the outer quote prematurely. For commands
+// that need apostrophes, source a separate .sh file.
+//
+// pre_cmds and post_cmds are lists of strings; either may be empty
+// or null. Pure: just string assembly. Tested in
+// tests/test_bash_chain_cmd.ae (via bash_chain_cmd).
+_exec_chain_cmd(pre_cmds: ptr, exec_cmd: string, post_cmds: ptr) {
+    pre_n = 0
+    if pre_cmds != null { pre_n = list.size(pre_cmds) }
+    post_n = 0
+    if post_cmds != null { post_n = list.size(post_cmds) }
+
+    if pre_n == 0 {
+        if post_n == 0 {
+            return exec_cmd
+        }
+    }
+
+    dol_q  = string.concat("$", "?")
+    dol_rc = string.concat("$", "rc")
+
+    body = ""
+    i = 0
+    while i < pre_n {
+        c, _ = list.get(pre_cmds, i)
+        body = string.concat(body, c)
+        body = string.concat(body, "; ")
+        i = i + 1
+    }
+    body = string.concat(body, exec_cmd)
+    body = string.concat(body, "; rc=")
+    body = string.concat(body, dol_q)
+    j = 0
+    while j < post_n {
+        pc, _ = list.get(post_cmds, j)
+        body = string.concat(body, "; ")
+        body = string.concat(body, pc)
+        j = j + 1
+    }
+    body = string.concat(body, "; exit ")
+    body = string.concat(body, dol_rc)
+    return "bash -c '${body}'"
+}
+
 // _has_fixtures(builder_map) — does the builder map declare any
 // fixture_seed or fixture_server? Read by SDK builders to decide
 // whether to lower fixtures into pre/post shell chains.

@@ -26,6 +26,77 @@ output(_ctx: ptr, bin_name: string) {
     _e = map.put(_ctx, "output", bin_name)
 }
 
+// driver(file) — alias for source(...) in the aether.driver_test
+// closure. Reads more naturally there: "this is the driver, not
+// the program-under-test." source(...) also works; both write the
+// same map key.
+driver(_ctx: ptr, file_name: string) {
+    _e = map.put(_ctx, "source", file_name)
+}
+
+// binary_under_test(name, path) — declare a binary built by an
+// upstream `build.dep` that the driver needs to spawn. The path is
+// resolved relative to the workspace root. The driver sees:
+//
+//   $<NAME>_BIN     — the resolved absolute path
+//
+// where NAME is the uppercased fixture name (`svn` → `SVN_BIN`,
+// `svn-admin` → `SVN-ADMIN_BIN`). Repeated calls accumulate.
+//
+// Use case: an Aether driver test that exercises an out-of-process
+// binary (e.g. a compiled server, a CLI built elsewhere in the
+// graph). The driver does `os.run_capture(getenv("SVN_BIN"), ...)`.
+//
+// aeb verifies the path exists at runtime and bails with a clear
+// error if not — usually a sign of a missing `build.dep`.
+binary_under_test(_ctx: ptr, name: string, bin_path: string) {
+    if map.has(_ctx, "binaries_under_test") == 0 {
+        _e1 = map.put(_ctx, "binaries_under_test", list.new())
+    }
+    buts, _ = map.get(_ctx, "binaries_under_test")
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, bin_path)
+    _e2 = list.add(buts, rec)
+}
+
+// fixture_seed / fixture_server — same shape as bash.test's
+// setters (see lib/bash/module.ae). Records pack into the same
+// "fixture_seeds" / "fixture_servers" map keys consumed by
+// build._synth_fixture_pre / _synth_fixture_post; the driver
+// builder lowers them into pre/post shell statements that wrap
+// the driver-binary invocation. Each fixture name is uppercased
+// for env-var prefixes ($PRIMARY_REPO, $PRIMARY_PORT, etc) and
+// sees the standard $<NAME>_REPO / $<NAME>_BIN / $<NAME>_PORT /
+// $<NAME>_PID exports.
+fixture_seed(_ctx: ptr, name: string, repo: string, seed_bin: string) {
+    if map.has(_ctx, "fixture_seeds") == 0 {
+        _e1 = map.put(_ctx, "fixture_seeds", list.new())
+    }
+    seeds, _ = map.get(_ctx, "fixture_seeds")
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, repo)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, seed_bin)
+    _e2 = list.add(seeds, rec)
+}
+
+fixture_server(_ctx: ptr, name: string, bin: string, args: string,
+               port: int, ready_after_ms: int) {
+    if map.has(_ctx, "fixture_servers") == 0 {
+        _e1 = map.put(_ctx, "fixture_servers", list.new())
+    }
+    servers, _ = map.get(_ctx, "fixture_servers")
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, bin)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, args)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, string.from_int(port))
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, string.from_int(ready_after_ms))
+    _e2 = list.add(servers, rec)
+}
+
 // extra_source(c_path) — append one C file to the manual-link list.
 // Repeated calls accumulate. Presence of any extra_source opts the
 // builder out of the `ae build` shell-out (which would read these
@@ -924,5 +995,198 @@ builder program_test(ctx: ptr) {
     }
     build._record_test_result(ctx, 1, 0)
     println("${mod_dir}: tests PASSED")
+    return 0
+}
+
+// aether.driver_test(b) — like program_test, but with binaries-
+// under-test exposed as env vars and the build.fixture lifecycle
+// (seed dirs / spawn servers / kill on cleanup) wrapped around the
+// driver invocation.
+//
+// Use case: an Aether driver program (typically using
+// contrib.aeocha) that drives a *separate* compiled binary built
+// elsewhere in the build graph. The driver imports
+// `contrib.aeocha`, calls os.run_capture(getenv("X_BIN"), ...) to
+// spawn the binary-under-test, and asserts about its output.
+//
+// Lifecycle (per driver invocation):
+//   1. Compile the driver .ae into a binary (same path as
+//      program_test does).
+//   2. Verify each binary_under_test path exists on disk.
+//   3. Run synthesized fixture-pre statements (seed dirs, spawn
+//      servers, sleep ready_after_ms).
+//   4. Export $<NAME>_BIN for each binary_under_test.
+//   5. Run the driver binary with all env vars set.
+//   6. Run synthesized fixture-post (kill servers, rm dirs).
+//   7. Driver's exit code → PASS (0) / FAIL (non-zero).
+//
+// Pairs with the bash.test fixture grammar — the same
+// fixture_seed / fixture_server setters work in both closures
+// because they write to the same map keys consumed by
+// build._synth_fixture_pre/_post.
+//
+// What this is NOT:
+//   - A test discovery mechanism. One driver per .tests-*.ae,
+//     same shape as program_test.
+//   - An Aeocha integration. The driver imports contrib.aeocha;
+//     aeb doesn't know it exists. Exit-code is the pass/fail
+//     signal.
+//   - A replacement for program_test. Pure-Aether unit tests
+//     stay on program_test. driver_test is for tests *driving a
+//     separate binary*.
+builder driver_test(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    root = build._get(ctx, "root")
+
+    bin_dir = path.join(target_dir, "bin")
+    build._mkdirs(bin_dir)
+
+    // Driver source: prefer explicit, fall back to default
+    // (same convention as program_test).
+    src_name = _default_source_name(ctx)
+    if _builder != null {
+        if map.has(_builder, "source") == 1 {
+            src_name, _ = map.get(_builder, "source")
+        }
+    }
+    src_path = path.join(source_dir, src_name)
+
+    // Output binary: prefer explicit, default to "driver_test"
+    // (program_test uses "test_program"; the rename signals
+    // "this drives an out-of-process binary," not "this is the
+    // program under test").
+    out_name = "driver_test"
+    if _builder != null {
+        if map.has(_builder, "output") == 1 {
+            out_name, _ = map.get(_builder, "output")
+        }
+    }
+    bin_path = path.join(bin_dir, out_name)
+    c_path = path.join(target_dir, string.concat(out_name, ".c"))
+
+    println("${mod_dir}: compiling Aether driver")
+    rc = _build_binary(ctx, _builder, src_path, bin_path, c_path)
+    if rc != 0 {
+        build._record_test_result(ctx, 0, 1)
+        println("${mod_dir}: driver FAILED (compile)")
+        return rc
+    }
+
+    // Validate binaries-under-test exist. Resolve relative paths
+    // against the workspace root so users can write
+    // `binary_under_test("svn", "target/svn/bin/svn")`.
+    buts = null
+    if _builder != null {
+        if map.has(_builder, "binaries_under_test") == 1 {
+            buts, _ = map.get(_builder, "binaries_under_test")
+        }
+    }
+    but_exports = list.new()
+    if buts != null {
+        bn = list.size(buts)
+        i = 0
+        while i < bn {
+            rec, _ = list.get(buts, i)
+            f = build._split_tabs(rec, 2)
+            name, _ = list.get(f, 0)
+            decl_path, _ = list.get(f, 1)
+            // Resolve relative to workspace root.
+            resolved = decl_path
+            if string.length(decl_path) > 0 {
+                first = string.substring(decl_path, 0, 1)
+                if string.equals(first, "/") == 0 {
+                    resolved = path.join(root, decl_path)
+                }
+            }
+            if file.exists(resolved) == 0 {
+                println("${mod_dir}: binary_under_test \"${name}\" not found at ${resolved}")
+                println("${mod_dir}: did you forget a build.dep on the producing module?")
+                build._record_test_result(ctx, 0, 1)
+                return 1
+            }
+            up = build._upper_ascii_word(name)
+            // Render `export <UP>_BIN="<resolved>"` — a single
+            // shell statement that fits into the pre slot.
+            line = string.concat("export ", up)
+            line = string.concat(line, "_BIN=\"")
+            line = string.concat(line, resolved)
+            line = string.concat(line, "\"")
+            list.add(but_exports, line)
+            i = i + 1
+        }
+    }
+
+    // Pull fixture records, synth pre/post, prepend the
+    // binary_under_test exports so they're visible to fixture
+    // server `args` strings (a fixture might want to receive a
+    // path to a binary-under-test on its command line).
+    fixture_seeds = null
+    fixture_servers = null
+    if _builder != null {
+        if map.has(_builder, "fixture_seeds") == 1 {
+            fixture_seeds, _ = map.get(_builder, "fixture_seeds")
+        }
+        if map.has(_builder, "fixture_servers") == 1 {
+            fixture_servers, _ = map.get(_builder, "fixture_servers")
+        }
+    }
+    pre_cmds = list.new()
+    post_cmds = list.new()
+    bn = list.size(but_exports)
+    i = 0
+    while i < bn {
+        line, _ = list.get(but_exports, i)
+        list.add(pre_cmds, line)
+        i = i + 1
+    }
+    if build._has_fixtures(_builder) == 1 {
+        fpre = build._synth_fixture_pre(fixture_seeds, fixture_servers)
+        fpost = build._synth_fixture_post(fixture_seeds, fixture_servers)
+        fn = list.size(fpre)
+        i = 0
+        while i < fn {
+            line, _ = list.get(fpre, i)
+            list.add(pre_cmds, line)
+            i = i + 1
+        }
+        fpn = list.size(fpost)
+        i = 0
+        while i < fpn {
+            line, _ = list.get(fpost, i)
+            list.add(post_cmds, line)
+            i = i + 1
+        }
+    }
+
+    // The middle of the chain is the driver invocation. Wrap the
+    // bin_path in double-quotes so spaces in the path survive.
+    // shared_libs from upstream Rust cdylib deps still work — we
+    // prepend the dyld env var the same way program_test does.
+    shared_libs = _collect_shared_libs(ctx)
+    ld_path = _collect_ld_path(shared_libs)
+    exec_cmd = string.concat("\"", bin_path)
+    exec_cmd = string.concat(exec_cmd, "\"")
+    if string.length(ld_path) > 0 {
+        dyld_var = build._dyld_env_var()
+        // `<DYLD_VAR>="${ld_path}" "<bin_path>"`
+        exec_cmd = string.concat(dyld_var, "=\"")
+        exec_cmd = string.concat(exec_cmd, ld_path)
+        exec_cmd = string.concat(exec_cmd, "\" \"")
+        exec_cmd = string.concat(exec_cmd, bin_path)
+        exec_cmd = string.concat(exec_cmd, "\"")
+    }
+
+    println("${mod_dir}: running Aether driver")
+    full_cmd = build._exec_chain_cmd(pre_cmds, exec_cmd, post_cmds)
+    rc = os.system(full_cmd)
+    if rc != 0 {
+        build._record_test_result(ctx, 0, 1)
+        println("${mod_dir}: driver FAILED")
+        return rc
+    }
+    build._record_test_result(ctx, 1, 0)
+    println("${mod_dir}: driver PASSED")
     return 0
 }

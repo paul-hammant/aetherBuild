@@ -203,38 +203,7 @@ fixture_server(_ctx: ptr, name: string, bin: string, args: string,
 // or null. Pure: just string assembly. Tested in
 // tests/test_bash_chain_cmd.ae.
 bash_chain_cmd(pre_cmds: ptr, script_path: string, post_cmds: ptr) {
-    pre_n = 0
-    if pre_cmds != null { pre_n = list.size(pre_cmds) }
-    post_n = 0
-    if post_cmds != null { post_n = list.size(post_cmds) }
-
-    if pre_n == 0 {
-        if post_n == 0 {
-            return "bash ${script_path}"
-        }
-    }
-
-    dol_q  = string.concat("$", "?")
-    dol_rc = string.concat("$", "rc")
-
-    body = ""
-    i = 0
-    while i < pre_n {
-        c, _ = list.get(pre_cmds, i)
-        body = string.concat(body, c)
-        body = string.concat(body, "; ")
-        i = i + 1
-    }
-    body = string.concat(body, "bash ${script_path}; rc=${dol_q}")
-    j = 0
-    while j < post_n {
-        pc, _ = list.get(post_cmds, j)
-        body = string.concat(body, "; ")
-        body = string.concat(body, pc)
-        j = j + 1
-    }
-    body = string.concat(body, "; exit ${dol_rc}")
-    return "bash -c '${body}'"
+    return build._exec_chain_cmd(pre_cmds, "bash ${script_path}", post_cmds)
 }
 
 // Build the xargs pipeline for parallel test dispatch. Pure: just

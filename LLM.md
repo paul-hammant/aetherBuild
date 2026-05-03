@@ -217,7 +217,11 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
 - `lib/aether/module.ae` — the Aether-program SDK.
   `aether.program(b)` shells out to `ae build` by default; declaring
   `extra_source(...)` / `link_flag(...)` / `regen(...)` opts into the
-  manual `aetherc + gcc` path.
+  manual `aetherc + gcc` path. Also hosts `aether.program_test` (a
+  compiled-binary unit test) and `aether.driver_test` (a compiled
+  driver binary that exercises a *separate* binary-under-test, with
+  the same fixture grammar as `bash.test`). Driver tests work with
+  contrib.aeocha or anything that uses exit code as PASS/FAIL.
 - `lib/bash/module.ae` — bash test runner. `bash.test(b)` with
   `script(...)`, `jobs(N)`, `pre_command(...)`, `post_command(...)`,
   and structured server fixtures (`fixture_seed`, `fixture_server`).

@@ -12,7 +12,7 @@ import std.map
 import std.path
 import std.dir
 
-import build
+import build (_exec_chain_cmd)
 import bash (bash_chain_cmd)
 
 _assert_eq(label: string, actual: string, expected: string) {
@@ -106,6 +106,29 @@ main() {
     _assert_eq("realistic svn-shaped fixture",
         bash_chain_cmd(pres, "/repo/ae/svn/test_acl.sh", posts),
         "bash -c 'rm -rf /tmp/svnae_repo; /repo/target/.../svnae-seed /tmp/svnae_repo; bash /repo/ae/svn/test_acl.sh; rc=$?; kill $SRV 2>/dev/null || true; rm -rf /tmp/svnae_repo; exit $rc'")
+
+    // --- _exec_chain_cmd (the lifted, bash-agnostic helper) ---
+    // Same shape as bash_chain_cmd but the middle slot is an
+    // arbitrary command, not "bash <script>". Used by
+    // aether.driver_test which invokes a compiled binary directly.
+
+    _assert_eq("exec_chain: no hooks → exec_cmd verbatim",
+        _exec_chain_cmd(null, "\"/path/to/driver\"", null),
+        "\"/path/to/driver\"")
+
+    _assert_eq("exec_chain: pre+post wraps exec_cmd",
+        _exec_chain_cmd(_lst1("export FOO=bar"),
+                        "\"/path/to/driver\"",
+                        _lst1("kill $PID")),
+        "bash -c 'export FOO=bar; \"/path/to/driver\"; rc=$?; kill $PID; exit $rc'")
+
+    // exec_cmd with embedded LD_LIBRARY_PATH=... prefix (the
+    // shared-libs case for aether.driver_test).
+    _assert_eq("exec_chain: dyld-prefixed exec",
+        _exec_chain_cmd(null,
+                        "LD_LIBRARY_PATH=\"/lib:/lib2\" \"/bin/d\"",
+                        null),
+        "LD_LIBRARY_PATH=\"/lib:/lib2\" \"/bin/d\"")
 
     println("bash_chain_cmd tests done")
 }

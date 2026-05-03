@@ -8,7 +8,15 @@
 
 import std.string
 import std.io
+import std.os
+import std.file
+import std.fs
 import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
 import brew (brew_formula_render, _camelize, _basename, _strip_dotbuild)
 
 extern println(s: string)
