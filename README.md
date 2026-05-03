@@ -265,7 +265,7 @@ most cache-hit, telemetry shows what actually ran.
 aeb --watch
 
 # Watch with an initial-build target
-aeb --watch ae/svnserver
+aeb --watch ae/myserver
 ```
 
 Platform support:
@@ -515,7 +515,9 @@ python.package(b) { … }     // generate pyproject.toml and build wheel
 
 ```aether
 import bash
-import bash (script, jobs, pre_command, post_command, fixture_seed, fixture_server)  // see note below
+import bash (script, jobs, pre_command, post_command,
+              fixture_seed, fixture_server,
+              repo, seed_bin, bin, args, port, ready_after_ms)  // see note below
 
 bash.test(b) {              // exit 0 = PASS, non-zero = FAIL
     script("test_a.sh")
@@ -533,24 +535,31 @@ bash.test(b) {              // pre/post commands run around every script.
     script("test_acl.sh")
 }                           // (forces sequential mode if jobs(N>1) also set)
 
-bash.test(b) {                                 // structured server fixtures —
-    fixture_seed("primary",                    //   spawned per-script, env vars
-                 "/tmp/svnae_repo",            //   exposed to the script,
-                 "target/svnae-seed/bin/seed") //   cleaned up after.
-    fixture_server("primary",                  // server bin + args + port +
-                   "target/svnserver/bin/srv", //   ready_after_ms (ms to sleep
-                   "demo $PRIMARY_REPO 9540 --token X", //   between spawn and script).
-                   9540, 1500)
-    script("test_acl.sh")                      // sees $PRIMARY_REPO, $PRIMARY_PORT,
-}                                              // $PRIMARY_BIN, $PRIMARY_PID.
+bash.test(b) {                                       // structured server fixtures —
+    fixture_seed(b, "primary") {                     //   spawned per-script, env vars
+        repo("/tmp/myapp_repo")                      //   exposed to the script,
+        seed_bin("target/myapp-seed/bin/seed")       //   cleaned up after.
+    }                                                //   $PRIMARY_REPO is exported
+    fixture_server(b, "primary") {                   //   to the script.
+        bin("target/myapp/bin/server")
+        args("demo $PRIMARY_REPO 9540 --token X")    // shell-interpolates at run time
+        port(9540)                                   //   ($PRIMARY_REPO from the seed
+        ready_after_ms(1500)                         //   above is visible).
+    }
+    script("test_acl.sh")                            // sees $PRIMARY_REPO, $PRIMARY_PORT,
+}                                                    // $PRIMARY_BIN, $PRIMARY_PID.
 
-bash.test(b) {                                 // multi-fixture: declare each with
-    fixture_seed("source",      "/tmp/r1", "")            //   a different name. The names
-    fixture_seed("destination", "/tmp/r2", "")            //   become env-var prefixes
-    fixture_server("source",      "$BIN", "", 9430, 500)  //   ($SOURCE_PORT,
-    fixture_server("destination", "$BIN", "", 9431, 500)  //   $DESTINATION_PORT, …).
-    script("test_svnadmin.sh")                            // Ports are caller-chosen;
-}                                                         //   ready-check is sleep-then-go.
+bash.test(b) {                                       // multi-fixture: declare each
+    fixture_seed(b, "source")      { repo("/tmp/r1") }      //   with a different name. Names
+    fixture_seed(b, "destination") { repo("/tmp/r2") }      //   become env-var prefixes
+    fixture_server(b, "source")      {                       //   ($SOURCE_PORT,
+        bin("target/myapp/bin/server"); port(9430); ready_after_ms(500)
+    }                                                        //   $DESTINATION_PORT, …).
+    fixture_server(b, "destination") {                       // Ports are caller-chosen;
+        bin("target/myapp/bin/server"); port(9431); ready_after_ms(500)
+    }                                                        //   ready-check is sleep-
+    script("test_replication.sh")                            //   then-go (no real probe).
+}
 
 bash.script(b) {            // non-test runner: codegen, asset prep, etc.
     script("gen.sh")
@@ -563,11 +572,11 @@ import aether (source, output, extra_source, extra_source_glob, link_flag, regen
 
 aether.program(b) {                   // shells out to `ae build` by default —
     source("main.ae")                 //   honours aether.toml [[bin]].
-    output("svn")
+    output("hello")
 }
 aether.program(b) {                   // declaring any of extra_source /
     source("main.ae")                 //   link_flag / regen opts into the
-    output("svn")                     //   manual aetherc + gcc path (.build.ae
+    output("hello")                     //   manual aetherc + gcc path (.build.ae
     regen("ae/client/accessors.ae")   //   becomes the single source of truth,
     regen("ae/client/handlers.ae")    //   aether.toml ignored for this target).
     link_flag("-pthread")
@@ -583,38 +592,49 @@ aether.program(b) {                   // declaring any of extra_source /
 
 aether.program(b) {                   // regen_with overrides auto-detection —
     source("main.ae")                 //   use when caps come in transitively
-    output("svn")                     //   and the import scan misses them.
+    output("hello")                     //   and the import scan misses them.
     regen_with("ae/client/auth.ae", "net,fs")
 }
 
 aether.program(b) {                   // hand-written extras still work via
     source("main.ae")                 //   extra_source(...) — combine freely
-    output("svn")                     //   with regen(...) entries.
+    output("hello")                     //   with regen(...) entries.
     extra_source("legacy_helper.c")
     regen("ae/client/accessors.ae")
 }
 aether.program(b) {                   // extra_source_glob expands a glob at
     source("main.ae")                 //   build-time. Pattern is module-relative;
-    output("svn")                     //   the matched files are content-hashed
+    output("hello")                     //   the matched files are content-hashed
     extra_source_glob("contrib/*.c")  //   into the cache key, so adding/removing
     extra_source_glob("gen/*.c")      //   matched files invalidates the cache.
 }
 aether.program_test(b) { ... }        // same as program, plus runs the binary
 
-aether.driver_test(b) {               // Aether driver program that exercises a
-    driver("test_svn_driver.ae")      //   *separate* compiled binary built
-    output("svn_driver")              //   elsewhere in the graph (e.g. a server,
-    binary_under_test("svn",          //   a CLI). The driver imports
-                       "target/svn/bin/svn") //   contrib.aeocha (or whatever),
-                                      //   spawns $SVN_BIN via os.run_capture,
-    fixture_seed("primary",           //   asserts about its output. Same fixture
-                  "/tmp/svnae_repo",  //   grammar as bash.test (fixture_seed /
-                  "")                 //   fixture_server) — env vars exposed to
-    fixture_server("primary",         //   the driver are $PRIMARY_REPO,
-                    "$PRIMARY_BIN",   //   $PRIMARY_PORT, $PRIMARY_BIN, $PRIMARY_PID,
-                    "demo $PRIMARY_REPO 9540", // plus $<NAME>_BIN for each
-                    9540, 1500)       //   binary_under_test. Driver's exit code
-}                                     //   is the PASS/FAIL signal.
+aether.driver_test(b) {                    // Aether driver program that
+    driver("test_app_driver.ae")           //   exercises a *separate* compiled
+    output("app_driver")                   //   binary built elsewhere in the
+                                           //   graph (e.g. a server, a CLI).
+    binary_under_test(b, "app") {          // The driver imports contrib.aeocha
+        path("target/app/bin/app")         //   (or whatever), spawns $APP_BIN
+    }                                      //   via os.run_capture, asserts
+    fixture_seed(b, "primary") {           //   about its output. Same fixture
+        repo("/tmp/app_repo")              //   grammar as bash.test — env vars
+    }                                      //   exposed to the driver are
+    fixture_server(b, "primary") {         //   $PRIMARY_REPO, $PRIMARY_PORT,
+        bin("$APP_BIN")                    //   $PRIMARY_BIN, $PRIMARY_PID, plus
+        args("demo $PRIMARY_REPO 9540")    //   $<NAME>_BIN (or env_var()
+        port(9540)                         //   override) for each
+        ready_after_ms(1500)               //   binary_under_test. Driver's exit
+    }                                      //   code is the PASS/FAIL signal.
+}
+
+aether.driver_test(b) {                    // Custom env-var name override.
+    driver("test_with_custom_env.ae")
+    binary_under_test(b, "app") {
+        path("target/app/bin/app")
+        env_var("APP_BINARY")              // → $APP_BINARY (vs default $APP_BIN)
+    }
+}
 ```
 
 > **Note on the two `import` lines.** Aether resolves identifiers

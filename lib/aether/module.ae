@@ -34,67 +34,170 @@ driver(_ctx: ptr, file_name: string) {
     _e = map.put(_ctx, "source", file_name)
 }
 
-// binary_under_test(name, path) — declare a binary built by an
-// upstream `build.dep` that the driver needs to spawn. The path is
-// resolved relative to the workspace root. The driver sees:
-//
-//   $<NAME>_BIN     — the resolved absolute path
-//
-// where NAME is the uppercased fixture name (`svn` → `SVN_BIN`,
-// `svn-admin` → `SVN-ADMIN_BIN`). Repeated calls accumulate.
-//
-// Use case: an Aether driver test that exercises an out-of-process
-// binary (e.g. a compiled server, a CLI built elsewhere in the
-// graph). The driver does `os.run_capture(getenv("SVN_BIN"), ...)`.
-//
-// aeb verifies the path exists at runtime and bails with a clear
-// error if not — usually a sign of a missing `build.dep`.
-binary_under_test(_ctx: ptr, name: string, bin_path: string) {
-    if map.has(_ctx, "binaries_under_test") == 0 {
-        _e1 = map.put(_ctx, "binaries_under_test", list.new())
-    }
-    buts, _ = map.get(_ctx, "binaries_under_test")
-    rec = string.concat(name, "\t")
-    rec = string.concat(rec, bin_path)
-    _e2 = list.add(buts, rec)
+// --- Sub-setters for binary_under_test, fixture_seed, fixture_server ---
+// (Closures inside aether.driver_test bodies. These setters write
+// to the inner closure's _builder map; the enclosing builder reads
+// them out when packing the outer record.)
+
+// path("...") — binary_under_test path. Resolved relative to the
+// workspace root if not absolute; verified to exist at runtime.
+path(_ctx: ptr, p: string) {
+    _e = map.put(_ctx, "path", p)
 }
 
-// fixture_seed / fixture_server — same shape as bash.test's
-// setters (see lib/bash/module.ae). Records pack into the same
-// "fixture_seeds" / "fixture_servers" map keys consumed by
-// build._synth_fixture_pre / _synth_fixture_post; the driver
-// builder lowers them into pre/post shell statements that wrap
-// the driver-binary invocation. Each fixture name is uppercased
-// for env-var prefixes ($PRIMARY_REPO, $PRIMARY_PORT, etc) and
-// sees the standard $<NAME>_REPO / $<NAME>_BIN / $<NAME>_PORT /
-// $<NAME>_PID exports.
-fixture_seed(_ctx: ptr, name: string, repo: string, seed_bin: string) {
-    if map.has(_ctx, "fixture_seeds") == 0 {
-        _e1 = map.put(_ctx, "fixture_seeds", list.new())
-    }
-    seeds, _ = map.get(_ctx, "fixture_seeds")
-    rec = string.concat(name, "\t")
-    rec = string.concat(rec, repo)
-    rec = string.concat(rec, "\t")
-    rec = string.concat(rec, seed_bin)
-    _e2 = list.add(seeds, rec)
+// env_var("CUSTOM_BIN_VAR") — override the auto-derived
+// `$<NAME>_BIN` env var name. Defaults to `<UPPER(NAME)>_BIN`;
+// callers rarely need this.
+env_var(_ctx: ptr, name: string) {
+    _e = map.put(_ctx, "env_var", name)
 }
 
-fixture_server(_ctx: ptr, name: string, bin: string, args: string,
-               port: int, ready_after_ms: int) {
-    if map.has(_ctx, "fixture_servers") == 0 {
-        _e1 = map.put(_ctx, "fixture_servers", list.new())
+// repo, seed_bin, bin, args, port, ready_after_ms — same closure-
+// local sub-setters as the bash SDK uses. Defined here too so a
+// .tests.ae using aether.driver_test only needs `import aether`,
+// not a mix of imports. Both definitions write to the same map
+// keys; the records they pack are interchangeable.
+
+repo(_ctx: ptr, p: string) {
+    _e = map.put(_ctx, "repo", p)
+}
+
+seed_bin(_ctx: ptr, p: string) {
+    _e = map.put(_ctx, "seed_bin", p)
+}
+
+bin(_ctx: ptr, p: string) {
+    _e = map.put(_ctx, "bin", p)
+}
+
+args(_ctx: ptr, s: string) {
+    _e = map.put(_ctx, "args", s)
+}
+
+port(_ctx: ptr, n: int) {
+    _e = map.put(_ctx, "port", string.from_int(n))
+}
+
+ready_after_ms(_ctx: ptr, n: int) {
+    _e = map.put(_ctx, "ready_after_ms", string.from_int(n))
+}
+
+// path("...") — binary_under_test path. Resolved relative to the
+// workspace root if not absolute; verified to exist at runtime.
+path(_ctx: ptr, p: string) {
+    _e = map.put(_ctx, "path", p)
+}
+
+// env_var("CUSTOM_BIN_VAR") — override the auto-derived
+// `$<NAME>_BIN` env var name. Defaults to `<UPPER(NAME)>_BIN`;
+// callers rarely need this.
+env_var(_ctx: ptr, name: string) {
+    _e = map.put(_ctx, "env_var", name)
+}
+
+// binary_under_test(b, name) { path(...); env_var(...) }
+// — declare a binary built by an upstream `build.dep` that the
+// driver needs to spawn. Repeatable: each call exposes one binary.
+//
+// Sub-setters:
+//   path("target/...")        required — binary path. Resolved
+//                                          relative to the workspace
+//                                          root if relative.
+//   env_var("CUSTOM_VAR")     optional — override the default
+//                                          $<NAME>_BIN env var name.
+//
+// Storage shape: the enclosing aether.driver_test builder drains
+// `b._pending_binaries_under_test` (packed records of
+// "name\tpath\tenv_var") into its own _builder for processing.
+builder binary_under_test(b: ptr, name: string) {
+    bin_path_v = ""
+    env_var_v = ""
+    if _builder != null {
+        if map.has(_builder, "path") == 1 {
+            bin_path_v, _ = map.get(_builder, "path")
+        }
+        if map.has(_builder, "env_var") == 1 {
+            env_var_v, _ = map.get(_builder, "env_var")
+        }
     }
-    servers, _ = map.get(_ctx, "fixture_servers")
+    if map.has(b, "_pending_binaries_under_test") == 0 {
+        _e1 = map.put(b, "_pending_binaries_under_test", list.new())
+    }
+    pending, _ = map.get(b, "_pending_binaries_under_test")
     rec = string.concat(name, "\t")
-    rec = string.concat(rec, bin)
+    rec = string.concat(rec, bin_path_v)
     rec = string.concat(rec, "\t")
-    rec = string.concat(rec, args)
+    rec = string.concat(rec, env_var_v)
+    _e2 = list.add(pending, rec)
+    return 0
+}
+
+// fixture_seed(b, name) { repo(...); seed_bin(...) } — see
+// lib/bash/module.ae for the full contract. The implementation is
+// duplicated here (rather than re-imported from bash) so a
+// .tests.ae using aether.driver_test doesn't need to mix imports.
+// Both definitions stage records onto `b._pending_fixture_seeds`
+// in the same format; the enclosing test builder drains them.
+builder fixture_seed(b: ptr, name: string) {
+    repo_v = ""
+    seed_bin_v = ""
+    if _builder != null {
+        if map.has(_builder, "repo") == 1 {
+            repo_v, _ = map.get(_builder, "repo")
+        }
+        if map.has(_builder, "seed_bin") == 1 {
+            seed_bin_v, _ = map.get(_builder, "seed_bin")
+        }
+    }
+    if map.has(b, "_pending_fixture_seeds") == 0 {
+        _e1 = map.put(b, "_pending_fixture_seeds", list.new())
+    }
+    pending, _ = map.get(b, "_pending_fixture_seeds")
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, repo_v)
     rec = string.concat(rec, "\t")
-    rec = string.concat(rec, string.from_int(port))
+    rec = string.concat(rec, seed_bin_v)
+    _e2 = list.add(pending, rec)
+    return 0
+}
+
+// fixture_server(b, name) { bin(...); args(...); port(...);
+//                           ready_after_ms(...) }
+// See lib/bash/module.ae for the contract. Duplicated body for
+// the same reason as fixture_seed above.
+builder fixture_server(b: ptr, name: string) {
+    bin_v = ""
+    args_v = ""
+    port_v = "0"
+    ready_v = "0"
+    if _builder != null {
+        if map.has(_builder, "bin") == 1 {
+            bin_v, _ = map.get(_builder, "bin")
+        }
+        if map.has(_builder, "args") == 1 {
+            args_v, _ = map.get(_builder, "args")
+        }
+        if map.has(_builder, "port") == 1 {
+            port_v, _ = map.get(_builder, "port")
+        }
+        if map.has(_builder, "ready_after_ms") == 1 {
+            ready_v, _ = map.get(_builder, "ready_after_ms")
+        }
+    }
+    if map.has(b, "_pending_fixture_servers") == 0 {
+        _e1 = map.put(b, "_pending_fixture_servers", list.new())
+    }
+    pending, _ = map.get(b, "_pending_fixture_servers")
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, bin_v)
     rec = string.concat(rec, "\t")
-    rec = string.concat(rec, string.from_int(ready_after_ms))
-    _e2 = list.add(servers, rec)
+    rec = string.concat(rec, args_v)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, port_v)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, ready_v)
+    _e2 = list.add(pending, rec)
+    return 0
 }
 
 // extra_source(c_path) — append one C file to the manual-link list.
@@ -1074,9 +1177,34 @@ builder driver_test(ctx: ptr) {
         return rc
     }
 
+    // Drain pending records staged onto `b` by the inner closure
+    // builders (binary_under_test, fixture_seed, fixture_server).
+    // Inner builders execute before this body, so by the time we
+    // get here the records are already on `b`. Drain them into
+    // _builder for processing, then clear pending so subsequent
+    // test builders in the same main() see a clean slate.
+    if map.has(ctx, "_pending_binaries_under_test") == 1 {
+        pending_buts, _ = map.get(ctx, "_pending_binaries_under_test")
+        if list.size(pending_buts) > 0 {
+            if map.has(_builder, "binaries_under_test") == 0 {
+                _ed = map.put(_builder, "binaries_under_test", list.new())
+            }
+            buts_acc, _ = map.get(_builder, "binaries_under_test")
+            pn = list.size(pending_buts)
+            i = 0
+            while i < pn {
+                r, _ = list.get(pending_buts, i)
+                list.add(buts_acc, r)
+                i = i + 1
+            }
+            _eclear = map.put(ctx, "_pending_binaries_under_test", list.new())
+        }
+    }
+    build._drain_pending_fixtures(ctx, _builder)
+
     // Validate binaries-under-test exist. Resolve relative paths
     // against the workspace root so users can write
-    // `binary_under_test("svn", "target/svn/bin/svn")`.
+    // `binary_under_test(b, "hello") { path("target/hello/bin/hello") }`.
     buts = null
     if _builder != null {
         if map.has(_builder, "binaries_under_test") == 1 {
@@ -1089,9 +1217,10 @@ builder driver_test(ctx: ptr) {
         i = 0
         while i < bn {
             rec, _ = list.get(buts, i)
-            f = build._split_tabs(rec, 2)
+            f = build._split_tabs(rec, 3)
             name, _ = list.get(f, 0)
             decl_path, _ = list.get(f, 1)
+            env_var_override, _ = list.get(f, 2)
             // Resolve relative to workspace root.
             resolved = decl_path
             if string.length(decl_path) > 0 {
@@ -1106,11 +1235,16 @@ builder driver_test(ctx: ptr) {
                 build._record_test_result(ctx, 0, 1)
                 return 1
             }
-            up = build._upper_ascii_word(name)
-            // Render `export <UP>_BIN="<resolved>"` — a single
-            // shell statement that fits into the pre slot.
-            line = string.concat("export ", up)
-            line = string.concat(line, "_BIN=\"")
+            // Default env-var name is <UPPER(name)>_BIN; user may override.
+            ev = env_var_override
+            if string.length(ev) == 0 {
+                up = build._upper_ascii_word(name)
+                ev = string.concat(up, "_BIN")
+            }
+            // Render `export <EV>="<resolved>"` — a single shell
+            // statement that fits into the pre slot.
+            line = string.concat("export ", ev)
+            line = string.concat(line, "=\"")
             line = string.concat(line, resolved)
             line = string.concat(line, "\"")
             list.add(but_exports, line)

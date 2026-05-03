@@ -35,10 +35,9 @@ script(_ctx: ptr, script_path: string) {
 
 // jobs(N) — run up to N scripts concurrently in `bash.test(b)`.
 // Default (unset or N<=1) keeps the historic sequential loop. N=0
-// means "auto" — half the host's logical CPUs (matches the
-// run_tests.sh convention used by svn-aether). Stored as a string
-// since the builder map is string-valued; parsed back in the
-// builder body.
+// means "auto" — half the host's logical CPUs (a common
+// run_tests.sh convention). Stored as a string since the builder
+// map is string-valued; parsed back in the builder body.
 jobs(_ctx: ptr, n: int) {
     s = string.from_int(n)
     _e = map.put(_ctx, "jobs", s)
@@ -57,9 +56,9 @@ jobs(_ctx: ptr, n: int) {
 //
 // Use case: spawning long-running fixtures (servers, databases),
 // seeding test data, exporting fixture-specific env vars. Anything
-// domain-specific (e.g. svn server orchestration) lives in the
-// caller's own helper script that pre_command sources — aeb stays
-// out of the domain logic.
+// domain-specific (e.g. application-server orchestration) lives
+// in the caller's own helper script that pre_command sources —
+// aeb stays out of the domain logic.
 pre_command(_ctx: ptr, cmd: string) {
     if map.has(_ctx, "pre_commands") == 0 {
         _e1 = map.put(_ctx, "pre_commands", list.new())
@@ -84,84 +83,155 @@ post_command(_ctx: ptr, cmd: string) {
     _e2 = list.add(posts, cmd)
 }
 
-// fixture_seed(name, repo, seed_bin) — declare a per-script fixture
-// directory that gets nuked-and-(optionally-)seeded before each
-// script and removed after.
+// --- Sub-setters for fixture_seed / fixture_server closures ---
 //
-//   `name`       — fixture identifier; uppercased and used as the
-//                  env-var prefix exposed to the script
-//                  (e.g. name="primary" → $PRIMARY_REPO).
-//   `repo`       — directory path; before each script it is
-//                  `rm -rf`'d and (if seed_bin is non-empty) the
-//                  seed binary is run with the repo path as its
-//                  single argument. After the script, the dir is
-//                  removed. Set as $<NAME>_REPO for the script.
-//   `seed_bin`   — path to a seeder binary, or "" to skip seeding
-//                  (just nuke-and-create).
-//
-// Repeated calls accumulate; seeds run in declaration order. Each
-// fixture_seed is independent; pair with `fixture_server(name, ...)`
-// to spawn a server bound to the same `name` (the server's args
-// can reference $<NAME>_REPO).
-//
-// Use case: the primary aeb-shaped replacement for ad-hoc
-// `pre_command("rm -rf X; seed_bin X")` boilerplate when each
-// test owns its own repo state.
-fixture_seed(_ctx: ptr, name: string, repo: string, seed_bin: string) {
-    if map.has(_ctx, "fixture_seeds") == 0 {
-        _e1 = map.put(_ctx, "fixture_seeds", list.new())
-    }
-    seeds, _ = map.get(_ctx, "fixture_seeds")
-    rec = string.concat(name, "\t")
-    rec = string.concat(rec, repo)
-    rec = string.concat(rec, "\t")
-    rec = string.concat(rec, seed_bin)
-    _e2 = list.add(seeds, rec)
+// These are plain setters on the *inner* closure's _builder map.
+// The outer fixture_seed / fixture_server builder reads them out
+// of its own _builder when packing the per-fixture record onto
+// the build context.
+
+// repo("/tmp/...") — fixture seed/server's working directory.
+repo(_ctx: ptr, p: string) {
+    _e = map.put(_ctx, "repo", p)
 }
 
-// fixture_server(name, bin, args, port, ready_after_ms) — declare
-// a per-script server fixture spawned before the script runs and
-// killed after.
+// seed_bin("/path/to/seeder") — optional seed binary; called with
+// the repo path as its single argument before the script runs.
+// Omit (or pass "") to skip seeding (the directory is still
+// nuke-and-mkdir'd before each script).
+seed_bin(_ctx: ptr, p: string) {
+    _e = map.put(_ctx, "seed_bin", p)
+}
+
+// bin("/path/to/server") — fixture_server's binary.
+bin(_ctx: ptr, p: string) {
+    _e = map.put(_ctx, "bin", p)
+}
+
+// args("...") — single shell string passed to the fixture_server
+// binary. The shell interpolates it at run time, so values like
+// "$PRIMARY_REPO" pick up env vars exposed by other fixtures.
+args(_ctx: ptr, s: string) {
+    _e = map.put(_ctx, "args", s)
+}
+
+// port(N) — TCP port the fixture_server listens on. Exported as
+// $<NAME>_PORT to the script.
+port(_ctx: ptr, n: int) {
+    _e = map.put(_ctx, "port", string.from_int(n))
+}
+
+// ready_after_ms(N) — milliseconds to sleep between spawn and the
+// script body. Caller-tunable sleep-then-go; real readiness
+// checks are out-of-scope.
+ready_after_ms(_ctx: ptr, n: int) {
+    _e = map.put(_ctx, "ready_after_ms", string.from_int(n))
+}
+
+// fixture_seed(b, name) { repo(...); seed_bin(...) } — declare a
+// per-script fixture directory.
 //
-//   `name`           — fixture identifier; uppercased and used as
-//                      the env-var prefix exposed to the script
-//                      (e.g. name="primary" → $PRIMARY_PORT,
-//                      $PRIMARY_BIN).
-//   `bin`            — server binary path.
-//   `args`           — single shell string of arguments passed to
-//                      the binary; interpolated by the shell so
-//                      $<NAME>_REPO etc are visible. Pass "" if
-//                      the binary needs no args.
-//   `port`           — TCP port the server listens on. Exported as
-//                      $<NAME>_PORT to the script.
-//   `ready_after_ms` — milliseconds to sleep between spawn and
-//                      script. Caller-tunable; sleep-then-go.
-//                      Real readiness checks are deliberately
-//                      out-of-scope (see asks/bash-test-server-
-//                      fixtures.md).
+//   `name` — fixture identifier; uppercased and used as the env-var
+//            prefix exposed to the script (name="primary" →
+//            $PRIMARY_REPO).
+//
+// Sub-setters:
+//   repo("/tmp/...")           required — directory path. Before
+//                                          each script it is
+//                                          `rm -rf`'d and recreated;
+//                                          after the script it's
+//                                          removed. Exposed as
+//                                          $<NAME>_REPO.
+//   seed_bin("/path/to/seed")  optional — if set, run after the
+//                                          rm/mkdir with the repo
+//                                          path as its single arg.
+//
+// Repeated `fixture_seed(b, "...") { ... }` calls accumulate; seeds
+// run in declaration order. Pairs with `fixture_server(b, "...")`
+// — both are independent setters and the server's args can
+// reference $<NAME>_REPO.
+//
+// Storage: packs (name, repo, seed_bin) as a tab-record into
+// `b._pending_fixture_seeds`. The enclosing `bash.test` /
+// `aether.driver_test` builder drains the pending list into its
+// own _builder.fixture_seeds list (consumed by
+// build._synth_fixture_pre/_post).
+builder fixture_seed(b: ptr, name: string) {
+    repo_v = ""
+    seed_bin_v = ""
+    if _builder != null {
+        if map.has(_builder, "repo") == 1 {
+            repo_v, _ = map.get(_builder, "repo")
+        }
+        if map.has(_builder, "seed_bin") == 1 {
+            seed_bin_v, _ = map.get(_builder, "seed_bin")
+        }
+    }
+    if map.has(b, "_pending_fixture_seeds") == 0 {
+        _e1 = map.put(b, "_pending_fixture_seeds", list.new())
+    }
+    pending, _ = map.get(b, "_pending_fixture_seeds")
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, repo_v)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, seed_bin_v)
+    _e2 = list.add(pending, rec)
+    return 0
+}
+
+// fixture_server(b, name) { bin(...); args(...); port(...); ready_after_ms(...) }
+// — declare a per-script server fixture spawned before the script
+// and killed after.
+//
+//   `name` — fixture identifier; uppercased and used as the env-var
+//            prefix exposed to the script (name="primary" →
+//            $PRIMARY_PORT, $PRIMARY_BIN, $PRIMARY_PID).
+//
+// Sub-setters:
+//   bin("/path/to/server")   required — server binary path.
+//   args("…")                optional — shell string of args, "" by default.
+//   port(N)                  required — TCP port. Exposed as $<NAME>_PORT.
+//   ready_after_ms(N)        optional — sleep between spawn and script;
+//                                       defaults to 0 (no sleep).
 //
 // Repeated calls accumulate; servers spawn in declaration order
 // and are killed in reverse order after the script.
 //
-// Pairs with `fixture_seed(name, ...)` to scope the server to a
-// freshly-seeded repo. The two are independent setters so a server
-// can run against a static (un-seeded) directory if the test
-// author prefers.
-fixture_server(_ctx: ptr, name: string, bin: string, args: string,
-               port: int, ready_after_ms: int) {
-    if map.has(_ctx, "fixture_servers") == 0 {
-        _e1 = map.put(_ctx, "fixture_servers", list.new())
+// Storage shape mirrors fixture_seed: packs the 5-tuple as a tab-
+// record into `b._pending_fixture_servers`.
+builder fixture_server(b: ptr, name: string) {
+    bin_v = ""
+    args_v = ""
+    port_v = "0"
+    ready_v = "0"
+    if _builder != null {
+        if map.has(_builder, "bin") == 1 {
+            bin_v, _ = map.get(_builder, "bin")
+        }
+        if map.has(_builder, "args") == 1 {
+            args_v, _ = map.get(_builder, "args")
+        }
+        if map.has(_builder, "port") == 1 {
+            port_v, _ = map.get(_builder, "port")
+        }
+        if map.has(_builder, "ready_after_ms") == 1 {
+            ready_v, _ = map.get(_builder, "ready_after_ms")
+        }
     }
-    servers, _ = map.get(_ctx, "fixture_servers")
+    if map.has(b, "_pending_fixture_servers") == 0 {
+        _e1 = map.put(b, "_pending_fixture_servers", list.new())
+    }
+    pending, _ = map.get(b, "_pending_fixture_servers")
     rec = string.concat(name, "\t")
-    rec = string.concat(rec, bin)
+    rec = string.concat(rec, bin_v)
     rec = string.concat(rec, "\t")
-    rec = string.concat(rec, args)
+    rec = string.concat(rec, args_v)
     rec = string.concat(rec, "\t")
-    rec = string.concat(rec, string.from_int(port))
+    rec = string.concat(rec, port_v)
     rec = string.concat(rec, "\t")
-    rec = string.concat(rec, string.from_int(ready_after_ms))
-    _e2 = list.add(servers, rec)
+    rec = string.concat(rec, ready_v)
+    _e2 = list.add(pending, rec)
+    return 0
 }
 
 // --- Helpers ---
@@ -502,10 +572,13 @@ builder test(ctx: ptr) {
         }
     }
 
-    // fixture_seed / fixture_server lookup. Lower these into
-    // synthesized pre/post shell statements so the existing
-    // bash_chain_cmd path executes them in the same `bash -c '...'`
-    // (PIDs need to survive across `;` separators).
+    // fixture_seed / fixture_server lookup. Inner closures stage
+    // records onto `b` (build context); drain them into _builder
+    // before consumption. Then lower into synthesized pre/post
+    // shell statements so the existing bash_chain_cmd path executes
+    // them in the same `bash -c '...'` (PIDs need to survive across
+    // `;` separators).
+    build._drain_pending_fixtures(ctx, _builder)
     fixture_seeds = null
     fixture_servers = null
     if _builder != null {

@@ -697,6 +697,116 @@ _has_fixtures(builder_map: ptr) {
     return 0
 }
 
+// _drain_pending_fixtures(b, builder_map) — move per-fixture
+// records from `b._pending_fixture_seeds` / `_pending_fixture_servers`
+// into `builder_map.fixture_seeds` / `fixture_servers`, then clear
+// the pending lists on `b`.
+//
+// Why two-stage storage: Aether's `_builder` magic only exposes the
+// immediately enclosing closure's map. A `fixture_seed(b, "name")
+// { ... }` builder runs *before* the enclosing `bash.test(b)` body,
+// so its setters can't write directly into bash.test's map. They
+// stage records onto `b` (the build context, accessible everywhere)
+// and bash.test's body drains them into its own _builder before
+// running synthesis.
+//
+// Clearing the pending list on `b` after consumption is what keeps
+// two consecutive test builders in the same main() isolated:
+// each drains only the records its own inner builders staged.
+_drain_pending_fixtures(b: ptr, builder_map: ptr) {
+    if builder_map == null { return 0 }
+    if map.has(b, "_pending_fixture_seeds") == 1 {
+        pending, _ = map.get(b, "_pending_fixture_seeds")
+        if list.size(pending) > 0 {
+            if map.has(builder_map, "fixture_seeds") == 0 {
+                _e1 = map.put(builder_map, "fixture_seeds", list.new())
+            }
+            seeds, _ = map.get(builder_map, "fixture_seeds")
+            n = list.size(pending)
+            i = 0
+            while i < n {
+                rec, _ = list.get(pending, i)
+                list.add(seeds, rec)
+                i = i + 1
+            }
+            _e2 = map.put(b, "_pending_fixture_seeds", list.new())
+        }
+    }
+    if map.has(b, "_pending_fixture_servers") == 1 {
+        pending, _ = map.get(b, "_pending_fixture_servers")
+        if list.size(pending) > 0 {
+            if map.has(builder_map, "fixture_servers") == 0 {
+                _e3 = map.put(builder_map, "fixture_servers", list.new())
+            }
+            servers, _ = map.get(builder_map, "fixture_servers")
+            n = list.size(pending)
+            i = 0
+            while i < n {
+                rec, _ = list.get(pending, i)
+                list.add(servers, rec)
+                i = i + 1
+            }
+            _e4 = map.put(b, "_pending_fixture_servers", list.new())
+        }
+    }
+    return 0
+}
+
+// _drain_pending_fixtures(b, builder_map) — move per-fixture
+// records from `b._pending_fixture_seeds` / `_pending_fixture_servers`
+// into `builder_map.fixture_seeds` / `fixture_servers`, then clear
+// the pending lists on `b`.
+//
+// Why two-stage storage: Aether's `_builder` magic only exposes the
+// immediately enclosing closure's map. A `fixture_seed(b, "name")
+// { ... }` builder runs *before* the enclosing `bash.test(b)` body,
+// so its setters can't write directly into bash.test's map. They
+// stage records onto `b` (the build context, accessible everywhere)
+// and bash.test's body drains them into its own _builder before
+// running synthesis.
+//
+// Clearing the pending list on `b` after consumption is what keeps
+// two consecutive test builders in the same main() isolated:
+// each drains only the records its own inner builders staged.
+_drain_pending_fixtures(b: ptr, builder_map: ptr) {
+    if builder_map == null { return 0 }
+    if map.has(b, "_pending_fixture_seeds") == 1 {
+        pending, _ = map.get(b, "_pending_fixture_seeds")
+        if list.size(pending) > 0 {
+            if map.has(builder_map, "fixture_seeds") == 0 {
+                _e1 = map.put(builder_map, "fixture_seeds", list.new())
+            }
+            seeds, _ = map.get(builder_map, "fixture_seeds")
+            n = list.size(pending)
+            i = 0
+            while i < n {
+                rec, _ = list.get(pending, i)
+                list.add(seeds, rec)
+                i = i + 1
+            }
+            _e2 = map.put(b, "_pending_fixture_seeds", list.new())
+        }
+    }
+    if map.has(b, "_pending_fixture_servers") == 1 {
+        pending, _ = map.get(b, "_pending_fixture_servers")
+        if list.size(pending) > 0 {
+            if map.has(builder_map, "fixture_servers") == 0 {
+                _e3 = map.put(builder_map, "fixture_servers", list.new())
+            }
+            servers, _ = map.get(builder_map, "fixture_servers")
+            n = list.size(pending)
+            i = 0
+            while i < n {
+                rec, _ = list.get(pending, i)
+                list.add(servers, rec)
+                i = i + 1
+            }
+            _e4 = map.put(b, "_pending_fixture_servers", list.new())
+        }
+    }
+    return 0
+}
+
 // _label_to_target_dir(root, module_dir) — invert the label →
 // target_dir mapping (mirrors the logic in build.begin's setup
 // of fs_dir + tgt_dir). Used by the orchestrator to find the
