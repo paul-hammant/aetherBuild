@@ -372,6 +372,24 @@ aeb libs/shared/product/state
 aeb --dist apps/cart
 ```
 
+## After Migration
+
+A few aeb features pay off once the migration is in place. See the
+README for the canonical reference; brief pointers:
+
+- **Verify the dep graph visually.** `aeb --graph | dot -Tsvg > deps.svg`
+  emits the full DAG. After translating an Nx workspace this is the
+  fastest way to confirm the project graph matches what
+  `nx graph` used to show. `aeb --graph mermaid` for inline-Markdown.
+- **Use `aeb --since` in CI.** Equivalent to Nx's `nx affected`:
+  `aeb --since main` builds and tests only modules downstream of the
+  PR's changed files. Combined with aeb's content-addressed cache,
+  this is the standard CI shape.
+- **Cache and telemetry are auto-on.** Each `aeb` run prints a
+  `[telemetry]` block at the end with per-module wall-time and
+  `[hit]`/`[miss]` cache outcomes. Useful for spotting which modules
+  are slow during incremental development.
+
 ## Available Builders
 
 | Builder | Purpose | DSL |

@@ -311,6 +311,26 @@ find . -name 'pom.xml' -not -path '*/target/*' -delete
 rm -rf .mvn mvnw mvnw.cmd
 ```
 
+## After Migration
+
+A few aeb features pay off once the migration is in place. See the
+README for the canonical reference; brief pointers:
+
+- **Verify the dep graph visually.** `aeb --graph | dot -Tsvg > deps.svg`
+  emits the full DAG. After translating 100+ `pom.xml` files this is
+  the fastest way to confirm the new structure matches what Maven's
+  reactor used to walk. `aeb --graph mermaid` for an inline-Markdown
+  variant.
+- **Use `aeb --since` in CI.** Instead of `aeb` (build everything),
+  `aeb --since main` builds and tests only the modules whose sources
+  are downstream of the PR's changes. Combined with aeb's
+  content-addressed cache, a typical PR run is many times faster than
+  a full Maven `verify`.
+- **Cache and telemetry are auto-on.** No configuration. Each `aeb`
+  run prints a `[telemetry]` block at the end with per-module
+  wall-time and `[hit]`/`[miss]` cache outcomes — useful for
+  spotting which modules are still slow after migration.
+
 ## Appendix: What Doesn't Migrate Automatically
 
 These Maven features need manual handling:
