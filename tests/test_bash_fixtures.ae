@@ -1,0 +1,215 @@
+// Tests for the fixture-synthesis helpers in lib/bash/module.ae.
+//
+// _upper_ascii_word, _split_tabs, _synth_fixture_pre,
+// _synth_fixture_post are all pure — they take packed string
+// records and return shell-statement lists. The actual spawn /
+// kill / sleep timing is exercised indirectly via the bash test
+// runner; these tests pin the rendered shell shape.
+
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build
+import bash (_upper_ascii_word, _split_tabs, _synth_fixture_pre,
+             _synth_fixture_post)
+
+extern println(s: string)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: '${expected}'")
+        println("  actual:   '${actual}'")
+    }
+}
+
+_assert_eq_int(label: string, actual: int, expected: int) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+// Pack a fixture_seed record the way the setter does.
+_pack_seed(name: string, repo: string, seed_bin: string) {
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, repo)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, seed_bin)
+    return rec
+}
+
+_pack_server(name: string, bin: string, args: string, port: int, ready_ms: int) {
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, bin)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, args)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, string.from_int(port))
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, string.from_int(ready_ms))
+    return rec
+}
+
+main() {
+    // --- _upper_ascii_word ---
+    _assert_eq("upper: simple",        _upper_ascii_word("primary"),  "PRIMARY")
+    _assert_eq("upper: mixed",         _upper_ascii_word("Primary1"), "PRIMARY1")
+    _assert_eq("upper: hyphenated",    _upper_ascii_word("foo-bar"),  "FOO-BAR")
+    _assert_eq("upper: already upper", _upper_ascii_word("ABC"),      "ABC")
+    _assert_eq("upper: empty",         _upper_ascii_word(""),         "")
+
+    // --- _split_tabs ---
+    f = _split_tabs("a\tb\tc", 3)
+    _assert_eq_int("split: 3 fields, count", list.size(f), 3)
+    a, _ = list.get(f, 0)
+    b, _ = list.get(f, 1)
+    c, _ = list.get(f, 2)
+    _assert_eq("split: field 0", a, "a")
+    _assert_eq("split: field 1", b, "b")
+    _assert_eq("split: field 2", c, "c")
+
+    f2 = _split_tabs("only", 3)
+    _assert_eq_int("split: under-supplied count", list.size(f2), 3)
+    a2, _ = list.get(f2, 0)
+    b2, _ = list.get(f2, 1)
+    c2, _ = list.get(f2, 2)
+    _assert_eq("split: under field 0", a2, "only")
+    _assert_eq("split: under field 1 empty", b2, "")
+    _assert_eq("split: under field 2 empty", c2, "")
+
+    // --- _synth_fixture_pre with one seed (no seed_bin) ---
+    seeds_only = list.new()
+    list.add(seeds_only, _pack_seed("primary", "/tmp/r1", ""))
+    pre1 = _synth_fixture_pre(seeds_only, null)
+    _assert_eq_int("pre: seed-no-bin yields 3 lines", list.size(pre1), 3)
+    p0, _ = list.get(pre1, 0)
+    p1, _ = list.get(pre1, 1)
+    p2, _ = list.get(pre1, 2)
+    _assert_eq("pre: seed export", p0, "export PRIMARY_REPO=\"/tmp/r1\"")
+    _assert_eq("pre: seed rm",     p1, "rm -rf \"/tmp/r1\"")
+    _assert_eq("pre: seed mkdir",  p2, "mkdir -p \"/tmp/r1\"")
+
+    // --- _synth_fixture_pre with one seed + seed_bin ---
+    seeds_bin = list.new()
+    list.add(seeds_bin, _pack_seed("primary", "/tmp/r1", "/usr/bin/seed"))
+    pre2 = _synth_fixture_pre(seeds_bin, null)
+    _assert_eq_int("pre: seed-with-bin yields 3 lines", list.size(pre2), 3)
+    q0, _ = list.get(pre2, 0)
+    q1, _ = list.get(pre2, 1)
+    q2, _ = list.get(pre2, 2)
+    _assert_eq("pre: seed_bin export", q0, "export PRIMARY_REPO=\"/tmp/r1\"")
+    _assert_eq("pre: seed_bin rm",     q1, "rm -rf \"/tmp/r1\"")
+    _assert_eq("pre: seed_bin run",    q2, "\"/usr/bin/seed\" \"/tmp/r1\" >/dev/null")
+
+    // --- _synth_fixture_pre with one server ---
+    servers = list.new()
+    list.add(servers, _pack_server("primary", "/usr/bin/server",
+                                   "demo /tmp/r1 9540", 9540, 1500))
+    pre3 = _synth_fixture_pre(null, servers)
+    // 4 lines: BIN export, PORT export, spawn+PID-capture combined,
+    // sleep. The spawn and PID-capture share one shell statement
+    // because `cmd &` doesn't accept `;` after.
+    _assert_eq_int("pre: server yields 4 lines", list.size(pre3), 4)
+    s0, _ = list.get(pre3, 0)
+    s1, _ = list.get(pre3, 1)
+    s2, _ = list.get(pre3, 2)
+    s3, _ = list.get(pre3, 3)
+    _assert_eq("pre: server BIN export",   s0, "export PRIMARY_BIN=\"/usr/bin/server\"")
+    _assert_eq("pre: server PORT export",  s1, "export PRIMARY_PORT=\"9540\"")
+    // Expected: `eval "\"${PRIMARY_BIN}\" demo /tmp/r1 9540" > "/tmp/aeb_fixture_primary.log" 2>&1 & PRIMARY_PID=$!`
+    // Built via concat — Aether parses ${...} in string literals.
+    dol = "$"
+    expected_spawn = string.concat("( eval exec \"\\\"", dol)
+    expected_spawn = string.concat(expected_spawn, "{PRIMARY_BIN}\\\" demo /tmp/r1 9540\" ) > \"/tmp/aeb_fixture_primary.log\" 2>&1 & export PRIMARY_PID=")
+    expected_spawn = string.concat(expected_spawn, dol)
+    expected_spawn = string.concat(expected_spawn, "!")
+    _assert_eq("pre: server spawn+PID", s2, expected_spawn)
+    // Expected: `sleep $(printf "%d.%03d" $((1500/1000)) $((1500%1000)))`
+    expected_sleep = string.concat("sleep ", dol)
+    expected_sleep = string.concat(expected_sleep, "(printf \"%d.%03d\" ")
+    expected_sleep = string.concat(expected_sleep, dol)
+    expected_sleep = string.concat(expected_sleep, "((1500/1000)) ")
+    expected_sleep = string.concat(expected_sleep, dol)
+    expected_sleep = string.concat(expected_sleep, "((1500%1000)))")
+    _assert_eq("pre: server sleep",        s3, expected_sleep)
+
+    // --- _synth_fixture_post: kill + rm in correct order ---
+    seeds_with_server = list.new()
+    list.add(seeds_with_server, _pack_seed("primary", "/tmp/r1", ""))
+    servers_one = list.new()
+    list.add(servers_one, _pack_server("primary", "/usr/bin/server", "", 9540, 1000))
+    post = _synth_fixture_post(seeds_with_server, servers_one)
+    _assert_eq_int("post: kill+wait+rm = 3 lines", list.size(post), 3)
+    pk, _ = list.get(post, 0)
+    pw, _ = list.get(post, 1)
+    pr, _ = list.get(post, 2)
+    expected_kill = string.concat("kill \"", dol)
+    expected_kill = string.concat(expected_kill, "{PRIMARY_PID}\" 2>/dev/null || true")
+    expected_wait = string.concat("wait \"", dol)
+    expected_wait = string.concat(expected_wait, "{PRIMARY_PID}\" 2>/dev/null || true")
+    _assert_eq("post: kill",  pk, expected_kill)
+    _assert_eq("post: wait",  pw, expected_wait)
+    _assert_eq("post: rm",    pr, "rm -rf \"/tmp/r1\" 2>/dev/null || true")
+
+    // --- _synth_fixture_post: multi-server reverse-order kill ---
+    s_two = list.new()
+    list.add(s_two, _pack_server("source",      "/b/s1", "", 9430, 1000))
+    list.add(s_two, _pack_server("destination", "/b/s2", "", 9431, 1000))
+    post2 = _synth_fixture_post(null, s_two)
+    _assert_eq_int("post: 2 servers = 4 lines", list.size(post2), 4)
+    // Reverse order: destination killed first.
+    p2k0, _ = list.get(post2, 0)
+    p2k1, _ = list.get(post2, 1)
+    p2k2, _ = list.get(post2, 2)
+    p2k3, _ = list.get(post2, 3)
+    exp_dk = string.concat("kill \"", dol)
+    exp_dk = string.concat(exp_dk, "{DESTINATION_PID}\" 2>/dev/null || true")
+    exp_dw = string.concat("wait \"", dol)
+    exp_dw = string.concat(exp_dw, "{DESTINATION_PID}\" 2>/dev/null || true")
+    exp_sk = string.concat("kill \"", dol)
+    exp_sk = string.concat(exp_sk, "{SOURCE_PID}\" 2>/dev/null || true")
+    exp_sw = string.concat("wait \"", dol)
+    exp_sw = string.concat(exp_sw, "{SOURCE_PID}\" 2>/dev/null || true")
+    _assert_eq("post: dest kill first", p2k0, exp_dk)
+    _assert_eq("post: dest wait",       p2k1, exp_dw)
+    _assert_eq("post: source kill last", p2k2, exp_sk)
+    _assert_eq("post: source wait",     p2k3, exp_sw)
+
+    // --- _synth_fixture_pre: declaration order across seeds + servers ---
+    seeds_two = list.new()
+    list.add(seeds_two, _pack_seed("primary",   "/tmp/p", ""))
+    list.add(seeds_two, _pack_seed("secondary", "/tmp/s", ""))
+    servers_two = list.new()
+    list.add(servers_two, _pack_server("primary",   "/b/p", "", 9540, 1000))
+    list.add(servers_two, _pack_server("secondary", "/b/s", "", 9541, 1000))
+    pre_combo = _synth_fixture_pre(seeds_two, servers_two)
+    // 3 lines per seed × 2 = 6, plus 4 lines per server × 2 = 8, total 14
+    _assert_eq_int("pre: combo line count", list.size(pre_combo), 14)
+    // First line should be the primary's seed export (seeds before servers).
+    first, _ = list.get(pre_combo, 0)
+    _assert_eq("pre: combo starts with primary seed", first,
+               "export PRIMARY_REPO=\"/tmp/p\"")
+    // After 6 seed lines, line 6 should be the first server (PRIMARY_BIN).
+    line6, _ = list.get(pre_combo, 6)
+    _assert_eq("pre: combo seeds-then-servers", line6,
+               "export PRIMARY_BIN=\"/b/p\"")
+
+    // --- _synth_fixture_pre: null both → empty ---
+    empty = _synth_fixture_pre(null, null)
+    _assert_eq_int("pre: null+null → empty", list.size(empty), 0)
+
+    println("bash fixture-synthesis tests done")
+}

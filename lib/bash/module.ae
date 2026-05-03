@@ -84,7 +84,329 @@ post_command(_ctx: ptr, cmd: string) {
     _e2 = list.add(posts, cmd)
 }
 
+// fixture_seed(name, repo, seed_bin) — declare a per-script fixture
+// directory that gets nuked-and-(optionally-)seeded before each
+// script and removed after.
+//
+//   `name`       — fixture identifier; uppercased and used as the
+//                  env-var prefix exposed to the script
+//                  (e.g. name="primary" → $PRIMARY_REPO).
+//   `repo`       — directory path; before each script it is
+//                  `rm -rf`'d and (if seed_bin is non-empty) the
+//                  seed binary is run with the repo path as its
+//                  single argument. After the script, the dir is
+//                  removed. Set as $<NAME>_REPO for the script.
+//   `seed_bin`   — path to a seeder binary, or "" to skip seeding
+//                  (just nuke-and-create).
+//
+// Repeated calls accumulate; seeds run in declaration order. Each
+// fixture_seed is independent; pair with `fixture_server(name, ...)`
+// to spawn a server bound to the same `name` (the server's args
+// can reference $<NAME>_REPO).
+//
+// Use case: the primary aeb-shaped replacement for ad-hoc
+// `pre_command("rm -rf X; seed_bin X")` boilerplate when each
+// test owns its own repo state.
+fixture_seed(_ctx: ptr, name: string, repo: string, seed_bin: string) {
+    if map.has(_ctx, "fixture_seeds") == 0 {
+        _e1 = map.put(_ctx, "fixture_seeds", list.new())
+    }
+    seeds, _ = map.get(_ctx, "fixture_seeds")
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, repo)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, seed_bin)
+    _e2 = list.add(seeds, rec)
+}
+
+// fixture_server(name, bin, args, port, ready_after_ms) — declare
+// a per-script server fixture spawned before the script runs and
+// killed after.
+//
+//   `name`           — fixture identifier; uppercased and used as
+//                      the env-var prefix exposed to the script
+//                      (e.g. name="primary" → $PRIMARY_PORT,
+//                      $PRIMARY_BIN).
+//   `bin`            — server binary path.
+//   `args`           — single shell string of arguments passed to
+//                      the binary; interpolated by the shell so
+//                      $<NAME>_REPO etc are visible. Pass "" if
+//                      the binary needs no args.
+//   `port`           — TCP port the server listens on. Exported as
+//                      $<NAME>_PORT to the script.
+//   `ready_after_ms` — milliseconds to sleep between spawn and
+//                      script. Caller-tunable; sleep-then-go.
+//                      Real readiness checks are deliberately
+//                      out-of-scope (see asks/bash-test-server-
+//                      fixtures.md).
+//
+// Repeated calls accumulate; servers spawn in declaration order
+// and are killed in reverse order after the script.
+//
+// Pairs with `fixture_seed(name, ...)` to scope the server to a
+// freshly-seeded repo. The two are independent setters so a server
+// can run against a static (un-seeded) directory if the test
+// author prefers.
+fixture_server(_ctx: ptr, name: string, bin: string, args: string,
+               port: int, ready_after_ms: int) {
+    if map.has(_ctx, "fixture_servers") == 0 {
+        _e1 = map.put(_ctx, "fixture_servers", list.new())
+    }
+    servers, _ = map.get(_ctx, "fixture_servers")
+    rec = string.concat(name, "\t")
+    rec = string.concat(rec, bin)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, args)
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, string.from_int(port))
+    rec = string.concat(rec, "\t")
+    rec = string.concat(rec, string.from_int(ready_after_ms))
+    _e2 = list.add(servers, rec)
+}
+
 // --- Helpers ---
+
+// _upper_ascii_word(s) — uppercase a-z to A-Z, leave other chars
+// unchanged. Used to derive the env-var prefix from a fixture name
+// (`primary` → `PRIMARY`). Names with hyphens or dots survive
+// verbatim; users get exactly the env vars they declared.
+_upper_ascii_word(s: string) {
+    n = string.length(s)
+    if n == 0 { return s }
+    pairs = "abcdefghijklmnopqrstuvwxyz"
+    upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    out = ""
+    i = 0
+    while i < n {
+        ch = string.substring(s, i, i + 1)
+        idx = string.index_of(pairs, ch)
+        if idx >= 0 {
+            out = string.concat(out, string.substring(upper, idx, idx + 1))
+        } else {
+            out = string.concat(out, ch)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// _split_tabs(rec, n) — pull n tab-separated fields out of a packed
+// fixture record. Returns a list of strings sized to n; missing
+// trailing fields are "". Pure.
+_split_tabs(rec: string, n: int) {
+    out = list.new()
+    rest = rec
+    i = 0
+    while i < n - 1 {
+        t = string.index_of(rest, "\t")
+        if t < 0 {
+            list.add(out, rest)
+            rest = ""
+        } else {
+            list.add(out, string.substring(rest, 0, t))
+            rest = string.substring(rest, t + 1, string.length(rest))
+        }
+        i = i + 1
+    }
+    list.add(out, rest)
+    return out
+}
+
+// _synth_fixture_pre(seeds, servers) — emit the shell statements
+// that run before the script: declare $<NAME>_REPO / $<NAME>_BIN /
+// $<NAME>_PORT exports, nuke+seed each repo, spawn each server,
+// sleep ready_after_ms.
+//
+// Returns a list of shell command strings ready to inject into
+// bash_chain_cmd's pre_cmds. Each list entry is a single shell
+// statement (no embedded `;`); bash_chain_cmd joins with `; `.
+//
+// Pairs with _synth_fixture_post — they share variable names
+// (e.g. <NAME>_PID set by spawn, read by kill) and thus must run
+// inside the same `bash -c '...'` invocation. Tested via
+// tests/test_bash_fixture_synth.ae.
+_synth_fixture_pre(seeds: ptr, servers: ptr) {
+    out = list.new()
+    dol = "$"
+
+    // Seeds first — servers may want $<NAME>_REPO populated before
+    // they spawn. Walk in declaration order.
+    if seeds != null {
+        ns = list.size(seeds)
+        i = 0
+        while i < ns {
+            rec, _ = list.get(seeds, i)
+            f = _split_tabs(rec, 3)
+            name, _ = list.get(f, 0)
+            repo, _ = list.get(f, 1)
+            seed_bin, _ = list.get(f, 2)
+            up = _upper_ascii_word(name)
+            // Export the repo path before any seeding runs so that
+            // a custom seed_bin can read $<NAME>_REPO if it cares.
+            list.add(out, "export ${up}_REPO=\"${repo}\"")
+            list.add(out, "rm -rf \"${repo}\"")
+            if string.length(seed_bin) > 0 {
+                list.add(out, "\"${seed_bin}\" \"${repo}\" >/dev/null")
+            } else {
+                list.add(out, "mkdir -p \"${repo}\"")
+            }
+            i = i + 1
+        }
+    }
+
+    // Servers next.
+    if servers != null {
+        nv = list.size(servers)
+        j = 0
+        while j < nv {
+            rec, _ = list.get(servers, j)
+            f = _split_tabs(rec, 5)
+            name, _ = list.get(f, 0)
+            bin, _ = list.get(f, 1)
+            args, _ = list.get(f, 2)
+            port_s, _ = list.get(f, 3)
+            ready_s, _ = list.get(f, 4)
+            up = _upper_ascii_word(name)
+            // Per-fixture log file in /tmp so scripts can `cat` it
+            // for diagnostics; kept short-named (the fixture name
+            // is unique-per-builder, not unique-globally, but
+            // scripts run sequentially so collisions don't matter).
+            log = string.concat("/tmp/aeb_fixture_", name)
+            log = string.concat(log, ".log")
+            // Aether's ${...} interpolation is resolved at compile
+            // time. Variables like ${up} ARE resolved (we want that),
+            // but if a value happens to contain a literal "${X}" the
+            // parser tries to look up X. Build via string.concat where
+            // the *output* needs to keep a `${...}` for the shell.
+            list.add(out, string.concat(string.concat("export ", up), "_BIN=\"${bin}\""))
+            list.add(out, string.concat(string.concat("export ", up), "_PORT=\"${port_s}\""))
+            // Spawn in background, capture PID. The shell command:
+            //   eval "\"$BIN_VAR\" $args" > /tmp/log 2>&1 &
+            // We render the literal $! and the literal $args via
+            // string.concat to keep them out of Aether's parser.
+            bin_ref = string.concat(dol, "{")
+            bin_ref = string.concat(bin_ref, up)
+            bin_ref = string.concat(bin_ref, "_BIN}")
+            // Spawn-and-capture-PID in a single shell statement.
+            //
+            // We need `$!` to be the *binary's* PID so cleanup can
+            // kill it directly — without a process-group dance or
+            // pgrep heuristics. The trick is `exec` inside the
+            // backgrounded subshell:
+            //
+            //   ( exec "$BIN" args ) > log 2>&1 &
+            //
+            // The subshell forks (giving us a PID via `$!`), then
+            // `exec` replaces it with the binary. So `$!` and the
+            // binary's PID are the same.
+            //
+            // Without `exec`, an `eval` or naked invocation would
+            // leave a wrapping bash that forks the binary as its
+            // child — `$!` would be the wrapper, killing it would
+            // orphan the binary to init.
+            //
+            // Quoting: bash_chain_cmd wraps everything in
+            // `bash -c '...'`. Single quotes inside emitted strings
+            // would close the outer wrapper, so we use double
+            // quotes throughout. The eval-with-escaped-double-
+            // quotes lets `${args}` re-expand at run time so users
+            // can interpolate $<NAME>_REPO into their args string.
+            spawn_line = string.concat("( eval exec \"\\\"", bin_ref)
+            spawn_line = string.concat(spawn_line, "\\\" ")
+            spawn_line = string.concat(spawn_line, args)
+            spawn_line = string.concat(spawn_line, "\" ) > \"")
+            spawn_line = string.concat(spawn_line, log)
+            spawn_line = string.concat(spawn_line, "\" 2>&1 & export ")
+            spawn_line = string.concat(spawn_line, up)
+            spawn_line = string.concat(spawn_line, "_PID=")
+            spawn_line = string.concat(spawn_line, dol)
+            spawn_line = string.concat(spawn_line, "!")
+            list.add(out, spawn_line)
+            // sleep N.NNN — convert ready_after_ms into decimal
+            // seconds via bash arith + printf (no awk, since
+            // single-quoted awk programs would conflict with the
+            // outer `bash -c '...'` wrapper).
+            // Renders: sleep $(printf "%d.%03d" $((N/1000)) $((N%1000)))
+            dol_paren_paren_l = string.concat(dol, "((")
+            sleep_line = string.concat("sleep $(printf \"%d.%03d\" ", dol_paren_paren_l)
+            sleep_line = string.concat(sleep_line, ready_s)
+            sleep_line = string.concat(sleep_line, "/1000)) ")
+            sleep_line = string.concat(sleep_line, dol_paren_paren_l)
+            sleep_line = string.concat(sleep_line, ready_s)
+            sleep_line = string.concat(sleep_line, "%1000)))")
+            list.add(out, sleep_line)
+            j = j + 1
+        }
+    }
+    return out
+}
+
+// _synth_fixture_post(seeds, servers) — emit the shell statements
+// that run after the script: kill each server in reverse order,
+// then rm -rf each fixture's repo.
+//
+// Cleanup is best-effort (`|| true` on every step); even if a
+// server already died or a directory is locked, the chain
+// completes so subsequent scripts get a clean state.
+_synth_fixture_post(seeds: ptr, servers: ptr) {
+    out = list.new()
+
+    // Servers killed in reverse order (LIFO — youngest first).
+    // Build "${PRIMARY_PID}" via string.concat so Aether's own
+    // ${...} interpolation doesn't try to resolve it at compile time.
+    dol = "$"
+    if servers != null {
+        nv = list.size(servers)
+        j = nv - 1
+        while j >= 0 {
+            rec, _ = list.get(servers, j)
+            f = _split_tabs(rec, 5)
+            name, _ = list.get(f, 0)
+            up = _upper_ascii_word(name)
+            // Render: kill "${PRIMARY_PID}" 2>/dev/null || true
+            pid_ref = string.concat(dol, "{")
+            pid_ref = string.concat(pid_ref, up)
+            pid_ref = string.concat(pid_ref, "_PID}")
+            kill_line = string.concat("kill \"", pid_ref)
+            kill_line = string.concat(kill_line, "\" 2>/dev/null || true")
+            wait_line = string.concat("wait \"", pid_ref)
+            wait_line = string.concat(wait_line, "\" 2>/dev/null || true")
+            list.add(out, kill_line)
+            list.add(out, wait_line)
+            j = j - 1
+        }
+    }
+
+    // Repos removed in declaration order; doesn't matter much,
+    // they're independent.
+    if seeds != null {
+        ns = list.size(seeds)
+        i = 0
+        while i < ns {
+            rec, _ = list.get(seeds, i)
+            f = _split_tabs(rec, 3)
+            repo, _ = list.get(f, 1)
+            list.add(out, "rm -rf \"${repo}\" 2>/dev/null || true")
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// _has_fixtures(builder) — does the builder map declare any
+// fixture_seed or fixture_server?
+_has_fixtures(builder_map: ptr) {
+    if builder_map == null { return 0 }
+    if map.has(builder_map, "fixture_seeds") == 1 {
+        s, _ = map.get(builder_map, "fixture_seeds")
+        if list.size(s) > 0 { return 1 }
+    }
+    if map.has(builder_map, "fixture_servers") == 1 {
+        v, _ = map.get(builder_map, "fixture_servers")
+        if list.size(v) > 0 { return 1 }
+    }
+    return 0
+}
 
 // Build the bash invocation chain for one script with optional pre
 // and post commands. Returns a single shell command suitable for
@@ -443,6 +765,68 @@ builder test(ctx: ptr) {
             post_cmds, _ = map.get(_builder, "post_commands")
         }
     }
+
+    // fixture_seed / fixture_server lookup. Lower these into
+    // synthesized pre/post shell statements so the existing
+    // bash_chain_cmd path executes them in the same `bash -c '...'`
+    // (PIDs need to survive across `;` separators).
+    fixture_seeds = null
+    fixture_servers = null
+    if _builder != null {
+        if map.has(_builder, "fixture_seeds") == 1 {
+            fixture_seeds, _ = map.get(_builder, "fixture_seeds")
+        }
+        if map.has(_builder, "fixture_servers") == 1 {
+            fixture_servers, _ = map.get(_builder, "fixture_servers")
+        }
+    }
+    has_fixtures = _has_fixtures(_builder)
+    if has_fixtures == 1 {
+        synth_pre = _synth_fixture_pre(fixture_seeds, fixture_servers)
+        synth_post = _synth_fixture_post(fixture_seeds, fixture_servers)
+        // Fixture pre runs FIRST (outermost wrap), so user pre_commands
+        // see fixtures already up. Fixture post runs LAST so user
+        // post_commands run before fixtures are torn down (e.g. to
+        // `cat /tmp/aeb_fixture_*.log` for diagnostics).
+        merged_pre = list.new()
+        sn = list.size(synth_pre)
+        i = 0
+        while i < sn {
+            line, _ = list.get(synth_pre, i)
+            list.add(merged_pre, line)
+            i = i + 1
+        }
+        if pre_cmds != null {
+            un = list.size(pre_cmds)
+            i = 0
+            while i < un {
+                line, _ = list.get(pre_cmds, i)
+                list.add(merged_pre, line)
+                i = i + 1
+            }
+        }
+        pre_cmds = merged_pre
+
+        merged_post = list.new()
+        if post_cmds != null {
+            un = list.size(post_cmds)
+            i = 0
+            while i < un {
+                line, _ = list.get(post_cmds, i)
+                list.add(merged_post, line)
+                i = i + 1
+            }
+        }
+        sn = list.size(synth_post)
+        i = 0
+        while i < sn {
+            line, _ = list.get(synth_post, i)
+            list.add(merged_post, line)
+            i = i + 1
+        }
+        post_cmds = merged_post
+    }
+
     has_hooks = 0
     if pre_cmds != null {
         if list.size(pre_cmds) > 0 { has_hooks = 1 }
@@ -453,10 +837,13 @@ builder test(ctx: ptr) {
 
     // pre/post hooks not yet supported in parallel mode — the
     // parallel runner's per-child runner script doesn't thread
-    // hooks through. Force sequential when hooks are declared.
+    // hooks through. Force sequential when hooks (or fixtures
+    // lowered to hooks) are declared.
     if has_hooks == 1 {
         if parallel == 1 {
-            println("${mod_dir}: pre_command/post_command forces sequential mode (jobs=${jobs_str} ignored)")
+            reason = "pre_command/post_command"
+            if has_fixtures == 1 { reason = "fixture_seed/fixture_server" }
+            println("${mod_dir}: ${reason} forces sequential mode (jobs=${jobs_str} ignored)")
             parallel = 0
         }
     }

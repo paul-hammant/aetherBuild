@@ -515,7 +515,7 @@ python.package(b) { … }     // generate pyproject.toml and build wheel
 
 ```aether
 import bash
-import bash (script, jobs, pre_command, post_command)  // see note below
+import bash (script, jobs, pre_command, post_command, fixture_seed, fixture_server)  // see note below
 
 bash.test(b) {              // exit 0 = PASS, non-zero = FAIL
     script("test_a.sh")
@@ -532,6 +532,25 @@ bash.test(b) {              // pre/post commands run around every script.
     post_command("source teardown.sh") // posts always run after, pass or fail
     script("test_acl.sh")
 }                           // (forces sequential mode if jobs(N>1) also set)
+
+bash.test(b) {                                 // structured server fixtures —
+    fixture_seed("primary",                    //   spawned per-script, env vars
+                 "/tmp/svnae_repo",            //   exposed to the script,
+                 "target/svnae-seed/bin/seed") //   cleaned up after.
+    fixture_server("primary",                  // server bin + args + port +
+                   "target/svnserver/bin/srv", //   ready_after_ms (ms to sleep
+                   "demo $PRIMARY_REPO 9540 --token X", //   between spawn and script).
+                   9540, 1500)
+    script("test_acl.sh")                      // sees $PRIMARY_REPO, $PRIMARY_PORT,
+}                                              // $PRIMARY_BIN, $PRIMARY_PID.
+
+bash.test(b) {                                 // multi-fixture: declare each with
+    fixture_seed("source",      "/tmp/r1", "")            //   a different name. The names
+    fixture_seed("destination", "/tmp/r2", "")            //   become env-var prefixes
+    fixture_server("source",      "$BIN", "", 9430, 500)  //   ($SOURCE_PORT,
+    fixture_server("destination", "$BIN", "", 9431, 500)  //   $DESTINATION_PORT, …).
+    script("test_svnadmin.sh")                            // Ports are caller-chosen;
+}                                                         //   ready-check is sleep-then-go.
 
 bash.script(b) {            // non-test runner: codegen, asset prep, etc.
     script("gen.sh")
