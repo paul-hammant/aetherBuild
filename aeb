@@ -51,6 +51,20 @@ if [[ "${1:-}" == "gcheckout" ]]; then
     exec "$GCHECKOUT_BIN" "$@"
 fi
 
+# --- --brew: render a Homebrew formula from a target's metadata ---
+# Reads `meta.X(b, "...")` declarations and `output("...")` from the
+# target source and emits a Ruby Formula on stdout. User pipes the
+# output to `Formula/<name>.rb` in their tap. Doesn't run the build
+# or shell out to ae — pure text-extraction + render.
+if [[ "${1:-}" == "--brew" ]]; then
+    AEB_BREW_BIN="$AEB_HOME/tools/aeb-brew"
+    if [[ ! -x "$AEB_BREW_BIN" ]]; then
+        "$AETHER" build "$AEB_HOME/tools/aeb-brew.ae" -o "$AEB_BREW_BIN" 2>/dev/null
+    fi
+    shift
+    exec "$AEB_BREW_BIN" "$@"
+fi
+
 # --- --watch: dev-loop wrapper, watches source dirs and re-runs aeb ---
 # Composes with cache + affected-target detection: a save fires inotify
 # (or fswatch on macOS), the changed paths flow through the

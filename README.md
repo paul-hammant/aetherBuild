@@ -329,6 +329,47 @@ coverage.py, dotnet test --collect, `-cover`, llvm-cov, etc.) —
 not yet wired through `aeb --coverage`. Tracked in TODO.md as
 follow-up.
 
+### Distribution metadata (`meta` SDK + `aeb --brew`)
+
+Targets can declare distribution metadata orthogonally to how
+they're built. The `meta` SDK takes the build context (`b`) and
+records strings into the build map; exporters read them back.
+
+```aether
+import aether
+import meta
+
+aether.program(b) {
+    source("hello.ae")
+    output("hello-world")
+}
+meta.desc(b, "Tiny hello-world greeter")
+meta.homepage(b, "https://example.com/hello")
+meta.license(b, "MIT")
+meta.version(b, "0.1.0")
+meta.url(b, "https://example.com/dl/hello-world-0.1.0.tar.gz")
+meta.sha256(b, "0123...cdef")
+meta.maintainer(b, "Alice <alice@example.com>")
+```
+
+`aeb --brew <target>` text-extracts those declarations and emits
+a Homebrew formula on stdout — pipe it to your tap's
+`Formula/<name>.rb`:
+
+```bash
+aeb --brew lib/hello/.dist.ae > Formula/hello-world.rb
+```
+
+`meta.url` and `meta.sha256` are required for a valid formula.
+The class name is auto-derived from `output(...)`
+(`hello-world` → `HelloWorld`); the `def install` body shells
+out to `aeb <target>` and copies the built binary into `bin/`,
+so consumers of the formula get the same build pipeline you
+would run locally.
+
+This is the source-of-truth for distribution metadata. Future
+exporters (`--nix`, `--deb`, `--pkgsrc`) read the same fields.
+
 ## Dependencies
 
 Every dependency — local module, third-party library, Maven coordinate, npm

@@ -183,6 +183,15 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
   `target/_aeb/_edges.txt` and emits DOT (default) or Mermaid.
   Pure-render: no I/O beyond reading the edges file. Pattern model
   for future render-from-edges tools (e.g. telemetry).
+- `tools/aeb-brew.ae` — `aeb --brew <target>` exporter. Text-extracts
+  `meta.X(b, "...")` and `output("...")` from the target source and
+  emits a Homebrew formula on stdout. Pure render — no I/O beyond
+  reading the target source. Doesn't run the build; the formula's
+  `def install` shells out to `aeb`.
+- `lib/meta/module.ae` — distribution metadata SDK. Setters
+  (`desc`, `homepage`, `license`, `version`, `url`, `sha256`,
+  `maintainer`) record into the build map; orthogonal to building.
+  Source-of-truth for `--brew` and future `--nix`/`--deb` exporters.
 - `tools/file-to-label.ae` / `tools/aeb-link.ae` / `tools/gen-orchestrator.ae`
   — three copies of the `file_to_label` logic that disambiguates
   multiple `.build*.ae` per directory. **They must stay in sync.**
