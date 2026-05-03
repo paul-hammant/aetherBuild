@@ -338,8 +338,8 @@ interleaved between. The data model captures that explicitly
 with two-sided events:
 
 ```
-{ kind: "start", label: "ae/svnserver:seed", at_ns: ..., type: "build" }
-{ kind: "end",   label: "ae/svnserver:seed", at_ns: ..., cache: "hit", ... }
+{ kind: "start", label: "ae/myserver:seed", at_ns: ..., type: "build" }
+{ kind: "end",   label: "ae/myserver:seed", at_ns: ..., cache: "hit", ... }
 ```
 
 The current "records" shape (one map per completed module) is
@@ -595,7 +595,7 @@ this session's SDK additions: `aetherc_emit_lib_cmd`,
 `aether_link_cmd`, `bash_xargs_cmd`, `bash_runner_body`, plus the
 mtime-driven `_regen_action` and the install-layout resolvers (with
 filesystem fixtures). Three behaviours are still uncovered. None
-blocks svn-aether; all need either a refactor or harness work that
+blocks any consumer; all need either a refactor or harness work that
 wasn't worth doing in-session.
 
 ### `_run_regen_pass` integration

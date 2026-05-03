@@ -105,7 +105,7 @@ build concurrently (parallelism is a TODO; the graph supports it).
   exporter, not re-architecting the runtime around the Nix store.
 - **DSL shape is closure-with-setters** — same idiom as Aether's
   `actor { state ... receive { ... } }` blocks:
-  `aether.program(b) { source("main.ae") output("svn") regen("...") }`.
+  `aether.program(b) { source("main.ae") output("hello") regen("...") }`.
   Setters are plain functions that take an invisible `_ctx` first
   arg; aeb reads the populated map after the block runs.
 

@@ -16,12 +16,12 @@
 //   import meta
 //   import meta (desc, homepage, license, version, url, sha256, maintainer)
 //
-//   aether.program(b) { source("main.ae") output("svn") }
-//   meta.desc(b, "An Aether-port of Apache Subversion server")
-//   meta.homepage(b, "https://example.com/svn-aether")
+//   aether.program(b) { source("main.ae") output("hello") }
+//   meta.desc(b, "Tiny hello-world greeter")
+//   meta.homepage(b, "https://example.com/hello")
 //   meta.license(b, "Apache-2.0")
 //   meta.version(b, "1.2.3")
-//   meta.url(b, "https://example.com/releases/svn-aether-1.2.3.tar.gz")
+//   meta.url(b, "https://example.com/releases/hello-1.2.3.tar.gz")
 //   meta.sha256(b, "abc123...")
 //   meta.maintainer(b, "Alice <alice@example.com>")
 //   meta.maintainer(b, "Bob <bob@example.com>")

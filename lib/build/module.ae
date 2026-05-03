@@ -62,7 +62,7 @@ begin(s: ptr, module_dir: string) {
     }
     // Strip the optional ":tag" suffix used to disambiguate multiple
     // .build*.ae files in the same directory (e.g. .build-seed.ae →
-    // label "ae/svnserver:seed"). The tag exists for visited-set
+    // label "ae/myserver:seed"). The tag exists for visited-set
     // dedup and human-readable display only — paths on disk
     // (source_dir, target_dir) never include it. The label itself
     // (module_dir) keeps the tag so println() output stays
