@@ -418,6 +418,42 @@ these are absolute, but skipping them tends to produce regrets.
   `aeb gcheckout ...`; same failure surfaces there.
 - Most other upstream gaps are documented inline in TODO.md.
 
+## Recent upstream Aether features aeb could lean on
+
+Tracked here so future sessions know what's available without
+re-reading the upstream changelog. Not "must consume," just "this
+exists if a need arises."
+
+- **0.115 `#line` directives in generated C** — gcc errors now
+  point at `.ae` source lines rather than post-merge C. The
+  manual-path gcc invocation in `lib/aether/_compile_and_link`
+  benefits automatically; nothing for aeb to do beyond knowing
+  user-facing error quality has improved.
+- **0.116 `@aether` per-param extern annotation** — for externs
+  whose receiver is Aether-emitted (e.g. another `--emit=lib`
+  module), the annotation preserves the AetherString header so
+  `string.length` doesn't strlen-truncate at embedded NULs. aeb
+  has zero such externs today (all our externs cross into naive
+  C runtime, where the v0.98.0 auto-unwrap is correct); flagged
+  in case future SDK additions cross Aether-to-Aether boundaries.
+- **0.111 `make install-contrib`** — installs prebuilt static
+  libs for sqlite + host bridges at `$(PREFIX)/lib/aether/`.
+  aeb users can `link_flag("-laether_sqlite")` instead of pointing
+  `extra_source` at the C file. aeb's existing `-L` includes that
+  dir; no change needed.
+- **0.111 `string.glob_match`** — POSIX fnmatch surface in
+  stdlib. Useful if aeb grows pattern-based source discovery
+  (e.g. a glob form of `extra_source(...)`); not consumed today.
+- **0.111 `std.config` + `std.actors`** — process-global KV +
+  actor registry. Relevant when aeb grows multi-thread or
+  multi-process telemetry (Tier 1+ in TODO § telemetry vision).
+- **0.115 `ae build --coverage`** — gcc instrumentation injected
+  into user-program build, `.gcda` at runtime, `.ae.gcov`
+  reports. aeb's shell-out path for `aether.program` would
+  receive this if a user wires `--coverage` through. Not
+  surfaced as an aeb flag yet; could grow `aether.program(b) {
+  coverage() }` if a real consumer asks.
+
 ## The load-bearing principle
 
 **The dot-prefixed `.ae` file is the single source of truth for
