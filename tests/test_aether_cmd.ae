@@ -138,5 +138,21 @@ main() {
         aether_link_cmd(o7),
         "gcc -O2 -pipe -w $(find /home/u/.local/include/aether -type d -print | sed 's|^|-I|') target/_aeb/main.c /repo/contrib/sqlite.c /repo/ae/svn/auth_generated.c -L/home/u/.local/lib/aether -laether /repo/target/rust/libnative.so -Wl,-rpath,/repo/target/rust -pthread -o target/hello/bin/svn -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) -Wl,--allow-multiple-definition")
 
+    // --- aether_link_cmd: --coverage flag swaps -O2 → -O0 -g and inserts --coverage ---
+    o_cov = _link_opts(
+        "main.c", "out/bin", "/lib", "", "", "", "", "", "")
+    map_put(o_cov, "coverage", "1")
+    _assert_eq("link: coverage replaces -O2 with -O0 -g and inserts --coverage",
+        aether_link_cmd(o_cov),
+        "gcc -O0 -g -pipe -w --coverage main.c -L/lib -laether   -o out/bin -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) ")
+
+    // Coverage="" (or missing) → default -O2, no --coverage.
+    o_nocov = _link_opts(
+        "main.c", "out/bin", "/lib", "", "", "", "", "", "")
+    map_put(o_nocov, "coverage", "")
+    _assert_eq("link: coverage=\"\" → default -O2, no --coverage",
+        aether_link_cmd(o_nocov),
+        "gcc -O2 -pipe -w main.c -L/lib -laether   -o out/bin -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) ")
+
     println("aether cmd tests done")
 }

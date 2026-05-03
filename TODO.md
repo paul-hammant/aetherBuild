@@ -450,6 +450,42 @@ that constrain Tiers 1-3. Status:
 | 1 → 2 | Subprocess fan-out in aeb-link or per-SDK | ~half-session, tied to whichever feature spawns subprocesses |
 | 2 → 3 | Remote build execution + BES adoption | Multi-session; the telemetry transport piece is the smaller part |
 
+### Code coverage — per-language SDK wiring
+
+Today `aeb --coverage` is a cross-cutting CLI flag (set as
+`AEB_COVERAGE=1` env by the trampoline, every SDK reads it if it
+knows what to do). Wired in `lib/aether/` only:
+
+- shell-out path: appends `--coverage` to `ae build` (Aether
+  0.115 feature; injects `gcc --coverage` and forces `-O0 -g`)
+- manual path: swaps `-O2` for `-O0 -g --coverage` in the gcc
+  command emitted by `aether_link_cmd`
+- cache key segregates coverage from non-coverage builds
+
+Each non-aether language has its own native coverage flow —
+none yet wired to honor the aeb-side flag. Per-SDK follow-up:
+
+- **java.junit5 / java.junit**: JaCoCo. Add `-javaagent:jacocoagent.jar=destfile=target/<mod>/jacoco.exec`
+  to the JVM args. User runs `java -jar jacococli.jar report ...`
+  to render. Bounded — one javaagent flag, one extra classpath
+  download or maven coordinate for the agent jar.
+- **jest.test**: `jest --coverage`. One flag.
+- **python.pytest**: `pytest --cov=<src>`. Or wrap with `coverage run -m pytest`.
+- **dotnet.test**: `dotnet test --collect:"XPlat Code Coverage"`.
+  Drops .coverage files; `reportgenerator` renders.
+- **go.go_test**: `go test -coverprofile=target/<mod>/cover.out`.
+  Built-in.
+- **rust.test / rust.test_workspace**: `RUSTFLAGS="-C instrument-coverage"`
+  + `LLVM_PROFILE_FILE=...` env vars, or `cargo-llvm-cov` if
+  installed. Per-rustc-version variation.
+- **scala.munit**: scoverage compiler plugin. Different shape.
+- **kotlin.kotlin_test**: usually JaCoCo (JVM-shared).
+- **clojure.test**: cloverage.
+- **ts.mocha**: nyc / c8.
+
+Cross-cutting render: aeb does not render; users delegate to
+gcovr/lcov/jacococli/reportgenerator/etc. per language.
+
 ### Cross-compilation targets
 
 Building for a different OS/arch than the host. Relevant for Go

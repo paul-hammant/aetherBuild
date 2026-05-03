@@ -285,6 +285,50 @@ sparse-checkout has hidden don't error). Re-running aeb-watch
 after `aeb gcheckout add ...` picks up the newly materialised
 dirs.
 
+### Coverage (`aeb --coverage`)
+
+Cross-cutting build flag — every SDK that knows what coverage
+means for its language honors it; SDKs that don't (e.g. `bash.test`)
+ignore it.
+
+```bash
+aeb --coverage                        # build everything with coverage
+aeb --coverage <target>               # one target, with coverage
+aeb --coverage --since main           # affected-targets, with coverage
+```
+
+Currently wired in `lib/aether/`:
+
+- `aether.program`/`aether.program_test` shell-out path: appends
+  `--coverage` to `ae build` (the Aether 0.115 feature). The
+  driver injects `gcc --coverage` and forces `-O0 -g` for
+  accurate `.ae.gcov` line attribution.
+- `aether.program`/`aether.program_test` manual path (when
+  `extra_source`/`link_flag`/`regen` is declared): swaps gcc's
+  `-O2` for `-O0 -g --coverage`.
+
+After running an instrumented binary, `.gcda` files appear next
+to the binary. aeb does not render reports — delegate to your
+preferred tool:
+
+```bash
+# graphviz / per-file gcov reports
+gcov -p -b -c target/<module>/bin/<binary>-*.gcda
+
+# HTML report via gcovr
+gcovr -r . --html --html-details -o coverage.html
+```
+
+The cache key includes the coverage flag, so `aeb` and `aeb --coverage`
+back-to-back both run real builds (no stale instrumented hit when
+you wanted a clean build, or vice versa).
+
+Other SDKs (java, jest, pytest, dotnet, go, rust, etc.) have
+their own native coverage flows (jacoco, jest --coverage,
+coverage.py, dotnet test --collect, `-cover`, llvm-cov, etc.) —
+not yet wired through `aeb --coverage`. Tracked in TODO.md as
+follow-up.
+
 ## Dependencies
 
 Every dependency — local module, third-party library, Maven coordinate, npm

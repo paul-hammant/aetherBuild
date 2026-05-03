@@ -298,6 +298,12 @@ _cache_key_for_aether_link(builder_map: ptr, source_dir: string, src_path: strin
     list.add(parts, string.concat("lib-dir:", lib_dir))
     list.add(parts, string.concat("dup-flag:", dup_flag))
 
+    // Coverage flag — instrumented builds produce different output
+    // bytes than uninstrumented ones, must not share cache entries.
+    cov = ""
+    if string.length(os.getenv("AEB_COVERAGE")) > 0 { cov = "1" }
+    list.add(parts, string.concat("coverage:", cov))
+
     digest, derr = cache.hash_inputs(parts)
     return digest, derr
 }
@@ -335,7 +341,15 @@ _shell_out_ae_build(ctx: ptr, src_path: string, bin_path: string) {
         ae_bin = "ae"
     }
 
-    cmd = "${ae_bin} build ${src_path} -o ${bin_path}"
+    // Coverage: cross-cutting CLI flag set by the trampoline as
+    // AEB_COVERAGE=1. When on, append `--coverage` to ae build,
+    // which (per Aether 0.115) injects `gcc --coverage` and forces
+    // -O0 -g for accurate .ae.gcov line attribution.
+    cov_flag = ""
+    if string.length(os.getenv("AEB_COVERAGE")) > 0 {
+        cov_flag = " --coverage"
+    }
+    cmd = "${ae_bin} build${cov_flag} ${src_path} -o ${bin_path}"
     rc = os.system(cmd)
     if rc != 0 {
         println("${mod_dir}: ae build failed")
@@ -370,6 +384,12 @@ aetherc_emit_lib_cmd(aetherc: string, ae_path: string, c_path: string, caps: str
 //   rpath_link  — -Wl,-rpath,... entries (space-separated, no leading space)
 //   user_flags  — leading-space-prefixed user link_flag entries (or "")
 //   dup_flag    — duplicate-symbol linker flag (platform-dependent)
+//   coverage    — "1" to inject `--coverage -O0 -g` (replaces the
+//                 default -O2); empty string for normal build. -O0
+//                 is required for accurate .ae.gcov line attribution
+//                 since gcc at -O2 inlines and merges blocks (per
+//                 the Aether 0.115 changelog note on `ae build
+//                 --coverage`).
 aether_link_cmd(opts: ptr) {
     c_path, _      = map.get(opts, "c_path")
     bin_path, _    = map.get(opts, "bin_path")
@@ -380,13 +400,25 @@ aether_link_cmd(opts: ptr) {
     rpath_link, _  = map.get(opts, "rpath_link")
     user_flags, _  = map.get(opts, "user_flags")
     dup_flag, _    = map.get(opts, "dup_flag")
+    coverage = ""
+    if map.has(opts, "coverage") == 1 {
+        coverage, _ = map.get(opts, "coverage")
+    }
+    // Optimization level: -O2 normally, -O0 -g for coverage builds
+    // so .gcda → .ae.gcov line attribution stays accurate.
+    opt_flags = "-O2"
+    cov_flag = ""
+    if string.equals(coverage, "1") == 1 {
+        opt_flags = "-O0 -g"
+        cov_flag = " --coverage"
+    }
     // libaether.a unconditionally references zlib/openssl symbols
     // when the Aether toolchain was built with them detected (most
     // distros). Pull the link flags from pkg-config at gcc time;
     // no-op if the libs aren't installed (then the symbols won't be
     // referenced either, since libaether builds without them).
     sysdeps = " $(pkg-config --libs zlib openssl 2>/dev/null)"
-    return "gcc -O2 -pipe -w${inc_flags} ${c_path}${extras_str} -L${lib_dir} -laether ${extra_link} ${rpath_link}${user_flags} -o ${bin_path} -pthread -lm${sysdeps} ${dup_flag}"
+    return "gcc ${opt_flags} -pipe -w${cov_flag}${inc_flags} ${c_path}${extras_str} -L${lib_dir} -laether ${extra_link} ${rpath_link}${user_flags} -o ${bin_path} -pthread -lm${sysdeps} ${dup_flag}"
 }
 
 // Decide whether a regen entry needs aetherc work, given the .ae and
@@ -659,6 +691,11 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
         inc_flags = " $(find ${inc_root} -type d -print | sed 's|^|-I|')"
     }
 
+    coverage = ""
+    if string.length(os.getenv("AEB_COVERAGE")) > 0 {
+        coverage = "1"
+    }
+
     opts = map.new()
     _eo1 = map.put(opts, "c_path", c_path)
     _eo2 = map.put(opts, "bin_path", bin_path)
@@ -669,6 +706,7 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
     _eo7 = map.put(opts, "rpath_link", rpath_link)
     _eo8 = map.put(opts, "user_flags", user_flags)
     _eo9 = map.put(opts, "dup_flag", dup_flag)
+    _eo10 = map.put(opts, "coverage", coverage)
     gcc_cmd = aether_link_cmd(opts)
     rc = os.system(gcc_cmd)
     if rc != 0 {

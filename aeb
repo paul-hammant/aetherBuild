@@ -62,6 +62,25 @@ if [[ "${1:-}" == "--watch" ]]; then
     exec "$AEB_HOME/tools/aeb-watch" "$@"
 fi
 
+# --- --coverage: cross-cutting build flag exported to SDK builders ---
+# Set once at the CLI; SDKs that know what coverage means for their
+# language honor it (e.g. lib/aether passes --coverage to ae build /
+# adds --coverage -O0 to its gcc invocation; cache key segregates
+# coverage builds from regular ones). SDKs without a coverage flow
+# (bash.test, etc.) ignore the env var.
+#
+# Consumed by position-agnostic strip: `aeb --coverage <target>`,
+# `aeb <target> --coverage`, `aeb --coverage --since main` all work.
+ARGS=()
+for a in "$@"; do
+    if [[ "$a" == "--coverage" ]]; then
+        export AEB_COVERAGE=1
+    else
+        ARGS+=("$a")
+    fi
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
 # --- Normal build: lazy-build and exec the main tool ---
 AEB_MAIN_BIN="$AEB_HOME/tools/aeb-main"
 if [[ ! -x "$AEB_MAIN_BIN" ]]; then

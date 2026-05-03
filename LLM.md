@@ -449,10 +449,11 @@ exists if a need arises."
   multi-process telemetry (Tier 1+ in TODO § telemetry vision).
 - **0.115 `ae build --coverage`** — gcc instrumentation injected
   into user-program build, `.gcda` at runtime, `.ae.gcov`
-  reports. aeb's shell-out path for `aether.program` would
-  receive this if a user wires `--coverage` through. Not
-  surfaced as an aeb flag yet; could grow `aether.program(b) {
-  coverage() }` if a real consumer asks.
+  reports. **Now consumed**: `aeb --coverage` is a CLI flag (set
+  by trampoline as env var `AEB_COVERAGE=1`); `lib/aether` honors
+  it on both shell-out and manual paths. Cache key segregates
+  coverage from non-coverage builds. Other test SDKs (jacoco,
+  jest --coverage, etc.) not yet wired — tracked in TODO.
 
 ## The load-bearing principle
 
