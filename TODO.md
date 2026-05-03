@@ -274,6 +274,134 @@ What's left:
   aetherc vs gcc isn't separated. Useful for SDK profiling;
   needs each SDK to emit phase markers. Defer.
 
+#### Telemetry — the four-tier vision
+
+Today's implementation is the degenerate case of a much larger
+shape. As aeb grows parallel module execution, multi-process
+worker fan-out, and remote build, the telemetry channel evolves
+through four tiers. Each tier is its own session of work; the
+*data model* is forward-compatible across all four (records can
+gain fields without breaking renderers), but the *transport*
+between informer and consumer must change at each step.
+
+A node informs the graph "I started" and later "I ended,
+extra-info...", with arbitrary other informers writing
+interleaved between. The data model captures that explicitly
+with two-sided events:
+
+```
+{ kind: "start", label: "ae/svnserver:seed", at_ns: ..., type: "build" }
+{ kind: "end",   label: "ae/svnserver:seed", at_ns: ..., cache: "hit", ... }
+```
+
+The current "records" shape (one map per completed module) is
+the synchronous fold of those events: start arrived → in-progress,
+end arrived → record completed. When transport stays single-
+process synchronous, folding can happen at append time and the
+events are never materialised (today's case).
+
+##### Tier 0 — single process, synchronous (DONE)
+
+In-memory list, records appended as each module finishes, lost
+on exit. The orchestrator (one process) is the only writer. No
+synchronization needed. What this commit ships.
+
+##### Tier 1 — single process, multi-thread
+
+Triggered when aeb grows parallel module execution (already on
+the TODO under "Parallel execution"). Multiple worker
+threads/actors build independent DAG branches concurrently.
+
+Transport: a `TelemetryActor` owns the records list. Workers
+`send Started{label,...}` / `send Ended{label, cache, ...}`.
+No locks; message-passing is the synchronization. Aether's
+actor model is the natural fit.
+
+Inflection point: the records→events refactor lands here. The
+TelemetryActor's mailbox IS the event stream; it folds events
+into records as messages arrive, hands the records to the
+existing `render_telemetry` at session end. Renderer signature
+unchanged.
+
+`clock_ns()` is monotonic and meaningful between threads on the
+same host (sub-microsecond drift). Wall-time semantics survive.
+
+##### Tier 2 — multi process, same machine
+
+Triggered when aeb spawns subprocess workers (e.g. parallel
+`aetherc`/`javac`/`gcc` invocations from `tools/aeb-link.ae`,
+or per-target subprocess fan-out). All workers share the
+filesystem and the wall clock.
+
+Transport: append-only file log at `target/_aeb/telemetry.jsonl`.
+Each subprocess opens the file in `O_APPEND` and writes one
+event per line. POSIX guarantees writes ≤ PIPE_BUF (4096 bytes
+on Linux, 512 minimal POSIX) are atomic against concurrent
+writers; events fit comfortably. No locks, no coordination.
+Standard practice — Bazel BES, Buck2, Nx Cloud all use
+append-only logs.
+
+Workers find the log via env var (`AEB_TELEMETRY_LOG=...`)
+inherited from the orchestrator. The orchestrator reads the
+log post-build, folds events to records, hands to the renderer.
+
+`clock_ns()` is monotonic per-process. Cross-process timing is
+accurate to ~microseconds (different processes have their own
+monotonic baselines). For "what's slow?" this doesn't matter.
+
+##### Tier 3 — multi machine / VM / container
+
+Triggered when aeb grows remote build execution. Workers run
+on different hosts. No shared filesystem, no shared clock.
+
+Transport: a network-reachable telemetry sink. Industry
+standard is Bazel's Build Event Stream (BES) — gRPC streaming
+of protobuf events, well-defined semantics for incomplete
+builds, reusable consumers (BuildBuddy, EngFlow). Don't roll
+own; adopt BES when the time comes.
+
+Each event gains identity discriminators: `host`, `pid`, `tid`,
+container/VM ID. The records→events refactor from Tier 1 means
+adding fields is a no-op for renderers (they ignore unknown
+keys).
+
+Clock skew is real: cross-host timing requires either NTP-bound
+wall-clock with accepted skew, or logical clocks (Lamport,
+vector). Per-host monotonic order is preserved; cross-host
+causal ordering is the harder problem. BES sidesteps by
+standardising on UTC wall-clock with skew tolerance.
+
+Backpressure: if the sink is slow or unreachable, workers can't
+block on inform. Local buffer + async flush + drop-on-overflow
+counter (Bazel's pattern).
+
+##### Forward-compatibility checklist
+
+The current Tier 0 implementation should not lock decisions
+that constrain Tiers 1-3. Status:
+
+- ✓ Records are `map<string, string>` (open-ended; can grow
+  fields like `host`, `pid`, `cache`, `exit_code` without
+  changing the renderer signature).
+- ✓ Renderer takes a list and a total — same shape as
+  events-folded-to-records will produce in Tier 1+.
+- ✓ Cache markers are per-target files, readable across
+  process boundaries — already Tier 2 compatible (a worker
+  subprocess writing the marker is observable to the
+  orchestrator parent).
+- ✗ The events shape is not yet a thing. Tier 1's records→
+  events refactor IS the event-protocol introduction. ~50
+  LOC of orchestrator + actor + renderer; defer until the
+  parallel-modules feature drives it.
+
+##### Where each tier's preconditions live
+
+| Tier | Blocked on | Estimated session work |
+|---|---|---|
+| 0 → 1 | Parallel module execution (TODO above) | ~half-session, riding the parallel-modules feature |
+| 1 → 2 | Subprocess fan-out in aeb-link or per-SDK | ~half-session, tied to whichever feature spawns subprocesses |
+| 2 → 3 | Remote build execution + BES adoption | Multi-session; the telemetry transport piece is the smaller part |
+
 ### Cross-compilation targets
 
 Building for a different OS/arch than the host. Relevant for Go
