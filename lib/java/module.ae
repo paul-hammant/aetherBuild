@@ -1,5 +1,6 @@
 // java — Java SDK for aether.build
 import build
+import cache
 import maven
 import std.string
 import std.io
@@ -250,6 +251,175 @@ builder jar_registry_finalize(ctx: ptr) {
     return 0
 }
 
+// _jdk_version() — first line of `javac -version` (writes to stderr).
+// Used as a cache-key input so a JDK upgrade invalidates every
+// cached classes tree. Memoised for the build's duration via env
+// var so we don't fork javac for every cache key.
+_jdk_version() {
+    cached = os.getenv("_AEB_JAVAC_VERSION_CACHE")
+    if string.length(cached) > 0 { return cached }
+    raw, _err = os.exec("javac -version 2>&1 | head -1")
+    return string.trim(raw)
+}
+
+// _read_argfile_lines(path) — read a javac argfile (one source path
+// per line) into a sorted list. Sorted because `find`'s order isn't
+// deterministic across filesystems and we want stable cache keys.
+_read_argfile_lines(argfile_path: string) {
+    raw, _err = io.read_file(argfile_path)
+    content = string.trim(raw)
+    out = list.new()
+    if string.length(content) == 0 { return out }
+    rest = content
+    while string.length(rest) > 0 {
+        nl = string.index_of(rest, "\n")
+        line = ""
+        if nl < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = string.substring(rest, 0, nl)
+            rest = string.substring(rest, nl + 1, string.length(rest))
+        }
+        line = string.trim(line)
+        if string.length(line) > 0 {
+            list.add(out, line)
+        }
+    }
+    // Sort via shell — std.list lacks a sort primitive, and shelling
+    // to sort is cheap (typical N is dozens to hundreds).
+    cmd = "printf '%s\\n' '${content}' | sort"
+    sorted_raw, _err2 = os.exec(cmd)
+    sorted_content = string.trim(sorted_raw)
+    sorted = list.new()
+    rest2 = sorted_content
+    while string.length(rest2) > 0 {
+        nl = string.index_of(rest2, "\n")
+        line = ""
+        if nl < 0 {
+            line = rest2
+            rest2 = ""
+        } else {
+            line = string.substring(rest2, 0, nl)
+            rest2 = string.substring(rest2, nl + 1, string.length(rest2))
+        }
+        line = string.trim(line)
+        if string.length(line) > 0 {
+            list.add(sorted, line)
+        }
+    }
+    return sorted
+}
+
+// Compute the cache key for a javac compile action. Inputs in
+// canonical order; each part length-prefixed via cache.hash_inputs
+// so distinct concatenations can't collide.
+//
+// Inputs that go into the hash (the contract):
+//   - JDK version (`javac -version`) — toolchain-bump invalidator
+//   - canonical javac command string — captures flags, classpath
+//     paths, processor paths, encoding, lint level, etc.
+//   - each .java source's path + content hash, sorted by path
+//   - hashes of every dep target's jvm_classpath_deps_including_transitive
+//     artifact file content — captures upstream rebuilds
+//
+// What's NOT in the hash:
+//   - The maven jar file contents themselves (paths are stable per
+//     version coordinate; a real version change shows up in the
+//     classpath string)
+//   - generated_sources directory (annotation processors mutate it
+//     as a side effect; not a primary input)
+//   - target_dir / mod_dir (cosmetic / destination)
+//
+// FALSE-HIT HAZARD: if a sibling dep target's local classes/ tree
+// changes content but its classpath string stays the same (e.g.
+// rebuilt with same source-set), this key won't reflect the
+// change and we'd hit a stale cache. Mitigation today is the dep
+// artifact content hash above, which catches most real changes
+// because aeb writes that artifact every rebuild. Full correctness
+// would require walking each upstream target's classes tree;
+// punted for v1 (matches Nx-class hermeticity, livable).
+//
+// Returns ("", err) on read failure of any source — caller falls
+// through to live build.
+_cache_key_for_javac(ctx: ptr, builder_map: ptr, argfile_path: string, javac_cmd_str: string) {
+    parts = list.new()
+
+    // Toolchain version
+    list.add(parts, string.concat("javac:", _jdk_version()))
+
+    // The canonical command string captures every flag and
+    // classpath path. This is the action discriminator.
+    list.add(parts, string.concat("cmd:", javac_cmd_str))
+
+    // Each .java source's path + content hash, in sorted order.
+    sources = _read_argfile_lines(argfile_path)
+    nsrc = list.size(sources)
+    si = 0
+    while si < nsrc {
+        src, _ = list.get(sources, si)
+        sh, serr = cache.hash_file(src)
+        if string.length(serr) > 0 {
+            return "", serr
+        }
+        list.add(parts, string.concat("src:", src))
+        list.add(parts, string.concat("src-hash:", sh))
+        si = si + 1
+    }
+
+    // Each dep's classpath artifact content (captures upstream
+    // rebuilds via the artifact's content, not just its path).
+    deps, _ = map.get(ctx, "deps")
+    dn = list.size(deps)
+    di = 0
+    while di < dn {
+        dp, _ = list.get(deps, di)
+        dm = build._strip_lang(dp)
+        dep_cp = build._read_dep_artifact(ctx, dm, "jvm_classpath_deps_including_transitive")
+        if string.length(dep_cp) > 0 {
+            list.add(parts, string.concat("dep:", dm))
+            list.add(parts, string.concat("dep-cp:", dep_cp))
+        }
+        di = di + 1
+    }
+
+    digest, derr = cache.hash_inputs(parts)
+    return digest, derr
+}
+
+// Tar a directory tree to a temp file, return (tar_path, "") or
+// ("", err). Used to bundle a target/<module>/classes/ tree for
+// cache.put. Uncompressed — cache.put zlibs it on the way in.
+_tar_dir(src_dir: string) {
+    tmp_raw, _err = os.exec("mktemp")
+    tmp = string.trim(tmp_raw)
+    if string.length(tmp) == 0 {
+        return "", "mktemp failed"
+    }
+    cmd = "tar -cf '${tmp}' -C '${src_dir}' . 2>&1"
+    out, eerr = os.exec(cmd)
+    if string.length(eerr) > 0 {
+        return "", string.concat("tar failed: ", eerr)
+    }
+    return tmp, ""
+}
+
+// Untar a tarball into a directory. Wipes dest_dir first so the
+// untar starts from a clean state (avoids stale files mixing with
+// the cached set). Returns "" on success or err string.
+_untar_into(tar_path: string, dest_dir: string) {
+    os.system("rm -rf '${dest_dir}'")
+    merr = fs.mkdir_p(dest_dir)
+    if string.length(merr) > 0 { return merr }
+    cmd = "tar -xf '${tar_path}' -C '${dest_dir}' 2>&1"
+    out, _eerr = os.exec(cmd)
+    if string.length(out) > 0 {
+        // tar prints to stdout via 2>&1 only on error; success is silent.
+        return string.concat("untar failed: ", out)
+    }
+    return ""
+}
+
 builder javac(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     target_dir = build._get(ctx, "target_dir")
@@ -312,10 +482,62 @@ builder javac(ctx: ptr) {
     }
 
     cmd = javac_cmd(classes_dir, classpath, file_ref, _builder)
-    exit_code = os.system(cmd)
-    if exit_code != 0 {
-        println("${mod_dir}: javac failed")
-        return exit_code
+
+    // Cache check: hash sources + classpath + flags + JDK version,
+    // restore the classes/ tarball on hit and skip javac entirely.
+    // Best-effort: any error computing the key (unreadable source,
+    // hashing failure) falls through to the live javac path.
+    //
+    // exit_code is the "what happens next" sentinel:
+    //   0  → cache supplied the artifact, skip the live javac
+    //   -1 → cache didn't apply (unavailable, miss, untar failure),
+    //        live javac will run below
+    cache_key = ""
+    exit_code = -1
+    if cache.available() == 1 {
+        ck, kerr = _cache_key_for_javac(ctx, _builder, argfile, cmd)
+        if string.length(kerr) == 0 {
+            cache_key = ck
+            tmp_raw, _terr = os.exec("mktemp")
+            tmp_tar = string.trim(tmp_raw)
+            if string.length(tmp_tar) > 0 {
+                grc = cache.get(cache_key, tmp_tar)
+                if string.length(grc) == 0 {
+                    uerr = _untar_into(tmp_tar, classes_dir)
+                    os.system("rm -f '${tmp_tar}'")
+                    if string.length(uerr) == 0 {
+                        println("${mod_dir}: javac cache hit ${cache_key}")
+                        exit_code = 0
+                    } else {
+                        // Untar failed — clean up and fall through.
+                        os.system("rm -rf '${classes_dir}'")
+                        build._mkdirs(classes_dir)
+                        build._mkdirs(ts_dir)
+                    }
+                } else {
+                    os.system("rm -f '${tmp_tar}'")
+                }
+            }
+        }
+    }
+
+    if exit_code == -1 {
+        exit_code = os.system(cmd)
+        if exit_code != 0 {
+            println("${mod_dir}: javac failed")
+            return exit_code
+        }
+        // Populate the cache with the freshly-compiled tree. Best-effort.
+        if string.length(cache_key) > 0 {
+            tar_path, terr = _tar_dir(classes_dir)
+            if string.length(terr) == 0 {
+                perr = cache.put(cache_key, tar_path)
+                os.system("rm -f '${tar_path}'")
+                if string.length(perr) > 0 {
+                    println("${mod_dir}: javac cache write failed: ${perr}")
+                }
+            }
+        }
     }
 
     // Write classpath artifact (classes dir + dep classpath + maven classpath)
@@ -424,10 +646,53 @@ builder javac_test(ctx: ptr) {
     }
 
     cmd = javac_cmd(test_classes, classpath, file_ref, _builder)
-    exit_code = os.system(cmd)
-    if exit_code != 0 {
-        println("${mod_dir}: javac (test) failed")
-        return exit_code
+
+    // Cache check: same pattern as builder javac. Tarballs the
+    // test-classes/ tree on miss + put; restores on hit + skip.
+    cache_key = ""
+    exit_code = -1
+    if cache.available() == 1 {
+        ck, kerr = _cache_key_for_javac(ctx, _builder, argfile, cmd)
+        if string.length(kerr) == 0 {
+            cache_key = ck
+            tmp_raw, _terr = os.exec("mktemp")
+            tmp_tar = string.trim(tmp_raw)
+            if string.length(tmp_tar) > 0 {
+                grc = cache.get(cache_key, tmp_tar)
+                if string.length(grc) == 0 {
+                    uerr = _untar_into(tmp_tar, test_classes)
+                    os.system("rm -f '${tmp_tar}'")
+                    if string.length(uerr) == 0 {
+                        println("${mod_dir}: javac-test cache hit ${cache_key}")
+                        exit_code = 0
+                    } else {
+                        os.system("rm -rf '${test_classes}'")
+                        build._mkdirs(test_classes)
+                        build._mkdirs(ts_dir)
+                    }
+                } else {
+                    os.system("rm -f '${tmp_tar}'")
+                }
+            }
+        }
+    }
+
+    if exit_code == -1 {
+        exit_code = os.system(cmd)
+        if exit_code != 0 {
+            println("${mod_dir}: javac (test) failed")
+            return exit_code
+        }
+        if string.length(cache_key) > 0 {
+            tar_path, terr = _tar_dir(test_classes)
+            if string.length(terr) == 0 {
+                perr = cache.put(cache_key, tar_path)
+                os.system("rm -f '${tar_path}'")
+                if string.length(perr) > 0 {
+                    println("${mod_dir}: javac-test cache write failed: ${perr}")
+                }
+            }
+        }
     }
 
     _ew = io.write_file(ts_file, "")
