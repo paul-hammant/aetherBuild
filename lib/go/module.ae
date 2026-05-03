@@ -276,9 +276,14 @@ builder go_test(ctx: ptr) {
     }
     exit_code = os.system(test_cmd)
     if exit_code != 0 {
+        // Default `go test` output doesn't include sub-test counts
+        // (only -v does). Record coarse pass/fail. Future: parse
+        // `--- PASS:` / `--- FAIL:` lines when -v is set.
+        build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: Go tests FAILED")
         return exit_code
     }
+    build._record_test_result(ctx, 1, 0)
     println("${mod_dir}: Go tests PASSED")
     return 0
 }

@@ -63,15 +63,75 @@ builder test(ctx: ptr) {
 
     jest_config = path.join(source_dir, "jest.config.ts")
     cmd = jest_cmd(jest_bin, jest_config, timeout_secs, _builder)
-    exit_code = os.system(cmd)
+    // Tee output for summary parsing. Jest prints
+    // "Tests:       1 failed, 14 passed, 15 total" on stderr.
+    out_path_raw, _otp = os.exec("mktemp")
+    out_path = string.trim(out_path_raw)
+    full_cmd = string.concat(string.concat(cmd, " 2>&1 | tee "), out_path)
+    exit_code = os.system(full_cmd)
+    out_text, _orerr = fs.read(out_path)
+    os.system("rm -f ${out_path}")
     if exit_code == 124 {
+        build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: tests TIMEOUT")
         return exit_code
     }
+    pj, fj = _parse_jest_counts(out_text)
+    build._record_test_result(ctx, pj, fj)
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")
         return exit_code
     }
     println("${mod_dir}: tests PASSED")
+    return 0
+}
+
+// _parse_jest_counts(output) — extract (passed, failed) from
+// jest's summary line: "Tests:       N failed, M passed, T total".
+// Both numbers are optional (a clean run has only "passed");
+// a missing field is 0. Pure: just string parsing.
+_parse_jest_counts(output: string) {
+    return _parse_count_before_word(output, " passed"), _parse_count_before_word(output, " failed")
+}
+
+// Find a "<digits> <word>" pattern; return the digit value. Walks
+// backward from the word's index to find the digit run. Used by
+// jest, mocha, and any runner with similar summary lines.
+_parse_count_before_word(output: string, word: string) {
+    idx = string.index_of(output, word)
+    if idx < 0 { return 0 }
+    // Walk left over digits.
+    end = idx
+    start = end
+    found = 0
+    while found == 0 {
+        if start <= 0 {
+            found = 1
+        } else {
+            c = string.substring(output, start - 1, start)
+            if _is_digit(c) == 1 {
+                start = start - 1
+            } else {
+                found = 1
+            }
+        }
+    }
+    if start >= end { return 0 }
+    num_str = string.substring(output, start, end)
+    v, _err = string.to_int(num_str)
+    return v
+}
+
+_is_digit(c: string) {
+    if string.equals(c, "0") == 1 { return 1 }
+    if string.equals(c, "1") == 1 { return 1 }
+    if string.equals(c, "2") == 1 { return 1 }
+    if string.equals(c, "3") == 1 { return 1 }
+    if string.equals(c, "4") == 1 { return 1 }
+    if string.equals(c, "5") == 1 { return 1 }
+    if string.equals(c, "6") == 1 { return 1 }
+    if string.equals(c, "7") == 1 { return 1 }
+    if string.equals(c, "8") == 1 { return 1 }
+    if string.equals(c, "9") == 1 { return 1 }
     return 0
 }

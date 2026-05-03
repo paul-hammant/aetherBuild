@@ -251,9 +251,12 @@ builder munit(ctx: ptr) {
 
     exit_code = os.system(cmd)
     if exit_code != 0 {
+        // munit per-test count parsing not yet wired; coarse record.
+        build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: tests FAILED")
         return exit_code
     }
+    build._record_test_result(ctx, 1, 0)
     println("${mod_dir}: tests PASSED")
     _ew = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0

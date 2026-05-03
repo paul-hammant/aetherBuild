@@ -782,9 +782,14 @@ builder program_test(ctx: ptr) {
     }
     rc = os.system(run_cmd)
     if rc != 0 {
+        // aether.program_test runs one binary; non-zero exit = 1
+        // logical failure. Test runners with sub-test counts
+        // (junit5, pytest, etc.) report finer granularity.
+        build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: tests FAILED")
         return rc
     }
+    build._record_test_result(ctx, 1, 0)
     println("${mod_dir}: tests PASSED")
     return 0
 }

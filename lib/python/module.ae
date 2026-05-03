@@ -319,13 +319,77 @@ builder pytest(ctx: ptr) {
     py = path.join(venv, "bin/python")
 
     cmd = pytest_cmd(py, source_dir, root)
-    exit_code = os.system(cmd)
+    // Tee output for summary parsing. Pytest prints
+    // "===== 14 passed, 1 failed in 0.34s =====" at the end.
+    out_path_raw, _otp = os.exec("mktemp")
+    out_path = string.trim(out_path_raw)
+    full_cmd = string.concat(string.concat(cmd, " 2>&1 | tee "), out_path)
+    exit_code = os.system(full_cmd)
+    out_text, _orerr = fs.read(out_path)
+    os.system("rm -f ${out_path}")
+    pp, pf = _parse_pytest_counts(out_text)
+    build._record_test_result(ctx, pp, pf)
     if exit_code != 0 {
         println("${mod_dir}: tests FAILED")
         return exit_code
     }
     println("${mod_dir}: tests PASSED")
     _ew = io.write_file(path.join(target_dir, ".timestamp"), "")
+    return 0
+}
+
+// _parse_pytest_counts(output) — extract (passed, failed) from
+// pytest's summary line. Pure: just string parsing.
+//
+// Pytest summary varies:
+//   "===== 14 passed in 0.34s ====="            (all-pass)
+//   "===== 1 failed, 14 passed in 0.34s ====="  (mixed)
+//   "===== 1 error in 0.05s ====="               (errors before tests)
+//
+// "errors" count as failures for our purposes (lowest common
+// denominator: anything not-passed → failed).
+_parse_pytest_counts(output: string) {
+    passed = _parse_count_before_word_py(output, " passed")
+    failed = _parse_count_before_word_py(output, " failed")
+    errors = _parse_count_before_word_py(output, " error")
+    return passed, failed + errors
+}
+
+_parse_count_before_word_py(output: string, word: string) {
+    idx = string.index_of(output, word)
+    if idx < 0 { return 0 }
+    end = idx
+    start = end
+    found = 0
+    while found == 0 {
+        if start <= 0 {
+            found = 1
+        } else {
+            c = string.substring(output, start - 1, start)
+            if _is_digit_py(c) == 1 {
+                start = start - 1
+            } else {
+                found = 1
+            }
+        }
+    }
+    if start >= end { return 0 }
+    num_str = string.substring(output, start, end)
+    v, _err = string.to_int(num_str)
+    return v
+}
+
+_is_digit_py(c: string) {
+    if string.equals(c, "0") == 1 { return 1 }
+    if string.equals(c, "1") == 1 { return 1 }
+    if string.equals(c, "2") == 1 { return 1 }
+    if string.equals(c, "3") == 1 { return 1 }
+    if string.equals(c, "4") == 1 { return 1 }
+    if string.equals(c, "5") == 1 { return 1 }
+    if string.equals(c, "6") == 1 { return 1 }
+    if string.equals(c, "7") == 1 { return 1 }
+    if string.equals(c, "8") == 1 { return 1 }
+    if string.equals(c, "9") == 1 { return 1 }
     return 0
 }
 

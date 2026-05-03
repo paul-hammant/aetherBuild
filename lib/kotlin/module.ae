@@ -270,9 +270,11 @@ builder kotlin_test(ctx: ptr, test_class: string) {
     run_cmd = string.concat(run_cmd, " -cp ${classpath} ${test_class}")
     exit_code = os.system(run_cmd)
     if exit_code != 0 {
+        build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: tests FAILED")
         return exit_code
     }
+    build._record_test_result(ctx, 1, 0)
     println("${mod_dir}: tests PASSED")
     return 0
 }

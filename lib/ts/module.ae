@@ -351,9 +351,12 @@ builder mocha(ctx: ptr, test_file: string) {
     run_cmd = mocha_cmd(node_path, ld_path, dyld_var, mocha_bin, _builder, test_file)
     exit_code = os.system(run_cmd)
     if exit_code != 0 {
+        // mocha summary parsing not yet wired; coarse record.
+        build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: tests FAILED")
         return exit_code
     }
+    build._record_test_result(ctx, 1, 0)
     println("${mod_dir}: tests PASSED")
     return 0
 }

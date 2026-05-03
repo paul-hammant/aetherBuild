@@ -38,46 +38,46 @@ main() {
     // --- _format_telemetry_line: column widths + decimal seconds ---
     // type column is 8 chars (compile: + 1 pad), label column is 32.
     _assert_eq("line: compile / short label / 1.21s / miss",
-        _format_telemetry_line("ae/svnserver", "compile", 1210, "miss"),
+        _format_telemetry_line("ae/svnserver", "compile", 1210, "miss", 0, 0, 0),
         "  compile: ae/svnserver                     1.21s [miss]")
 
     _assert_eq("line: test / short label / 0.01s / hit",
-        _format_telemetry_line("ae/wc", "test", 10, "hit"),
+        _format_telemetry_line("ae/wc", "test", 10, "hit", 0, 0, 0),
         "  test:    ae/wc                            0.01s [hit]")
 
     _assert_eq("line: dist / 0.00s / n/a",
-        _format_telemetry_line("dist:foo", "dist", 0, "n/a"),
+        _format_telemetry_line("dist:foo", "dist", 0, "n/a", 0, 0, 0),
         "  dist:    dist:foo                         0.00s [n/a]")
 
     // --- decimal-seconds rounding (cs = round(ms/10)) ---
     _assert_eq("line: 999ms rounds to 1.00s",
-        _format_telemetry_line("x", "compile", 999, "miss"),
+        _format_telemetry_line("x", "compile", 999, "miss", 0, 0, 0),
         "  compile: x                                1.00s [miss]")
 
     _assert_eq("line: 1000ms = 1.00s",
-        _format_telemetry_line("x", "compile", 1000, "miss"),
+        _format_telemetry_line("x", "compile", 1000, "miss", 0, 0, 0),
         "  compile: x                                1.00s [miss]")
 
     _assert_eq("line: 1234ms = 1.23s",
-        _format_telemetry_line("x", "compile", 1234, "miss"),
+        _format_telemetry_line("x", "compile", 1234, "miss", 0, 0, 0),
         "  compile: x                                1.23s [miss]")
 
     _assert_eq("line: 1235ms rounds to 1.24s",
-        _format_telemetry_line("x", "compile", 1235, "miss"),
+        _format_telemetry_line("x", "compile", 1235, "miss", 0, 0, 0),
         "  compile: x                                1.24s [miss]")
 
     _assert_eq("line: 5ms = 0.01s (rounds up)",
-        _format_telemetry_line("x", "compile", 5, "miss"),
+        _format_telemetry_line("x", "compile", 5, "miss", 0, 0, 0),
         "  compile: x                                0.01s [miss]")
 
     _assert_eq("line: 4ms = 0.00s (rounds down)",
-        _format_telemetry_line("x", "compile", 4, "miss"),
+        _format_telemetry_line("x", "compile", 4, "miss", 0, 0, 0),
         "  compile: x                                0.00s [miss]")
 
     // --- long label exceeds padding column → no truncation, just no padding ---
     long_label = "ae/path/to/some/very/deep/module:with-tag"
     _assert_eq("line: long label flows past the 32-col pad",
-        _format_telemetry_line(long_label, "compile", 100, "miss"),
+        _format_telemetry_line(long_label, "compile", 100, "miss", 0, 0, 0),
         "  compile: ae/path/to/some/very/deep/module:with-tag 0.10s [miss]")
 
     // --- render_telemetry: full block ---
@@ -100,6 +100,44 @@ main() {
     _assert_eq("render: single record",
         render_telemetry(one, 510),
         "[telemetry]\n  compile: only                             0.50s [miss]\ntotal: 0.51s wall")
+
+    // --- _format_telemetry_line: with test-result trailer ---
+    _assert_eq("line: test row with PASS trailer",
+        _format_telemetry_line("ae/wc", "test", 3030, "n/a", 17, 0, 1),
+        "  test:    ae/wc                            3.03s [n/a] 17/17 PASS")
+
+    _assert_eq("line: test row with FAIL trailer (any failures → FAIL verdict)",
+        _format_telemetry_line("ae/svn", "test", 5400, "n/a", 28, 2, 1),
+        "  test:    ae/svn                           5.40s [n/a] 28/30 FAIL")
+
+    _assert_eq("line: test row with all-fail trailer",
+        _format_telemetry_line("flaky", "test", 100, "miss", 0, 5, 1),
+        "  test:    flaky                            0.10s [miss] 0/5 FAIL")
+
+    _assert_eq("line: test row with cache hit AND results",
+        _format_telemetry_line("cached", "test", 50, "hit", 14, 0, 1),
+        "  test:    cached                           0.05s [hit] 14/14 PASS")
+
+    // has_test_result=0 → no trailer (fallback to no-results shape).
+    _assert_eq("line: has_test_result=0 → no trailer",
+        _format_telemetry_line("legacy", "test", 100, "n/a", 99, 99, 0),
+        "  test:    legacy                           0.10s [n/a]")
+
+    // --- render_telemetry: mixed records, some with results ---
+    mixed = list.new()
+    list.add(mixed, _record("ae/svnserver", "compile", 1210, "miss"))
+    test_rec = _record("ae/wc", "test", 3030, "n/a")
+    map.put(test_rec, "test_passed", "17")
+    map.put(test_rec, "test_failed", "0")
+    list.add(mixed, test_rec)
+    fail_rec = _record("ae/svn", "test", 5400, "n/a")
+    map.put(fail_rec, "test_passed", "28")
+    map.put(fail_rec, "test_failed", "2")
+    list.add(mixed, fail_rec)
+
+    expected_mixed = "[telemetry]\n  compile: ae/svnserver                     1.21s [miss]\n  test:    ae/wc                            3.03s [n/a] 17/17 PASS\n  test:    ae/svn                           5.40s [n/a] 28/30 FAIL\ntotal: 9.64s wall"
+    _assert_eq("render: mixed compile + 2 test records (one PASS, one FAIL)",
+        render_telemetry(mixed, 9640), expected_mixed)
 
     println("telemetry render tests done")
 }

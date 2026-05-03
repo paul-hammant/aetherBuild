@@ -280,6 +280,7 @@ _write_artifact(ctx: ptr, artifact: string, content: string) {
 // The orchestrator reads via _read_cache_outcome(target_dir).
 _record_cache(ctx: ptr, outcome: string) {
     td = _get(ctx, "target_dir")
+    _mkdirs(td)
     p = path.join(td, ".aeb_cache")
     _e = fs.write_atomic(p, outcome, string.length(outcome))
 }
@@ -295,6 +296,69 @@ _read_cache_outcome(target_dir: string) {
     out = string.trim(content)
     if string.length(out) == 0 { return "n/a" }
     return out
+}
+
+// _record_test_result(ctx, passed, failed) — SDK test builders
+// call this at the end of a test run so the orchestrator can read
+// pass/fail counts post-build for telemetry. Marker format is
+// two key=value lines:
+//
+//     passed=N
+//     failed=M
+//
+// "Failed" is the lowest common denominator across test runners —
+// anything not-passed (errors, skipped-but-required, timeouts)
+// counts as failed for v1. Future expansion can add lines
+// (errors=K, skipped=K) without breaking older readers.
+//
+// SDKs that don't (yet) call this leave the marker absent; the
+// orchestrator treats absence as "no results" rather than "0/0".
+_record_test_result(ctx: ptr, passed: int, failed: int) {
+    td = _get(ctx, "target_dir")
+    _mkdirs(td)
+    p = path.join(td, ".aeb_test_result")
+    body = string.concat("passed=", string.from_int(passed))
+    body = string.concat(body, "\nfailed=")
+    body = string.concat(body, string.from_int(failed))
+    body = string.concat(body, "\n")
+    _e = fs.write_atomic(p, body, string.length(body))
+}
+
+// _read_test_result(target_dir) — orchestrator-side read of the
+// marker written by _record_test_result. Returns
+// (passed, failed, has_results) where has_results=0 when the
+// marker is absent (target wasn't a test, or its SDK doesn't
+// participate yet).
+_read_test_result(target_dir: string) {
+    p = path.join(target_dir, ".aeb_test_result")
+    if fs.exists(p) == 0 {
+        return 0, 0, 0
+    }
+    content, _err = fs.read(p)
+    if string.length(content) == 0 { return 0, 0, 0 }
+    passed = 0
+    failed = 0
+    rest = content
+    while string.length(rest) > 0 {
+        nl = string.index_of(rest, "\n")
+        line = ""
+        if nl < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = string.substring(rest, 0, nl)
+            rest = string.substring(rest, nl + 1, string.length(rest))
+        }
+        eq = string.index_of(line, "=")
+        if eq > 0 {
+            key = string.substring(line, 0, eq)
+            value_str = string.substring(line, eq + 1, string.length(line))
+            value, _verr = string.to_int(string.trim(value_str))
+            if string.equals(key, "passed") == 1 { passed = value }
+            if string.equals(key, "failed") == 1 { failed = value }
+        }
+    }
+    return passed, failed, 1
 }
 
 // _label_to_target_dir(root, module_dir) — invert the label →
@@ -324,14 +388,22 @@ _label_to_target_dir(root: string, module_dir: string) {
     return path.join(target_base, fs_dir)
 }
 
-// _format_telemetry_line(label, type, wall_ms, cache) — one line per
-// module in the stdout summary. Pure: just string assembly. Tested
-// in tests/test_telemetry_render.ae.
+// _format_telemetry_line(label, type, wall_ms, cache, test_passed,
+//                        test_failed, has_test_result)
+//   — one line per module in the stdout summary. Pure: just string
+// assembly. Tested in tests/test_telemetry_render.ae.
 //
-// Format: "  <type>:<padding> <label><padding> <wall>s [<cache>]"
+// Format:
+//   "  <type>:<pad> <label><pad> <wall>s [<cache>]"
+//   "  <type>:<pad> <label><pad> <wall>s [<cache>] <P>/<T> PASS|FAIL"
+//
 // Type is one of compile/test/dist; rendered as left-justified column.
-// Wall is float seconds with 2 decimals.
-_format_telemetry_line(label: string, type_word: string, wall_ms: int, cache: string) {
+// Wall is float seconds with 2 decimals. Cache is the per-target
+// outcome (hit/miss/unavailable/n/a). When has_test_result==1, the
+// trailing "<P>/<T> PASS" or "<P>/<T> FAIL" is appended (P passed
+// out of T total, where T = passed + failed). Cache and test-result
+// are independent — a test row can have both [hit] and 17/17 PASS.
+_format_telemetry_line(label: string, type_word: string, wall_ms: int, cache: string, test_passed: int, test_failed: int, has_test_result: int) {
     // Label column: pad to 32 chars for visual alignment of the
     // duration. Truncates if longer (no point fighting it).
     label_col = label
@@ -366,7 +438,17 @@ _format_telemetry_line(label: string, type_word: string, wall_ms: int, cache: st
     cs_str = string.from_int(cs)
     if cs < 10 { cs_str = string.concat("0", cs_str) }
     wall_str = string.concat(string.concat(string.from_int(secs), "."), string.concat(cs_str, "s"))
-    return string.concat(string.concat(string.concat(string.concat("  ", type_col), " "), string.concat(label_col, " ")), string.concat(string.concat(wall_str, " ["), string.concat(cache, "]")))
+
+    base = string.concat(string.concat(string.concat(string.concat("  ", type_col), " "), string.concat(label_col, " ")), string.concat(string.concat(wall_str, " ["), string.concat(cache, "]")))
+
+    if has_test_result == 0 { return base }
+    total = test_passed + test_failed
+    verdict = "PASS"
+    if test_failed > 0 { verdict = "FAIL" }
+    trailer = string.concat(string.concat(" ", string.from_int(test_passed)), string.concat("/", string.from_int(total)))
+    trailer = string.concat(trailer, " ")
+    trailer = string.concat(trailer, verdict)
+    return string.concat(base, trailer)
 }
 
 // render_telemetry(records, total_ms) — assemble the final
@@ -391,7 +473,19 @@ render_telemetry(records: ptr, total_ms: int) {
         wm_s, _ = map.get(rec, "wall_ms")
         cache, _ = map.get(rec, "cache")
         wall_ms, _werr = string.to_int(wm_s)
-        line = _format_telemetry_line(label, type_word, wall_ms, cache)
+        // Test-result fields are absent for build/dist records; map.has
+        // gates so the line falls back to the no-trailer rendering.
+        passed = 0
+        failed = 0
+        has_test_result = 0
+        if map.has(rec, "test_passed") == 1 {
+            tp_s, _ = map.get(rec, "test_passed")
+            passed, _ = string.to_int(tp_s)
+            tf_s, _ = map.get(rec, "test_failed")
+            failed, _ = string.to_int(tf_s)
+            has_test_result = 1
+        }
+        line = _format_telemetry_line(label, type_word, wall_ms, cache, passed, failed, has_test_result)
         out = string.concat(out, line)
         out = string.concat(out, "\n")
         i = i + 1

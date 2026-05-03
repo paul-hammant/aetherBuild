@@ -877,9 +877,11 @@ builder test_workspace(ctx: ptr) {
     cmd = "cd '${source_dir}' && cargo test --workspace"
     exit_code = os.system(cmd)
     if exit_code != 0 {
+        build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: cargo test --workspace failed")
         return exit_code
     }
+    build._record_test_result(ctx, 1, 0)
     _e = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
 }
@@ -1270,9 +1272,13 @@ builder test(ctx: ptr) {
 
     exit_code = os.system(cmd)
     if exit_code != 0 {
+        // cargo test prints "test result: ok. N passed; F failed; ..."
+        // Coarse record for now; per-test parsing is a follow-up.
+        build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: tests FAILED")
         return exit_code
     }
+    build._record_test_result(ctx, 1, 0)
     println("${mod_dir}: tests PASSED")
     _e = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0

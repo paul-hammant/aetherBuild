@@ -263,6 +263,25 @@ per module into an in-memory list and hands it to
 Cache outcomes wired in three SDKs (`lib/aether`, `lib/java`,
 `lib/maven` indirectly via java); other SDKs report `n/a`.
 
+Test-result outcomes (per-target pass/fail counts) wired across
+all test builders:
+- `bash.test` — exact counts (already tracked internally)
+- `java.junit5` — parses `[N tests successful]` / `[N tests failed]`
+- `java.junit` — parses `OK (N tests)` / `Tests run: N, Failures: F`
+- `jest.test` — parses `N passed, M failed` from summary line
+- `python.pytest` — parses `N passed, M failed` and `N error`
+- `dotnet.test` — parses `Passed: N, Failed: M`
+- `aether.program_test`, `go.go_test`, `rust.test`,
+  `rust.test_workspace`, `kotlin.kotlin_test`, `clojure.test`,
+  `scala.munit`, `ts.mocha` — coarse 1/1 success or 0/1 failure
+  (per-test count parsing is a follow-up per SDK as consumers
+  ask for it)
+
+The `[telemetry]` block now shows test rows with a
+`<passed>/<total> PASS|FAIL` trailer alongside the existing
+`[cache]` annotation: `test: foo  3.03s [n/a] 17/17 PASS` or
+`test: bar  5.40s [hit] 28/30 FAIL`.
+
 What's left:
 
 - **More cache integration → better telemetry**: each SDK that

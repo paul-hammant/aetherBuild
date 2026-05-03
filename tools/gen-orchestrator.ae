@@ -182,6 +182,17 @@ main() {
         println("    map.put(_rec, \"wall_ms\", string.from_int((_end - _start) / 1000000))")
         println("    _td = build._label_to_target_dir(_root, \"${label}\")")
         println("    map.put(_rec, \"cache\", build._read_cache_outcome(_td))")
+        if type == "test" {
+            // Read test-result marker for test rows. SDKs that
+            // don't yet record results leave the marker absent;
+            // _read_test_result returns has_results=0 and the
+            // renderer falls back to the no-trailer line shape.
+            println("    _tp, _tf, _thr = build._read_test_result(_td)")
+            println("    if _thr == 1 {")
+            println("        map.put(_rec, \"test_passed\", string.from_int(_tp))")
+            println("        map.put(_rec, \"test_failed\", string.from_int(_tf))")
+            println("    }")
+        }
         println("    list.add(_records, _rec)")
         i = i + 1
     }

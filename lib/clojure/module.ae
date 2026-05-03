@@ -203,11 +203,17 @@ builder test(ctx: ptr) {
     }
     cmd = clj_test_cmd(cp, quoted, timeout_secs)
 
+    // clojure.test prints a summary of the form
+    //   "Ran 14 tests containing 30 assertions. 0 failures, 0 errors."
+    // Coarse record for now (1/1 success, 0/1 failure); full
+    // test-count parsing is a follow-up if a Clojure consumer cares.
     exit_code = os.system(cmd)
     if exit_code != 0 {
+        build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: tests FAILED")
         return exit_code
     }
+    build._record_test_result(ctx, 1, 0)
     println("${mod_dir}: tests PASSED")
     _e4 = io.write_file(path.join(target_dir, ".timestamp"), "")
     return 0
