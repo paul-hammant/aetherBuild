@@ -232,11 +232,32 @@ Shipped in commit `be2d97c`. `aeb --graph` (DOT default) /
 `aeb --graph mermaid` for inline-Markdown output. Pipe DOT to
 `dot -Tsvg` or paste Mermaid into a `\`\`\`mermaid` fence.
 
-### Watch mode
+### ~~Watch mode~~ (done)
 
-`aeb --watch <target>` — rebuild on source file change using
-inotifywait or fswatch. Useful for dev loops. Only rebuild affected
-targets (combines with affected-target detection).
+Shipped via `aeb --watch [target]`. Watches source dirs derived
+from the current edges file (sparse-checkout-aware: only dirs
+that exist on disk get watched, so gcheckout co-existence is
+clean). Linux uses inotifywait; macOS uses fswatch. Change
+events flow through `--changed-paths-from` → affected-targets →
+narrowed rebuild. Debounce: 200ms.
+
+Composes with everything that just shipped: cache makes warm
+rebuilds fast, telemetry shows `[hit]`/`[miss]`/`<P>/<T> PASS|FAIL`
+per target, the affected-target walk skips unchanged targets.
+
+What might be follow-up:
+
+- **Sparse-checkout dynamism**: today the watch list is computed
+  once at start. If `aeb gcheckout add foo` materialises new dirs
+  while a watch is running, those new dirs aren't picked up until
+  the user restarts the watch. Tracked: detect changes to
+  `.git/info/sparse-checkout` and rebuild the watch list.
+- **Per-target dirs vs per-source patterns**: today a recursive
+  watch on each target's dir catches all changes. Some SDKs (Java
+  with `source_layout("maven idiomatic")`) might want narrower
+  scopes (`src/main/java/**` only, not `target/**` or `node_modules/**`).
+  Today's exclude list (`target`, `.aeb`, `.git`) covers the
+  common feedback loops; add more as needed.
 
 ### User-defined builders
 

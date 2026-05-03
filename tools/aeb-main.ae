@@ -20,6 +20,7 @@
 
 import std.string
 import std.file
+import std.fs
 import std.io
 import std.os
 import std.list
@@ -263,31 +264,65 @@ main() {
     is_since   = string.equals(flag, "--since")
     is_aff     = string.equals(flag, "--affected")
     is_print   = string.equals(flag, "--print-affected")
+    is_cpf     = string.equals(flag, "--changed-paths-from")
     if is_since == 1 {
         if string.length(flag_arg) == 0 {
             println("aeb: --since requires a git ref (e.g. `aeb --since main`)")
             exit(1)
         }
     }
-    if (is_since + is_aff + is_print) > 0 {
-        git_ref = flag_arg
-        if string.length(git_ref) == 0 { git_ref = "HEAD" }
-        // Resolve changed paths via git. We use --name-only so we
-        // get one path per line; deletion-of-file paths are
-        // included (the affected-targets tool silently skips paths
-        // with no enclosing target, so deletions of files in
-        // already-removed dirs don't blow up).
-        diff_cmd = string.concat("git diff --name-only ", git_ref)
-        diff_out, diff_err = os.exec(diff_cmd)
-        if diff_err != "" {
-            println(string.concat("aeb: git diff failed: ", diff_err))
+    if is_cpf == 1 {
+        if string.length(flag_arg) == 0 {
+            println("aeb: --changed-paths-from requires a file path")
             exit(1)
         }
-        changed_path_file = string.concat(build_dir, "/_changed.txt")
-        werr_c = io.write_file(changed_path_file, diff_out)
-        if werr_c != "" {
-            println(string.concat("aeb-main: ", werr_c))
+        if file.exists(flag_arg) == 0 {
+            println(string.concat("aeb: changed-paths file not found: ", flag_arg))
             exit(1)
+        }
+    }
+    if (is_since + is_aff + is_print + is_cpf) > 0 {
+        // Two ways to populate the changed-paths file:
+        // 1. Git-derived (`--since`/`--affected`/`--print-affected`):
+        //    write `git diff --name-only <ref>` to _changed.txt.
+        // 2. Caller-provided (`--changed-paths-from <file>`): use
+        //    the file directly. Used by `aeb --watch` to feed
+        //    inotify-derived change lists into the same affected-
+        //    target pipeline.
+        changed_path_file = string.concat(build_dir, "/_changed.txt")
+        if is_cpf == 1 {
+            // Copy caller's file into our well-known location so the
+            // affected-targets tool reads from a stable path. (Also
+            // means a transient watch event file in /tmp doesn't
+            // race against the build pipeline reading it.)
+            cpf_content, cpf_rerr = fs.read(flag_arg)
+            if string.length(cpf_rerr) > 0 {
+                println(string.concat("aeb: cannot read changed-paths file: ", cpf_rerr))
+                exit(1)
+            }
+            werr_c = io.write_file(changed_path_file, cpf_content)
+            if werr_c != "" {
+                println(string.concat("aeb-main: ", werr_c))
+                exit(1)
+            }
+        } else {
+            git_ref = flag_arg
+            if string.length(git_ref) == 0 { git_ref = "HEAD" }
+            // Resolve changed paths via git. We use --name-only so
+            // we get one path per line; deletion paths are included
+            // (the affected-targets tool silently skips paths with
+            // no enclosing target).
+            diff_cmd = string.concat("git diff --name-only ", git_ref)
+            diff_out, diff_err = os.exec(diff_cmd)
+            if diff_err != "" {
+                println(string.concat("aeb: git diff failed: ", diff_err))
+                exit(1)
+            }
+            werr_c2 = io.write_file(changed_path_file, diff_out)
+            if werr_c2 != "" {
+                println(string.concat("aeb-main: ", werr_c2))
+                exit(1)
+            }
         }
         aff_cmd = string.concat(affected_bin, " ")
         aff_cmd = string.concat(aff_cmd, edges_path)
@@ -308,7 +343,9 @@ main() {
         // Build mode: replace the file set with only the affected
         // targets. Empty set → exit 0 with a note (no work to do).
         if string.length(aff_out) == 0 {
-            println("aeb: no targets affected by changes since ${git_ref}")
+            change_source = flag_arg
+            if string.length(change_source) == 0 { change_source = "HEAD" }
+            println("aeb: no targets affected by changes (since ${change_source})")
             return 0
         }
         new_files = list.new()

@@ -253,6 +253,38 @@ Combines well with cache integration: targets that are affected
 but cache-hit on their inputs still skip work. Telemetry shows
 what built and what hit the cache.
 
+### Watch mode (`aeb --watch`)
+
+`aeb --watch [target]` does an initial build, then watches every
+source directory and re-runs aeb (against the affected-target
+set) on every change. Save a file, the right things rebuild —
+most cache-hit, telemetry shows what actually ran.
+
+```bash
+# Watch everything visible from cwd
+aeb --watch
+
+# Watch with an initial-build target
+aeb --watch ae/svnserver
+```
+
+Platform support:
+- **Linux**: requires `inotifywait` from `inotify-tools` (apt:
+  `inotify-tools`, dnf: `inotify-tools`).
+- **macOS**: requires `fswatch` (`brew install fswatch`).
+
+`target/`, `.aeb/`, and `.git/` are excluded from the watch (the
+build itself writes there; including them would feedback-loop).
+Per-target test output (`test_output.log`), cache markers
+(`.aeb_cache`), and timestamps are also excluded.
+
+The watch list is computed from the edges file at start; only
+directories that *exist on disk* are watched, so it composes
+cleanly with `aeb gcheckout`'s sparse-checkout (dirs that
+sparse-checkout has hidden don't error). Re-running aeb-watch
+after `aeb gcheckout add ...` picks up the newly materialised
+dirs.
+
 ## Dependencies
 
 Every dependency — local module, third-party library, Maven coordinate, npm

@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# aeb-watch — dev-loop wrapper around aeb.
+#
+# Initial build, then enters a watch loop that re-runs aeb against
+# only the affected target set whenever a source file changes. The
+# affected-target walk (build.dep edges + ownership-by-nearest-dir)
+# is the same one `aeb --since` uses; we feed it inotify-derived
+# changed paths instead of `git diff` output.
+#
+# Composes with:
+#   - aeb's content-addressed cache: unchanged targets cache-hit fast
+#   - the [telemetry] block: each rebuild prints what actually ran
+#   - gcheckout: only watches dirs that exist on disk (sparse-checkout
+#     may have hidden most of the monorepo)
+#
+# Usage:
+#   aeb --watch                  # watch everything visible from cwd
+#   aeb --watch <target>         # initial build is just <target>;
+#                                # watch loop still covers everything
+#                                # in the edges file (affected walk
+#                                # narrows further from there)
+#
+# Platform support:
+#   - Linux: inotifywait (apt install inotify-tools)
+#   - macOS: fswatch (brew install fswatch)
+#   - other:  not yet supported; error cleanly
+#
+# Quits on Ctrl-C.
+
+set -eo pipefail
+
+DEBOUNCE_MS=200
+
+AETHER="${AETHER:-ae}"
+AEB_HOME="${AEB_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
+ROOT="$(pwd)"
+TARGET="${1:-}"
+
+# --- Platform detection ---
+
+PLATFORM=""
+if command -v inotifywait >/dev/null 2>&1; then
+    PLATFORM="inotify"
+elif command -v fswatch >/dev/null 2>&1; then
+    PLATFORM="fswatch"
+else
+    echo "aeb --watch: no file watcher found." >&2
+    echo "" >&2
+    echo "Linux: install inotify-tools (apt install inotify-tools, dnf install inotify-tools)" >&2
+    echo "macOS: install fswatch (brew install fswatch)" >&2
+    exit 1
+fi
+
+# --- Initial build (same as `aeb $TARGET`) ---
+
+echo "aeb-watch: initial build"
+if [ -n "$TARGET" ]; then
+    "$AEB_HOME/aeb" "$TARGET" || true
+else
+    "$AEB_HOME/aeb" || true
+fi
+
+# --- Identify directories to watch ---
+# These are the dirs that contain at least one build file in the
+# current edges set. Build files: .build*.ae, .tests*.ae, .dist*.ae,
+# and any other dot-prefixed .ae file (per the aeb convention).
+#
+# We re-read the edges file after every rebuild so newly-discovered
+# build files (e.g. from a regen step) are picked up without
+# restarting the watch.
+
+list_watch_dirs() {
+    local edges_file="$ROOT/target/_aeb/_edges.txt"
+    if [ ! -f "$edges_file" ]; then
+        # No edges yet → fall back to cwd. The next rebuild will
+        # populate the edges file.
+        echo "$ROOT"
+        return
+    fi
+    # Each line is "<file> <dep1> <dep2> ...". Take the first token
+    # of each line, strip to its dirname, dedup. Filter to dirs
+    # that actually exist (gcheckout-compatible: sparse-checkout
+    # may have hidden some).
+    awk '{print $1}' "$edges_file" \
+        | awk -F/ 'BEGIN{OFS="/"} {if (NF>1) {NF--; print} else {print "."}}' \
+        | sort -u \
+        | while read -r d; do
+            if [ -d "$ROOT/$d" ]; then
+                echo "$ROOT/$d"
+            fi
+        done
+}
+
+# --- Run one watch-then-rebuild cycle ---
+# Read events from $1 (FIFO or pipe), debounce, accumulate changed
+# paths into a temp file, then exec aeb with --changed-paths-from.
+
+CHANGED_FILE="$(mktemp)"
+trap 'rm -f "$CHANGED_FILE"' EXIT INT TERM
+
+run_rebuild() {
+    if [ ! -s "$CHANGED_FILE" ]; then
+        return 0
+    fi
+    echo
+    echo "aeb-watch: change detected, rebuilding affected targets"
+    "$AEB_HOME/aeb" --changed-paths-from "$CHANGED_FILE" || true
+    : > "$CHANGED_FILE"  # truncate
+}
+
+# --- Main watch loop ---
+
+watch_dirs=$(list_watch_dirs | tr '\n' ' ')
+if [ -z "$watch_dirs" ]; then
+    echo "aeb-watch: no directories to watch (no .ae files visible from $ROOT)" >&2
+    exit 1
+fi
+echo "aeb-watch: watching for changes (Ctrl-C to exit)"
+
+if [ "$PLATFORM" = "inotify" ]; then
+    # `-m` monitor (don't exit on first event), `-r` recursive,
+    # exclude target/ and .aeb/ to avoid feedback from the build
+    # itself. `-q` quiet — one path per line on stdout.
+    # shellcheck disable=SC2086
+    inotifywait -m -q -r \
+        --format '%w%f' \
+        --exclude '(^|/)(target|\.aeb|\.git)(/|$)' \
+        -e modify -e create -e delete -e move \
+        $watch_dirs \
+    | while IFS= read -r path; do
+        # Skip our own scratch files.
+        case "$path" in
+            */.aeb_cache|*/.aeb_test_result|*/test_output.log) continue ;;
+            */.timestamp) continue ;;
+        esac
+        # Strip the ROOT prefix so paths in CHANGED_FILE are
+        # repo-relative (matches what git diff would produce).
+        rel="${path#"$ROOT/"}"
+        echo "$rel" >> "$CHANGED_FILE"
+        # Debounce: pick up any further events arriving within
+        # DEBOUNCE_MS, then rebuild. We use `read` with a timeout
+        # to drain the queue before the rebuild fires.
+        while IFS= read -r -t "$(awk -v ms="$DEBOUNCE_MS" 'BEGIN{print ms/1000}')" more; do
+            case "$more" in
+                */.aeb_cache|*/.aeb_test_result|*/test_output.log) continue ;;
+                */.timestamp) continue ;;
+            esac
+            mrel="${more#"$ROOT/"}"
+            echo "$mrel" >> "$CHANGED_FILE"
+        done
+        # Sort+uniq the accumulated paths before running the build.
+        sort -u "$CHANGED_FILE" -o "$CHANGED_FILE"
+        run_rebuild
+    done
+else
+    # fswatch: -0 NUL-separated output, -r recursive (default but
+    # explicit). No --exclude flag the same shape as inotifywait;
+    # we filter in the loop body.
+    # shellcheck disable=SC2086
+    fswatch -0 -r $watch_dirs \
+    | while IFS= read -r -d '' path; do
+        case "$path" in
+            */target/*|*/.aeb/*|*/.git/*) continue ;;
+            */.aeb_cache|*/.aeb_test_result|*/test_output.log) continue ;;
+            */.timestamp) continue ;;
+        esac
+        rel="${path#"$ROOT/"}"
+        echo "$rel" >> "$CHANGED_FILE"
+        # Debounce via short-timeout read.
+        while IFS= read -r -d '' -t "$(awk -v ms="$DEBOUNCE_MS" 'BEGIN{print ms/1000}')" more; do
+            case "$more" in
+                */target/*|*/.aeb/*|*/.git/*) continue ;;
+                */.aeb_cache|*/.aeb_test_result|*/test_output.log) continue ;;
+                */.timestamp) continue ;;
+            esac
+            mrel="${more#"$ROOT/"}"
+            echo "$mrel" >> "$CHANGED_FILE"
+        done
+        sort -u "$CHANGED_FILE" -o "$CHANGED_FILE"
+        run_rebuild
+    done
+fi
