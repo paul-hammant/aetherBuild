@@ -768,12 +768,41 @@ SDKs use it for jar manifests, NuGet package versions, npm versions, etc.
 
 ### Test result reporting
 
-Cake collects test results in structured formats (TRX, JUnit XML) in
-organized directories. aeb currently just prints PASSED/FAILED to stdout.
+aeb today has two layers of test reporting:
 
-Needed: write test results to `target/{module}/test-results/` in a
-standard format (JUnit XML works across languages). Enables CI systems
-to parse results, and `aeb` could print a summary table at the end.
+1. **Pass/fail counts in `[telemetry]`**: each test SDK calls
+   `build._record_test_result(ctx, passed, failed)` and the
+   summary shows `<passed>/<total> PASS|FAIL` per target.
+2. **Persisted test stdout/stderr**: `target/<module>/test_output.log`
+   captures the full test runner output for failure diagnosis.
+   Currently wired in `java.junit5`, `java.junit`, `jest.test`,
+   `python.pytest`, `dotnet.test`; other test SDKs still print
+   only to terminal scrollback.
+
+What's left:
+
+- **Wire `test_output.log` for the rest of the test SDKs**:
+  `bash.test`, `aether.program_test`, `go.go_test`, `rust.test`,
+  `rust.test_workspace`, `kotlin.kotlin_test`, `clojure.test`,
+  `scala.munit`, `ts.mocha`. Each is a small per-SDK change
+  (replace `os.system(cmd)` with `tee`-to-target_dir).
+- **Switch parsers to structured outputs**: today's pass/fail
+  parsers regex over freeform stdout. Each test runner has a
+  structured-output mode that's more correct:
+  - junit-platform-console: `--reports-dir` writes JUnit XML
+  - pytest: `--junit-xml=path` writes JUnit XML
+  - jest: `--ci --json` writes structured JSON
+  - dotnet test: `--logger trx` writes TRX (.NET XML format)
+  - cargo test: `--message-format=json` (nightly) or `cargo2junit`
+  - go test: `gotestsum` wraps `go test` with JUnit XML output
+  Switching to structured ground truth removes the regex
+  parsers and gives CI dashboards a consumable artifact at
+  `target/<module>/test-results.xml` (or .json/.trx). Each SDK
+  is a bounded migration; the cross-cutting decision is "stdlib
+  XML/JSON parser, or shell out to a parser tool?"
+- **Cross-build aggregation**: cumulative test-result history
+  across builds (which test broke this morning vs yesterday).
+  Needs persistent storage outside `target/`. Defer.
 
 ### Task lifecycle hooks (setup/teardown)
 

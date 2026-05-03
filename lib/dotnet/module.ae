@@ -418,14 +418,16 @@ builder test(ctx: ptr) {
     }
 
     cmd = dotnet_test_cmd(csproj, config)
-    // Tee output for summary parsing. dotnet test prints
-    // "Passed!  - Failed:     0, Passed:    14, Skipped:     0, Total:    14"
-    out_path_raw, _otp = os.exec("mktemp")
-    out_path = string.trim(out_path_raw)
+    // Tee output to target/<module>/test_output.log so the same
+    // bytes serve two roles: (1) summary parsing for telemetry,
+    // (2) durable record for failure diagnosis after the build
+    // finishes (terminal scrollback isn't reliable, especially in
+    // CI). dotnet test prints
+    //   "Passed!  - Failed: 0, Passed: 14, Skipped: 0, Total: 14"
+    out_path = path.join(target_dir, "test_output.log")
     full_cmd = string.concat(string.concat(cmd, " 2>&1 | tee "), out_path)
     exit_code = os.system(full_cmd)
     out_text, _orerr = fs.read(out_path)
-    os.system("rm -f ${out_path}")
     pd, fd = _parse_dotnet_counts(out_text)
     build._record_test_result(ctx, pd, fd)
     if exit_code != 0 {

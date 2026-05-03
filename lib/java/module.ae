@@ -792,15 +792,15 @@ builder junit(ctx: ptr) {
 
     println("${mod_dir}: running tests")
     cmd = junit_cmd(classpath, class_names, ld_path, _builder)
-    // Tee output for JUnit 4 summary parsing (see junit5 builder).
+    // Tee to target/<module>/test_output.log — durable record for
+    // failure diagnosis post-build, also feeds the summary parser.
     // JUnit 4's JUnitCore prints "OK (N tests)" on success or
     // "Tests run: N,  Failures: F" on failure.
-    out_path_raw, _otp = os.exec("mktemp")
-    out_path = string.trim(out_path_raw)
+    build._mkdirs(target_dir)
+    out_path = path.join(target_dir, "test_output.log")
     full_cmd = string.concat(string.concat(cmd, " 2>&1 | tee "), out_path)
     exit_code = os.system(full_cmd)
     out_text, _orerr = fs.read(out_path)
-    os.system("rm -f ${out_path}")
     p4, f4 = _parse_junit4_counts(out_text)
     build._record_test_result(ctx, p4, f4)
     if exit_code != 0 {
@@ -984,16 +984,15 @@ builder junit5(ctx: ptr) {
 
     println("${mod_dir}: running tests (JUnit 5)")
     cmd = junit5_cmd(classpath, test_classes, ld_path, _builder)
-    // Tee stdout: the user sees the test output live AND we
-    // capture it for the summary parser. tee writes to both fd
-    // and file. 2>&1 first so junit-platform-console's stderr
-    // (where errors go) makes it into the file too.
-    out_path_raw, _otp = os.exec("mktemp")
-    out_path = string.trim(out_path_raw)
+    // Tee to target/<module>/test_output.log — durable record for
+    // failure diagnosis post-build (terminal scrollback isn't
+    // reliable in CI), also feeds the summary parser. 2>&1 first
+    // so junit-platform-console's stderr lands in the file too.
+    build._mkdirs(target_dir)
+    out_path = path.join(target_dir, "test_output.log")
     full_cmd = string.concat(string.concat(cmd, " 2>&1 | tee "), out_path)
     exit_code = os.system(full_cmd)
     out_text, _orerr = fs.read(out_path)
-    os.system("rm -f ${out_path}")
     if exit_code == 124 {
         build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: tests TIMEOUT (killed after timeout)")

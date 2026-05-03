@@ -63,14 +63,14 @@ builder test(ctx: ptr) {
 
     jest_config = path.join(source_dir, "jest.config.ts")
     cmd = jest_cmd(jest_bin, jest_config, timeout_secs, _builder)
-    // Tee output for summary parsing. Jest prints
-    // "Tests:       1 failed, 14 passed, 15 total" on stderr.
-    out_path_raw, _otp = os.exec("mktemp")
-    out_path = string.trim(out_path_raw)
+    // Tee to target/<module>/test_output.log — durable record for
+    // failure diagnosis, also feeds the summary parser. Jest
+    // prints "Tests:  1 failed, 14 passed, 15 total" on stderr.
+    build._mkdirs(target_dir)
+    out_path = path.join(target_dir, "test_output.log")
     full_cmd = string.concat(string.concat(cmd, " 2>&1 | tee "), out_path)
     exit_code = os.system(full_cmd)
     out_text, _orerr = fs.read(out_path)
-    os.system("rm -f ${out_path}")
     if exit_code == 124 {
         build._record_test_result(ctx, 0, 1)
         println("${mod_dir}: tests TIMEOUT")

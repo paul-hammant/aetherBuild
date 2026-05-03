@@ -188,6 +188,15 @@ aeb: 18 compile + 2 dist + 17 test
 javatests/components/vowelbase: tests PASSED
 ```
 
+### Test output is preserved
+
+Each test SDK that participates writes its full stdout+stderr to
+`target/<module>/test_output.log` for failure diagnosis after the
+build. Terminal scrollback isn't reliable (especially in CI), so
+the persisted file is the authoritative record. Currently wired
+in `java.junit5`, `java.junit`, `jest.test`, `python.pytest`, and
+`dotnet.test`; other SDKs are tracked for follow-up.
+
 ### Build graph visualisation (`aeb --graph`)
 
 `aeb --graph` emits the build-file DAG as a graphviz DOT description

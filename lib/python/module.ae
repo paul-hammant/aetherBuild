@@ -319,14 +319,14 @@ builder pytest(ctx: ptr) {
     py = path.join(venv, "bin/python")
 
     cmd = pytest_cmd(py, source_dir, root)
-    // Tee output for summary parsing. Pytest prints
-    // "===== 14 passed, 1 failed in 0.34s =====" at the end.
-    out_path_raw, _otp = os.exec("mktemp")
-    out_path = string.trim(out_path_raw)
+    // Tee to target/<module>/test_output.log — durable record for
+    // failure diagnosis, also feeds the summary parser. Pytest
+    // prints "===== 14 passed, 1 failed in 0.34s =====" at the end.
+    build._mkdirs(target_dir)
+    out_path = path.join(target_dir, "test_output.log")
     full_cmd = string.concat(string.concat(cmd, " 2>&1 | tee "), out_path)
     exit_code = os.system(full_cmd)
     out_text, _orerr = fs.read(out_path)
-    os.system("rm -f ${out_path}")
     pp, pf = _parse_pytest_counts(out_text)
     build._record_test_result(ctx, pp, pf)
     if exit_code != 0 {
