@@ -271,6 +271,144 @@ _write_artifact(ctx: ptr, artifact: string, content: string) {
     _e = fs.write_atomic(p, content, string.length(content))
 }
 
+// _record_cache(ctx, outcome) — SDK builders call this after a
+// cache decision so the orchestrator can read it post-build for
+// telemetry. `outcome` is one of: "hit", "miss", "unavailable",
+// or "n/a" (the SDK doesn't participate in caching). Idempotent:
+// last writer wins.
+//
+// The orchestrator reads via _read_cache_outcome(target_dir).
+_record_cache(ctx: ptr, outcome: string) {
+    td = _get(ctx, "target_dir")
+    p = path.join(td, ".aeb_cache")
+    _e = fs.write_atomic(p, outcome, string.length(outcome))
+}
+
+// _read_cache_outcome(target_dir) — orchestrator-side read of the
+// marker written by _record_cache. Returns "n/a" when missing.
+_read_cache_outcome(target_dir: string) {
+    p = path.join(target_dir, ".aeb_cache")
+    if fs.exists(p) == 0 {
+        return "n/a"
+    }
+    content, _err = fs.read(p)
+    out = string.trim(content)
+    if string.length(out) == 0 { return "n/a" }
+    return out
+}
+
+// _label_to_target_dir(root, module_dir) — invert the label →
+// target_dir mapping (mirrors the logic in build.begin's setup
+// of fs_dir + tgt_dir). Used by the orchestrator to find the
+// right .aeb_cache marker for each module after running.
+_label_to_target_dir(root: string, module_dir: string) {
+    fs_dir = module_dir
+    is_test = 0
+    test_pre = string.index_of(module_dir, "test:")
+    if test_pre == 0 {
+        fs_dir = string.substring(module_dir, 5, string.length(module_dir))
+        is_test = 1
+    }
+    dist_pre = string.index_of(module_dir, "dist:")
+    if dist_pre == 0 {
+        fs_dir = string.substring(module_dir, 5, string.length(module_dir))
+    }
+    colon = string.index_of(fs_dir, ":")
+    if colon >= 0 {
+        fs_dir = string.substring(fs_dir, 0, colon)
+    }
+    target_base = path.join(root, "target")
+    if is_test == 1 {
+        target_base = path.join(target_base, "tests")
+    }
+    return path.join(target_base, fs_dir)
+}
+
+// _format_telemetry_line(label, type, wall_ms, cache) — one line per
+// module in the stdout summary. Pure: just string assembly. Tested
+// in tests/test_telemetry_render.ae.
+//
+// Format: "  <type>:<padding> <label><padding> <wall>s [<cache>]"
+// Type is one of compile/test/dist; rendered as left-justified column.
+// Wall is float seconds with 2 decimals.
+_format_telemetry_line(label: string, type_word: string, wall_ms: int, cache: string) {
+    // Label column: pad to 32 chars for visual alignment of the
+    // duration. Truncates if longer (no point fighting it).
+    label_col = label
+    pad_to = 32
+    cur = string.length(label_col)
+    if cur < pad_to {
+        i = cur
+        while i < pad_to {
+            label_col = string.concat(label_col, " ")
+            i = i + 1
+        }
+    }
+    // Type column: 8 chars, left-justified ("compile:", "test:   ", "dist:   ").
+    type_col = string.concat(type_word, ":")
+    cur2 = string.length(type_col)
+    if cur2 < 8 {
+        j = cur2
+        while j < 8 {
+            type_col = string.concat(type_col, " ")
+            j = j + 1
+        }
+    }
+    // Wall: render ms as "N.NNs" with 2 decimals via integer math.
+    secs = wall_ms / 1000
+    rem  = wall_ms - (secs * 1000)
+    // Two-decimal: round to 10ms granularity.
+    cs   = (rem + 5) / 10
+    if cs >= 100 {
+        secs = secs + 1
+        cs   = 0
+    }
+    cs_str = string.from_int(cs)
+    if cs < 10 { cs_str = string.concat("0", cs_str) }
+    wall_str = string.concat(string.concat(string.from_int(secs), "."), string.concat(cs_str, "s"))
+    return string.concat(string.concat(string.concat(string.concat("  ", type_col), " "), string.concat(label_col, " ")), string.concat(string.concat(wall_str, " ["), string.concat(cache, "]")))
+}
+
+// render_telemetry(records, total_ms) — assemble the final
+// per-module summary block. Pure (no I/O); the orchestrator
+// println()s the result.
+//
+// Each record is a map with keys: label, type, wall_ms, cache.
+// Output shape:
+//   [telemetry]
+//     compile: foo/bar                     1.21s [miss]
+//     compile: foo/baz                     0.01s [hit]
+//     test:    foo/quux                    3.03s [n/a]
+//   total: 4.25s wall
+render_telemetry(records: ptr, total_ms: int) {
+    out = "[telemetry]\n"
+    n = list.size(records)
+    i = 0
+    while i < n {
+        rec, _ = list.get(records, i)
+        label, _ = map.get(rec, "label")
+        type_word, _ = map.get(rec, "type")
+        wm_s, _ = map.get(rec, "wall_ms")
+        cache, _ = map.get(rec, "cache")
+        wall_ms, _werr = string.to_int(wm_s)
+        line = _format_telemetry_line(label, type_word, wall_ms, cache)
+        out = string.concat(out, line)
+        out = string.concat(out, "\n")
+        i = i + 1
+    }
+    secs = total_ms / 1000
+    rem  = total_ms - (secs * 1000)
+    cs   = (rem + 5) / 10
+    if cs >= 100 {
+        secs = secs + 1
+        cs   = 0
+    }
+    cs_str = string.from_int(cs)
+    if cs < 10 { cs_str = string.concat("0", cs_str) }
+    out = string.concat(out, string.concat(string.concat("total: ", string.from_int(secs)), string.concat(string.concat(".", cs_str), "s wall")))
+    return out
+}
+
 _needs_rebuild(source_dir: string, ts_file: string) {
     if file.exists(ts_file) == 0 {
         return 1

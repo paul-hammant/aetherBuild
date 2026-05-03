@@ -136,7 +136,7 @@ status" is the unembellished current state, not the roadmap.
 | Configuration DSL ceiling          | Expressive without escape hatches into bash/python/Skylark      | ✓ Closure-with-setters, fully Aether-native, no eval'd config.                                          |
 | Migration story                    | Add to existing repo without big-bang rewrite                   | ✓ Per-module `.build.ae`, coexists with whatever's there. itests prove this against real repos.        |
 | Cross-compilation                  | Build for non-host OS/arch                                      | ✗ TODO. Roadmap.                                                                                         |
-| Build telemetry                    | Per-module timing, cache hit rates, bottleneck analysis         | ✗ TODO. Roadmap.                                                                                         |
+| Build telemetry                    | Per-module timing, cache hit rates, bottleneck analysis         | ◐ Partial. Per-module wall-time + cache outcome as `[telemetry]` block at end of every build (in-memory records, stdout renderer). Future renderers (file dump, web view) plug in via `build.render_telemetry` and the records list. |
 | CI system integration              | Auto-detects GHA/GitLab/Jenkins, sets outputs, tags artifacts   | ✗ Deliberately CI-agnostic today; "is this CI" detection is a roadmap line item.                        |
 
 Overall pattern: **graph, multi-language, and dependency resolution

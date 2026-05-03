@@ -572,10 +572,16 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
             if string.length(grc) == 0 {
                 os.system("chmod +x ${bin_path}")
                 println("${mod_dir}: aether cache hit ${cache_key}")
+                build._record_cache(ctx, "hit")
                 return 0
             }
             // grc != "" means miss or transport error — fall through.
         }
+    }
+    if cache.available() == 0 {
+        build._record_cache(ctx, "unavailable")
+    } else {
+        build._record_cache(ctx, "miss")
     }
 
     // Phase 1: aetherc src.ae → src.c

@@ -148,19 +148,46 @@ main() {
     }
     println("")
 
-    // main() calls everything in topo order
+    // main() calls everything in topo order, accumulating per-module
+    // telemetry records (label, type, wall_ms, cache outcome). At the
+    // end it hands the records list to build.render_telemetry for the
+    // stdout summary block.
+    //
+    // Records live only for the orchestrator's lifetime — the
+    // in-memory structure IS the storage for now. Future renderers
+    // (file dump, web viewer, etc.) plug in here without touching
+    // the data model.
     println("main() {")
     println("    s = build.session(aether_args_get(1))")
+    println("    _root = aether_args_get(1)")
+    println("    _records = list.new()")
+    println("    _session_start = clock_ns()")
 
     i = 1
     while i < argc {
         file = aether_args_get(i)
         fname = encode_name(file)
         label = file_to_label(file)
+        type = infer_type(file)
+        type_word = "compile"
+        if type == "test" { type_word = "test" }
+        if type == "dist" { type_word = "dist" }
+        println("    _start = clock_ns()")
         println("    ${fname}(s)")
         println("    build.done(s, \"${label}\")")
+        println("    _end = clock_ns()")
+        println("    _rec = map.new()")
+        println("    map.put(_rec, \"label\", \"${label}\")")
+        println("    map.put(_rec, \"type\", \"${type_word}\")")
+        println("    map.put(_rec, \"wall_ms\", string.from_int((_end - _start) / 1000000))")
+        println("    _td = build._label_to_target_dir(_root, \"${label}\")")
+        println("    map.put(_rec, \"cache\", build._read_cache_outcome(_td))")
+        println("    list.add(_records, _rec)")
         i = i + 1
     }
 
+    println("    _session_end = clock_ns()")
+    println("    _total_ms = (_session_end - _session_start) / 1000000")
+    println("    println(build.render_telemetry(_records, _total_ms))")
     println("}")
 }

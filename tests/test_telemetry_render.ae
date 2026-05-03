@@ -1,0 +1,105 @@
+// Tests for the telemetry rendering helpers in lib/build/module.ae:
+//   _format_telemetry_line(label, type, wall_ms, cache) → one summary line
+//   render_telemetry(records, total_ms) → full summary block
+//
+// Both pure (no I/O); fixtures are synthetic record maps.
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build (_format_telemetry_line, render_telemetry)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: '${expected}'")
+        println("  actual:   '${actual}'")
+    }
+}
+
+_record(lbl: string, type_word: string, wall_ms: int, cache: string) {
+    r = map.new()
+    map.put(r, "label", lbl)
+    map.put(r, "type", type_word)
+    map.put(r, "wall_ms", string.from_int(wall_ms))
+    map.put(r, "cache", cache)
+    return r
+}
+
+main() {
+    // --- _format_telemetry_line: column widths + decimal seconds ---
+    // type column is 8 chars (compile: + 1 pad), label column is 32.
+    _assert_eq("line: compile / short label / 1.21s / miss",
+        _format_telemetry_line("ae/svnserver", "compile", 1210, "miss"),
+        "  compile: ae/svnserver                     1.21s [miss]")
+
+    _assert_eq("line: test / short label / 0.01s / hit",
+        _format_telemetry_line("ae/wc", "test", 10, "hit"),
+        "  test:    ae/wc                            0.01s [hit]")
+
+    _assert_eq("line: dist / 0.00s / n/a",
+        _format_telemetry_line("dist:foo", "dist", 0, "n/a"),
+        "  dist:    dist:foo                         0.00s [n/a]")
+
+    // --- decimal-seconds rounding (cs = round(ms/10)) ---
+    _assert_eq("line: 999ms rounds to 1.00s",
+        _format_telemetry_line("x", "compile", 999, "miss"),
+        "  compile: x                                1.00s [miss]")
+
+    _assert_eq("line: 1000ms = 1.00s",
+        _format_telemetry_line("x", "compile", 1000, "miss"),
+        "  compile: x                                1.00s [miss]")
+
+    _assert_eq("line: 1234ms = 1.23s",
+        _format_telemetry_line("x", "compile", 1234, "miss"),
+        "  compile: x                                1.23s [miss]")
+
+    _assert_eq("line: 1235ms rounds to 1.24s",
+        _format_telemetry_line("x", "compile", 1235, "miss"),
+        "  compile: x                                1.24s [miss]")
+
+    _assert_eq("line: 5ms = 0.01s (rounds up)",
+        _format_telemetry_line("x", "compile", 5, "miss"),
+        "  compile: x                                0.01s [miss]")
+
+    _assert_eq("line: 4ms = 0.00s (rounds down)",
+        _format_telemetry_line("x", "compile", 4, "miss"),
+        "  compile: x                                0.00s [miss]")
+
+    // --- long label exceeds padding column → no truncation, just no padding ---
+    long_label = "ae/path/to/some/very/deep/module:with-tag"
+    _assert_eq("line: long label flows past the 32-col pad",
+        _format_telemetry_line(long_label, "compile", 100, "miss"),
+        "  compile: ae/path/to/some/very/deep/module:with-tag 0.10s [miss]")
+
+    // --- render_telemetry: full block ---
+    records = list.new()
+    list.add(records, _record("ae/svnserver",     "compile", 1210, "miss"))
+    list.add(records, _record("ae/svnserver:seed","compile", 10,   "hit"))
+    list.add(records, _record("ae/wc",            "test",    3030, "n/a"))
+
+    expected_block = "[telemetry]\n  compile: ae/svnserver                     1.21s [miss]\n  compile: ae/svnserver:seed                0.01s [hit]\n  test:    ae/wc                            3.03s [n/a]\ntotal: 4.25s wall"
+    _assert_eq("render: 3-record session", render_telemetry(records, 4250), expected_block)
+
+    // --- empty records list (build with no targets) ---
+    empty = list.new()
+    _assert_eq("render: empty records",
+        render_telemetry(empty, 0), "[telemetry]\ntotal: 0.00s wall")
+
+    // --- single record ---
+    one = list.new()
+    list.add(one, _record("only", "compile", 500, "miss"))
+    _assert_eq("render: single record",
+        render_telemetry(one, 510),
+        "[telemetry]\n  compile: only                             0.50s [miss]\ntotal: 0.51s wall")
+
+    println("telemetry render tests done")
+}

@@ -507,6 +507,7 @@ builder javac(ctx: ptr) {
                     os.system("rm -f '${tmp_tar}'")
                     if string.length(uerr) == 0 {
                         println("${mod_dir}: javac cache hit ${cache_key}")
+                        build._record_cache(ctx, "hit")
                         exit_code = 0
                     } else {
                         // Untar failed — clean up and fall through.
@@ -522,6 +523,11 @@ builder javac(ctx: ptr) {
     }
 
     if exit_code == -1 {
+        if cache.available() == 0 {
+            build._record_cache(ctx, "unavailable")
+        } else {
+            build._record_cache(ctx, "miss")
+        }
         exit_code = os.system(cmd)
         if exit_code != 0 {
             println("${mod_dir}: javac failed")
@@ -664,6 +670,7 @@ builder javac_test(ctx: ptr) {
                     os.system("rm -f '${tmp_tar}'")
                     if string.length(uerr) == 0 {
                         println("${mod_dir}: javac-test cache hit ${cache_key}")
+                        build._record_cache(ctx, "hit")
                         exit_code = 0
                     } else {
                         os.system("rm -rf '${test_classes}'")
@@ -678,6 +685,11 @@ builder javac_test(ctx: ptr) {
     }
 
     if exit_code == -1 {
+        if cache.available() == 0 {
+            build._record_cache(ctx, "unavailable")
+        } else {
+            build._record_cache(ctx, "miss")
+        }
         exit_code = os.system(cmd)
         if exit_code != 0 {
             println("${mod_dir}: javac (test) failed")
