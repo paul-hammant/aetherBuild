@@ -412,10 +412,18 @@ main() {
     // flag outright, so on macOS we omit it entirely. Programs with genuine
     // duplicate symbols will still fail to link on macOS; the permanent fix
     // is upstream in the Aether compiler (see TODO.md).
+    // libaether.a unconditionally references zlib/openssl symbols
+    // when the Aether toolchain was built with them detected. Pull
+    // the link flags from pkg-config; no-op when libs absent.
+    sysdeps = " $(pkg-config --libs zlib openssl 2>/dev/null)"
     if _is_macos_link() == 1 {
-        cc = string.concat(cc, " -pthread -lm 2>&1")
+        cc = string.concat(cc, " -pthread -lm")
+        cc = string.concat(cc, sysdeps)
+        cc = string.concat(cc, " 2>&1")
     } else {
-        cc = string.concat(cc, " -pthread -lm -Wl,--allow-multiple-definition 2>&1")
+        cc = string.concat(cc, " -pthread -lm")
+        cc = string.concat(cc, sysdeps)
+        cc = string.concat(cc, " -Wl,--allow-multiple-definition 2>&1")
     }
     os.system(cc)
 

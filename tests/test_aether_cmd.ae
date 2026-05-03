@@ -77,7 +77,7 @@ main() {
         "-Wl,--allow-multiple-definition")
     _assert_eq("link: minimal",
         aether_link_cmd(o1),
-        "gcc -O2 -pipe -w target/_aeb/main.c -L/usr/lib/aether -laether   -o target/hello/bin/hello -pthread -lm -Wl,--allow-multiple-definition")
+        "gcc -O2 -pipe -w target/_aeb/main.c -L/usr/lib/aether -laether   -o target/hello/bin/hello -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) -Wl,--allow-multiple-definition")
 
     // --- aether_link_cmd: with one extra source (relative) ---
     o2 = _link_opts(
@@ -87,7 +87,7 @@ main() {
         "-Wl,--allow-multiple-definition")
     _assert_eq("link: one extra_source",
         aether_link_cmd(o2),
-        "gcc -O2 -pipe -w target/_aeb/main.c /repo/contrib/extra.c -L/usr/lib/aether -laether   -o target/hello/bin/hello -pthread -lm -Wl,--allow-multiple-definition")
+        "gcc -O2 -pipe -w target/_aeb/main.c /repo/contrib/extra.c -L/usr/lib/aether -laether   -o target/hello/bin/hello -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) -Wl,--allow-multiple-definition")
 
     // --- aether_link_cmd: with user link_flags ---
     o3 = _link_opts(
@@ -96,14 +96,14 @@ main() {
         "-Wl,--allow-multiple-definition")
     _assert_eq("link: user link_flags",
         aether_link_cmd(o3),
-        "gcc -O2 -pipe -w main.c -L/lib -laether   -pthread -lm -o out/bin -pthread -lm -Wl,--allow-multiple-definition")
+        "gcc -O2 -pipe -w main.c -L/lib -laether   -pthread -lm -o out/bin -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) -Wl,--allow-multiple-definition")
 
     // --- aether_link_cmd: macOS dup_flag (empty) ---
     o4 = _link_opts(
         "main.c", "out/bin", "/lib", "", "", "", "", "", "")
     _assert_eq("link: macOS (no dup_flag)",
         aether_link_cmd(o4),
-        "gcc -O2 -pipe -w main.c -L/lib -laether   -o out/bin -pthread -lm ")
+        "gcc -O2 -pipe -w main.c -L/lib -laether   -o out/bin -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) ")
 
     // --- aether_link_cmd: with shared-lib deps + rpath ---
     o5 = _link_opts(
@@ -112,7 +112,7 @@ main() {
         "-Wl,--allow-multiple-definition")
     _assert_eq("link: shared lib + rpath",
         aether_link_cmd(o5),
-        "gcc -O2 -pipe -w main.c -L/lib -laether /repo/target/rust/libfoo.so -Wl,-rpath,/repo/target/rust -o out/bin -pthread -lm -Wl,--allow-multiple-definition")
+        "gcc -O2 -pipe -w main.c -L/lib -laether /repo/target/rust/libfoo.so -Wl,-rpath,/repo/target/rust -o out/bin -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) -Wl,--allow-multiple-definition")
 
     // --- aether_link_cmd: with -I include block (FHS install) ---
     o6 = _link_opts(
@@ -122,7 +122,7 @@ main() {
         "-Wl,--allow-multiple-definition")
     _assert_eq("link: nested -I block",
         aether_link_cmd(o6),
-        "gcc -O2 -pipe -w -I/inc/runtime -I/inc/runtime/actors -I/inc/std main.c -L/lib -laether   -o out/bin -pthread -lm -Wl,--allow-multiple-definition")
+        "gcc -O2 -pipe -w -I/inc/runtime -I/inc/runtime/actors -I/inc/std main.c -L/lib -laether   -o out/bin -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) -Wl,--allow-multiple-definition")
 
     // --- aether_link_cmd: kitchen sink ---
     o7 = _link_opts(
@@ -136,7 +136,7 @@ main() {
         "-Wl,--allow-multiple-definition")
     _assert_eq("link: kitchen sink",
         aether_link_cmd(o7),
-        "gcc -O2 -pipe -w $(find /home/u/.local/include/aether -type d -print | sed 's|^|-I|') target/_aeb/main.c /repo/contrib/sqlite.c /repo/ae/svn/auth_generated.c -L/home/u/.local/lib/aether -laether /repo/target/rust/libnative.so -Wl,-rpath,/repo/target/rust -pthread -o target/hello/bin/svn -pthread -lm -Wl,--allow-multiple-definition")
+        "gcc -O2 -pipe -w $(find /home/u/.local/include/aether -type d -print | sed 's|^|-I|') target/_aeb/main.c /repo/contrib/sqlite.c /repo/ae/svn/auth_generated.c -L/home/u/.local/lib/aether -laether /repo/target/rust/libnative.so -Wl,-rpath,/repo/target/rust -pthread -o target/hello/bin/svn -pthread -lm $(pkg-config --libs zlib openssl 2>/dev/null) -Wl,--allow-multiple-definition")
 
     println("aether cmd tests done")
 }

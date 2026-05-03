@@ -24,7 +24,7 @@ extern exit(code: int)
 // Shipped SDK modules — must match the SHIPPED_MODULES array in aeb.
 // Space-separated so we don't need an array literal in Aether.
 shipped_modules() {
-    return string.concat("build java kotlin go rust ts scala clojure dotnet python aether bash container maven pnpm jest webpack angular", "")
+    return string.concat("build java kotlin go rust ts scala clojure dotnet python aether bash cache container maven pnpm jest webpack angular", "")
 }
 
 // Returns 1 if `path` is a symlink (regardless of validity), 0 otherwise.
