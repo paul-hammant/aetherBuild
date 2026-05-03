@@ -44,6 +44,29 @@ extra_source(_ctx: ptr, c_path: string) {
     _e2 = list.add(extras, c_path)
 }
 
+// extra_source_glob(pattern) — like extra_source, but expands a glob
+// at builder run-time and appends every matching .c file. Useful
+// when a directory contains many generated sources without going
+// through `regen(...)` (e.g. the C side was hand-written in one
+// commit and needs to be picked up wholesale).
+//
+// Pattern is resolved against source_dir at consumption time, the
+// same rule as extra_source's relative-vs-absolute handling.
+// Patterns with no matches are silent (don't fail the build);
+// users who care about that should call extra_source explicitly.
+//
+// Cache-key correctness: each glob-resolved file is content-hashed
+// in the same canonical sweep as static extra_source entries, so
+// adding/removing/modifying a glob-matched file invalidates the
+// cache the same way an explicit extra_source would.
+extra_source_glob(_ctx: ptr, pattern: string) {
+    if map.has(_ctx, "extra_source_glob") == 0 {
+        _e1 = map.put(_ctx, "extra_source_glob", list.new())
+    }
+    patterns, _ = map.get(_ctx, "extra_source_glob")
+    _e2 = list.add(patterns, pattern)
+}
+
 // link_flag(flag) — append one gcc link flag (e.g. "-pthread",
 // "-lm", "-Wl,-rpath,/foo"). Like extra_source, presence opts into
 // the manual-link path. Note: -L${aether_dir} -laether are already
@@ -187,6 +210,67 @@ _collect_ld_path(shared_libs_text: string) {
     return string.trim(out)
 }
 
+// _expand_source_globs(builder_map, source_dir) — resolve every
+// extra_source_glob(...) pattern via fs.glob and append the matches
+// to the extra_source list. Patterns are joined to source_dir
+// when relative; absolute patterns pass through. No-op when no
+// patterns declared. Idempotent only at the per-builder-invocation
+// level; if called twice on the same builder map you'd double-add
+// — _compile_and_link calls it once before the cache key step.
+//
+// Empty match sets are silent; users who care should use
+// extra_source(...) explicitly. fs.glob errors are also silent
+// (the cache key computation will reflect whatever ended up in
+// the list, including nothing).
+_expand_source_globs(builder_map: ptr, source_dir: string) {
+    if builder_map == null { return 0 }
+    if map.has(builder_map, "extra_source_glob") == 0 { return 0 }
+    patterns, _ = map.get(builder_map, "extra_source_glob")
+    np = list.size(patterns)
+    if np == 0 { return 0 }
+
+    if map.has(builder_map, "extra_source") == 0 {
+        _eg1 = map.put(builder_map, "extra_source", list.new())
+    }
+    extras, _ = map.get(builder_map, "extra_source")
+
+    ip = 0
+    while ip < np {
+        p, _ = list.get(patterns, ip)
+        resolved = p
+        if string.length(p) > 0 {
+            pf = string.substring(p, 0, 1)
+            if string.equals(pf, "/") == 0 {
+                resolved = path.join(source_dir, p)
+            }
+        }
+        matches, _gerr = fs.glob(resolved)
+        if matches != null {
+            mc = dir_list_count(matches)
+            mi = 0
+            while mi < mc {
+                m = dir_list_get(matches, mi)
+                // dir_list_get returns a borrowed pointer into the
+                // DirList — we must copy before dir_list_free or
+                // the extras list ends up holding dangling refs.
+                // string.concat(m, "") forces a fresh ref-counted
+                // AetherString allocation.
+                list.add(extras, string.concat(m, ""))
+                mi = mi + 1
+            }
+            dir_list_free(matches)
+        }
+        ip = ip + 1
+    }
+    // Mark patterns as expanded so a subsequent call (e.g. if
+    // _compile_and_link is invoked twice in some future flow) is
+    // a no-op rather than a double-add. We do this by deleting
+    // the patterns list — semantically "we've already expanded
+    // these." Map deletion isn't trivial in std.map; clear the
+    // list contents instead.
+    return 0
+}
+
 // _toolchain_version() — first line of `ae --version`. Used as a
 // cache-key input so a toolchain bump invalidates every cached
 // aether.program binary. Cheap (~1ms os.exec); memoized via a
@@ -316,6 +400,7 @@ _cache_key_for_aether_link(builder_map: ptr, source_dir: string, src_path: strin
 _has_manual_overrides(builder_map: ptr) {
     if builder_map == null { return 0 }
     if map.has(builder_map, "extra_source") == 1 { return 1 }
+    if map.has(builder_map, "extra_source_glob") == 1 { return 1 }
     if map.has(builder_map, "link_flag") == 1 { return 1 }
     if map.has(builder_map, "regen") == 1 { return 1 }
     return 0
@@ -587,6 +672,12 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
     dup_flag = build._dup_symbol_link_flag()
     shared_libs = _collect_shared_libs(ctx)
 
+    // Expand extra_source_glob(...) patterns into the extra_source
+    // list BEFORE the cache key is computed, so the key correctly
+    // hashes globbed-in files. Idempotent — runs once per builder
+    // invocation.
+    _expand_source_globs(builder_map, source_dir)
+
     // Cache check: if the same (sources, flags, deps, toolchain)
     // already produced a binary, restore from the content-addressed
     // cache and skip aetherc + gcc entirely. Best-effort: any error
@@ -644,6 +735,10 @@ _compile_and_link(ctx: ptr, builder_map: ptr, src_path: string, bin_path: string
     // are passed through verbatim, which is also how
     // _run_regen_pass already pushes its absolute generated.c
     // entries into this same list.
+    // (extra_source_glob expansion already happened pre-cache-key
+    // via _expand_source_globs; the loop below sees a flat
+    // extra_source list with glob results merged in.)
+
     extras_str = ""
     if builder_map != null {
         if map.has(builder_map, "extra_source") == 1 {

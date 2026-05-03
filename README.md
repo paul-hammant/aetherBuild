@@ -489,7 +489,7 @@ bash.script(b) {            // non-test runner: codegen, asset prep, etc.
 
 ```aether
 import aether
-import aether (source, output, extra_source, link_flag, regen, regen_with)
+import aether (source, output, extra_source, extra_source_glob, link_flag, regen, regen_with)
 
 aether.program(b) {                   // shells out to `ae build` by default —
     source("main.ae")                 //   honours aether.toml [[bin]].
@@ -522,6 +522,12 @@ aether.program(b) {                   // hand-written extras still work via
     output("svn")                     //   with regen(...) entries.
     extra_source("legacy_helper.c")
     regen("ae/client/accessors.ae")
+}
+aether.program(b) {                   // extra_source_glob expands a glob at
+    source("main.ae")                 //   build-time. Pattern is module-relative;
+    output("svn")                     //   the matched files are content-hashed
+    extra_source_glob("contrib/*.c")  //   into the cache key, so adding/removing
+    extra_source_glob("gen/*.c")      //   matched files invalidates the cache.
 }
 aether.program_test(b) { ... }        // same as program, plus runs the binary
 ```
