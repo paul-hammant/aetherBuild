@@ -212,6 +212,38 @@ authoritative DAG. Useful for debugging "why isn't X depending on
 Y", reviewing dep changes in a PR, or onboarding someone to a
 monorepo's structure.
 
+### Affected-target detection (`aeb --since`, `aeb --print-affected`)
+
+`aeb --since <git-ref>` builds only the targets transitively
+impacted by changes since `<git-ref>`. `aeb --print-affected <ref>`
+lists them without building.
+
+```bash
+# CI shape: in a PR, build/test only what the PR touched.
+aeb --since main
+aeb --since origin/main          # vs the merge base
+aeb --since HEAD~10              # vs 10 commits back
+
+# Inspect the impact set without building (one path per line).
+aeb --print-affected main
+```
+
+The walk: `git diff --name-only <ref>` → list of changed paths →
+each path's owning target (nearest enclosing dir with a build
+file) → reverse-dep BFS → affected target set. Targets outside
+the impact set don't run.
+
+Source-to-target ownership uses **nearest enclosing dir with a
+build file**. A change to `lib/foo/src/main.c` is owned by the
+nearest `.build*.ae` walking up: `lib/foo/.build.ae` if present,
+else `lib/.build.ae`, else nothing. Multiple build files in one
+dir (the `.build-<tag>.ae` case) all share ownership of files in
+that dir.
+
+Combines well with cache integration: targets that are affected
+but cache-hit on their inputs still skip work. Telemetry shows
+what built and what hit the cache.
+
 ## Dependencies
 
 Every dependency — local module, third-party library, Maven coordinate, npm

@@ -180,11 +180,19 @@ Independent modules in the DAG can build concurrently. The visited map
 needs thread-safe access (mutex or atomic). Aether actors are a natural
 fit — one actor per module, message-passing for completion.
 
-### Affected-target detection
+### ~~Affected-target detection~~ (done)
 
-Given `git diff`, compute which modules' sources changed, trace the
-reverse dependency graph, rebuild only affected targets. Massive CI
-speedup for large monorepos.
+Shipped via `aeb --since <ref>` and `aeb --print-affected <ref>`.
+Walks reverse-dep edges from changed-file owning targets. Source-
+to-target ownership rule: nearest enclosing directory with a
+dot-prefixed `.ae` build file. Multiple build files in one dir
+all share ownership of source files in that dir (the round-218
+multi-binary case).
+
+Useful CI shape: `aeb --since main` (or `--since origin/main`)
+runs only the targets affected by the PR's changes. Telemetry
+shows what built; cache integration ensures hits stay hits even
+when the broader CI pipeline rebuilds something else.
 
 ### Local content-addressed cache (partially done)
 

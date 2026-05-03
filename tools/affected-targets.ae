@@ -1,0 +1,336 @@
+// affected-targets — given an edges file + a list of changed source
+// paths, emit the set of build-file targets transitively impacted.
+//
+// Usage:
+//   affected-targets <edges-file> <changed-paths-file>
+//
+// <edges-file> : same format aeb-main writes — one line per build
+//                file: "<file> <dep1> <dep2> ...". Build files are
+//                dot-prefixed `.ae` files (".build.ae",
+//                ".tests.ae", ".build-tag.ae", etc.).
+// <changed-paths-file> : one path per line. Paths that don't exist
+//                under any target's directory are silently ignored.
+//
+// Output (stdout): one affected-target build-file path per line,
+// in the same form as the edges file's first column.
+//
+// Algorithm:
+//   1. Parse edges into forward + reverse adjacency maps.
+//   2. For each changed path, walk up its parent dirs to find the
+//      nearest enclosing build-file ("owning target"). Multiple
+//      build-files in the same dir all become owners.
+//   3. BFS the reverse-edge graph from those seeds. The visited
+//      set is the affected-target set.
+//   4. Print sorted.
+import std.string
+import std.file
+import std.fs
+import std.io
+import std.os
+import std.list
+import std.map
+import std.path
+
+extern println(s: string)
+extern exit(code: int)
+
+// Split a buffer on '\n' into a list. Trailing empty line ignored.
+_split_lines(buf: string) {
+    lines = list.new()
+    n = string.length(buf)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(buf, i, i + 1)
+        if string.equals(ch, "\n") == 1 {
+            line = string.substring(buf, start, i)
+            list.add(lines, line)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(lines, string.substring(buf, start, n))
+    }
+    return lines
+}
+
+// Split a single edges line "<file> <dep1> <dep2> ..." into a list.
+_split_tokens(line: string) {
+    tokens = list.new()
+    n = string.length(line)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(line, i, i + 1)
+        if string.equals(ch, " ") == 1 {
+            if i > start {
+                list.add(tokens, string.substring(line, start, i))
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(tokens, string.substring(line, start, n))
+    }
+    return tokens
+}
+
+// dirname: everything before the last '/'. Returns "" for paths
+// without a slash (i.e. the path is at the root).
+_dirname(p: string) {
+    n = string.length(p)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(p, i, i + 1)
+        if string.equals(ch, "/") == 1 {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 { return "" }
+    return string.substring(p, 0, last)
+}
+
+// Build adjacency maps from edges-text.
+//   forward[A] = list of files A depends on
+//   reverse[B] = list of files that depend on B
+//   all_targets = set (map<path, "1">) of every build-file in the
+//                 first column (the rows; not deps-only entries).
+//   all_dirs    = set (map<dir, list<build-file>>) of directories
+//                 that contain at least one build-file. Used to
+//                 resolve "which target owns this changed file?".
+_build_indices(edges_text: string) {
+    forward = map.new()
+    reverse = map.new()
+    all_targets = map.new()
+    dir_to_targets = map.new()
+
+    lines = _split_lines(edges_text)
+    n = list.size(lines)
+    i = 0
+    while i < n {
+        line, _ = list.get(lines, i)
+        if string.length(line) > 0 {
+            tokens = _split_tokens(line)
+            tn = list.size(tokens)
+            if tn >= 1 {
+                src, _ = list.get(tokens, 0)
+                if map.has(all_targets, src) == 0 {
+                    map.put(all_targets, src, "1")
+                    d = _dirname(src)
+                    if map.has(dir_to_targets, d) == 0 {
+                        map.put(dir_to_targets, d, list.new())
+                    }
+                    bucket, _ = map.get(dir_to_targets, d)
+                    list.add(bucket, src)
+                }
+
+                // Forward edges: src → each dep
+                src_deps = list.new()
+                j = 1
+                while j < tn {
+                    dep, _ = list.get(tokens, j)
+                    list.add(src_deps, dep)
+                    // Reverse edge: dep → src
+                    if map.has(reverse, dep) == 0 {
+                        map.put(reverse, dep, list.new())
+                    }
+                    rev_bucket, _ = map.get(reverse, dep)
+                    list.add(rev_bucket, src)
+                    // ALSO register dep as a known target — it might
+                    // not have its own first-column row in the edges
+                    // file (deps of deps may not be expanded if the
+                    // build was target-mode rather than scan-mode),
+                    // but it's still a node in the graph and owns its
+                    // own directory for affected-target purposes.
+                    if map.has(all_targets, dep) == 0 {
+                        map.put(all_targets, dep, "1")
+                        dd = _dirname(dep)
+                        if map.has(dir_to_targets, dd) == 0 {
+                            map.put(dir_to_targets, dd, list.new())
+                        }
+                        dep_bucket, _ = map.get(dir_to_targets, dd)
+                        list.add(dep_bucket, dep)
+                    }
+                    j = j + 1
+                }
+                map.put(forward, src, src_deps)
+            }
+        }
+        i = i + 1
+    }
+
+    indices = map.new()
+    map.put(indices, "forward", forward)
+    map.put(indices, "reverse", reverse)
+    map.put(indices, "all_targets", all_targets)
+    map.put(indices, "dir_to_targets", dir_to_targets)
+    return indices
+}
+
+// owning_targets(changed_path, indices) — find every build-file that
+// owns (contains) this changed file. The "nearest enclosing
+// directory with a build-file" rule means we walk up parent dirs
+// until we find one that's keyed in dir_to_targets. All build-files
+// in that dir become owners.
+//
+// If the changed path itself is a build-file (its full path is
+// keyed in all_targets), it's its own owner.
+//
+// Returns a list of build-file paths.
+owning_targets(changed_path: string, indices: ptr) {
+    out = list.new()
+    all_targets, _ = map.get(indices, "all_targets")
+    dir_to_targets, _ = map.get(indices, "dir_to_targets")
+
+    if map.has(all_targets, changed_path) == 1 {
+        list.add(out, changed_path)
+        return out
+    }
+
+    // Walk up parent directories. Stop when we hit a dir that
+    // has at least one build-file (the nearest enclosing target),
+    // or when we've passed the root (cur was already "" and we
+    // didn't match — no enclosing build-file exists).
+    cur = _dirname(changed_path)
+    done = 0
+    while done == 0 {
+        if map.has(dir_to_targets, cur) == 1 {
+            bucket, _ = map.get(dir_to_targets, cur)
+            bn = list.size(bucket)
+            k = 0
+            while k < bn {
+                t, _ = list.get(bucket, k)
+                list.add(out, t)
+                k = k + 1
+            }
+            return out
+        }
+        if string.length(cur) == 0 {
+            done = 1
+        } else {
+            cur = _dirname(cur)
+        }
+    }
+    return out
+}
+
+// affected_set(changed_paths, indices) — BFS over reverse edges
+// from each changed path's owning targets. Returns a sorted list of
+// affected-target build-file paths.
+affected_set(changed_paths: ptr, indices: ptr) {
+    reverse, _ = map.get(indices, "reverse")
+    visited = map.new()
+    queue = list.new()
+
+    n = list.size(changed_paths)
+    i = 0
+    while i < n {
+        cp, _ = list.get(changed_paths, i)
+        owners = owning_targets(cp, indices)
+        on = list.size(owners)
+        oi = 0
+        while oi < on {
+            t, _ = list.get(owners, oi)
+            if map.has(visited, t) == 0 {
+                map.put(visited, t, "1")
+                list.add(queue, t)
+            }
+            oi = oi + 1
+        }
+        i = i + 1
+    }
+
+    head = 0
+    while head < list.size(queue) {
+        cur, _ = list.get(queue, head)
+        head = head + 1
+        if map.has(reverse, cur) == 1 {
+            consumers, _ = map.get(reverse, cur)
+            cn = list.size(consumers)
+            ci = 0
+            while ci < cn {
+                c, _ = list.get(consumers, ci)
+                if map.has(visited, c) == 0 {
+                    map.put(visited, c, "1")
+                    list.add(queue, c)
+                }
+                ci = ci + 1
+            }
+        }
+    }
+
+    // Collect visited keys into a list, sort via shell.
+    out = list.new()
+    keys_buf = ""
+    qn = list.size(queue)
+    qi = 0
+    while qi < qn {
+        v, _ = list.get(queue, qi)
+        if qi > 0 { keys_buf = string.concat(keys_buf, "\n") }
+        keys_buf = string.concat(keys_buf, v)
+        qi = qi + 1
+    }
+    if string.length(keys_buf) == 0 { return out }
+    sort_cmd = "printf '%s\\n' '${keys_buf}' | sort -u"
+    sorted_raw, _serr = os.exec(sort_cmd)
+    sorted_text = string.trim(sorted_raw)
+    if string.length(sorted_text) == 0 { return out }
+    sorted_lines = _split_lines(sorted_text)
+    sn = list.size(sorted_lines)
+    si = 0
+    while si < sn {
+        line, _ = list.get(sorted_lines, si)
+        if string.length(line) > 0 {
+            list.add(out, line)
+        }
+        si = si + 1
+    }
+    return out
+}
+
+main() {
+    argc = aether_args_count()
+    if argc < 3 {
+        println("Usage: affected-targets <edges-file> <changed-paths-file>")
+        exit(1)
+    }
+    edges_path = aether_args_get(1)
+    changed_path = aether_args_get(2)
+
+    edges_text, _eerr = fs.read(edges_path)
+    if string.length(edges_text) == 0 {
+        // Empty edges → no targets exist → nothing affected.
+        exit(0)
+    }
+    changed_text, _cerr = fs.read(changed_path)
+    if string.length(changed_text) == 0 {
+        // No changed files → nothing affected.
+        exit(0)
+    }
+
+    indices = _build_indices(edges_text)
+    changed_paths = list.new()
+    cp_lines = _split_lines(string.trim(changed_text))
+    cn = list.size(cp_lines)
+    ci = 0
+    while ci < cn {
+        line, _ = list.get(cp_lines, ci)
+        if string.length(line) > 0 {
+            list.add(changed_paths, line)
+        }
+        ci = ci + 1
+    }
+
+    out = affected_set(changed_paths, indices)
+    on = list.size(out)
+    oi = 0
+    while oi < on {
+        t, _ = list.get(out, oi)
+        println(t)
+        oi = oi + 1
+    }
+}

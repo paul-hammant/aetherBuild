@@ -113,6 +113,10 @@ main() {
     if file.exists(aeb_graph_bin) == 0 {
         os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/aeb-graph.ae -o "), string.concat(aeb_graph_bin, " >/dev/null 2>&1"))))
     }
+    affected_bin = string.concat(aebhome, "/tools/affected-targets")
+    if file.exists(affected_bin) == 0 {
+        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/affected-targets.ae -o "), string.concat(affected_bin, " >/dev/null 2>&1"))))
+    }
 
     // --- Discover the file set ---
     files = list.new()
@@ -247,6 +251,115 @@ main() {
         gcmd = string.concat(gcmd, gfmt)
         os.system(gcmd)
         return 0
+    }
+
+    // --- --since / --affected / --print-affected: filter the build set ---
+    //
+    // Given a git ref (default HEAD for --affected, explicit for
+    // --since), shell out to git diff for the changed-files list,
+    // hand it to the affected-targets tool, get back the impacted
+    // targets, and either print them (--print-affected) or rewrite
+    // the build set so only those targets and their deps build.
+    is_since   = string.equals(flag, "--since")
+    is_aff     = string.equals(flag, "--affected")
+    is_print   = string.equals(flag, "--print-affected")
+    if is_since == 1 {
+        if string.length(flag_arg) == 0 {
+            println("aeb: --since requires a git ref (e.g. `aeb --since main`)")
+            exit(1)
+        }
+    }
+    if (is_since + is_aff + is_print) > 0 {
+        git_ref = flag_arg
+        if string.length(git_ref) == 0 { git_ref = "HEAD" }
+        // Resolve changed paths via git. We use --name-only so we
+        // get one path per line; deletion-of-file paths are
+        // included (the affected-targets tool silently skips paths
+        // with no enclosing target, so deletions of files in
+        // already-removed dirs don't blow up).
+        diff_cmd = string.concat("git diff --name-only ", git_ref)
+        diff_out, diff_err = os.exec(diff_cmd)
+        if diff_err != "" {
+            println(string.concat("aeb: git diff failed: ", diff_err))
+            exit(1)
+        }
+        changed_path_file = string.concat(build_dir, "/_changed.txt")
+        werr_c = io.write_file(changed_path_file, diff_out)
+        if werr_c != "" {
+            println(string.concat("aeb-main: ", werr_c))
+            exit(1)
+        }
+        aff_cmd = string.concat(affected_bin, " ")
+        aff_cmd = string.concat(aff_cmd, edges_path)
+        aff_cmd = string.concat(aff_cmd, " ")
+        aff_cmd = string.concat(aff_cmd, changed_path_file)
+        aff_out_raw, _aff_err = os.exec(aff_cmd)
+        aff_out = string.trim(aff_out_raw)
+
+        if is_print == 1 {
+            // Print the list and exit. Empty output is meaningful
+            // ("nothing affected") and we just emit nothing.
+            if string.length(aff_out) > 0 {
+                println(aff_out)
+            }
+            return 0
+        }
+
+        // Build mode: replace the file set with only the affected
+        // targets. Empty set → exit 0 with a note (no work to do).
+        if string.length(aff_out) == 0 {
+            println("aeb: no targets affected by changes since ${git_ref}")
+            return 0
+        }
+        new_files = list.new()
+        new_seen  = map.new()
+        rest_a = aff_out
+        while string.length(rest_a) > 0 {
+            nl_a = string.index_of(rest_a, "\n")
+            la = ""
+            if nl_a < 0 {
+                la = rest_a
+                rest_a = ""
+            } else {
+                la = string.substring(rest_a, 0, nl_a)
+                rest_a = string.substring(rest_a, nl_a + 1, string.length(rest_a))
+            }
+            if string.length(la) > 0 {
+                _e_la = list.add(new_files, la)
+                _e_ms = map.put(new_seen, la, "1")
+            }
+        }
+        // Replace files / seen with the affected set. file_deps
+        // is left as-is — it has entries for the originally
+        // scanned set, and the topo-sort below will only walk the
+        // entries it sees in `files`.
+        files = new_files
+        seen  = new_seen
+        // Rewrite the edges file so topo-sort + aeb-link agree on
+        // the narrowed set. Only emit rows whose first column is
+        // in the affected set; deps reference the same paths so
+        // unaffected entries are silently dropped.
+        narrowed_buf = ""
+        nlines = list.size(files)
+        nf = 0
+        while nf < nlines {
+            f, _ = list.get(files, nf)
+            ds = string.concat("", "")
+            if map.has(file_deps, f) == 1 {
+                ds, _ = map.get(file_deps, f)
+            }
+            row = string.concat(f, " ")
+            row = string.concat(row, ds)
+            narrowed_buf = string.concat(narrowed_buf, row)
+            narrowed_buf = string.concat(narrowed_buf, "\n")
+            nf = nf + 1
+        }
+        werr_n = io.write_file(edges_path, narrowed_buf)
+        if werr_n != "" {
+            println(string.concat("aeb-main: ", werr_n))
+            exit(1)
+        }
+        // Continue to topo-sort + link with narrowed set.
     }
 
     // --- Run topo-sort, capture output, write sorted edges file ---

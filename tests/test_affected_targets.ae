@@ -1,0 +1,349 @@
+// Tests for tools/affected-targets.ae's pure helpers.
+//
+// owning_targets(changed_path, indices) — walk-up to find the build
+//   file(s) that own a given source path.
+// affected_set(changed_paths, indices) — BFS reverse edges from
+//   each owning target.
+//
+// Inlines the helpers because tests/run.sh builds with --lib lib/
+// and tools/ isn't on that path. Same pattern as
+// test_file_to_label.ae and test_aeb_graph.ae.
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+extern println(s: string)
+
+// --- helpers under test ---
+
+_split_lines(buf: string) {
+    lines = list.new()
+    n = string.length(buf)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(buf, i, i + 1)
+        if string.equals(ch, "\n") == 1 {
+            line = string.substring(buf, start, i)
+            list.add(lines, line)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(lines, string.substring(buf, start, n))
+    }
+    return lines
+}
+
+_split_tokens(line: string) {
+    tokens = list.new()
+    n = string.length(line)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(line, i, i + 1)
+        if string.equals(ch, " ") == 1 {
+            if i > start {
+                list.add(tokens, string.substring(line, start, i))
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(tokens, string.substring(line, start, n))
+    }
+    return tokens
+}
+
+_dirname(p: string) {
+    n = string.length(p)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(p, i, i + 1)
+        if string.equals(ch, "/") == 1 {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 { return "" }
+    return string.substring(p, 0, last)
+}
+
+_build_indices(edges_text: string) {
+    forward = map.new()
+    reverse = map.new()
+    all_targets = map.new()
+    dir_to_targets = map.new()
+    lines = _split_lines(edges_text)
+    n = list.size(lines)
+    i = 0
+    while i < n {
+        line, _ = list.get(lines, i)
+        if string.length(line) > 0 {
+            tokens = _split_tokens(line)
+            tn = list.size(tokens)
+            if tn >= 1 {
+                src, _ = list.get(tokens, 0)
+                if map.has(all_targets, src) == 0 {
+                    map.put(all_targets, src, "1")
+                    d = _dirname(src)
+                    if map.has(dir_to_targets, d) == 0 {
+                        map.put(dir_to_targets, d, list.new())
+                    }
+                    bucket, _ = map.get(dir_to_targets, d)
+                    list.add(bucket, src)
+                }
+                src_deps = list.new()
+                j = 1
+                while j < tn {
+                    dep, _ = list.get(tokens, j)
+                    list.add(src_deps, dep)
+                    if map.has(reverse, dep) == 0 {
+                        map.put(reverse, dep, list.new())
+                    }
+                    rev_bucket, _ = map.get(reverse, dep)
+                    list.add(rev_bucket, src)
+                    if map.has(all_targets, dep) == 0 {
+                        map.put(all_targets, dep, "1")
+                        dd = _dirname(dep)
+                        if map.has(dir_to_targets, dd) == 0 {
+                            map.put(dir_to_targets, dd, list.new())
+                        }
+                        dep_bucket, _ = map.get(dir_to_targets, dd)
+                        list.add(dep_bucket, dep)
+                    }
+                    j = j + 1
+                }
+                map.put(forward, src, src_deps)
+            }
+        }
+        i = i + 1
+    }
+    indices = map.new()
+    map.put(indices, "forward", forward)
+    map.put(indices, "reverse", reverse)
+    map.put(indices, "all_targets", all_targets)
+    map.put(indices, "dir_to_targets", dir_to_targets)
+    return indices
+}
+
+owning_targets(changed_path: string, indices: ptr) {
+    out = list.new()
+    all_targets, _ = map.get(indices, "all_targets")
+    dir_to_targets, _ = map.get(indices, "dir_to_targets")
+    if map.has(all_targets, changed_path) == 1 {
+        list.add(out, changed_path)
+        return out
+    }
+    cur = _dirname(changed_path)
+    done = 0
+    while done == 0 {
+        if map.has(dir_to_targets, cur) == 1 {
+            bucket, _ = map.get(dir_to_targets, cur)
+            bn = list.size(bucket)
+            k = 0
+            while k < bn {
+                t, _ = list.get(bucket, k)
+                list.add(out, t)
+                k = k + 1
+            }
+            return out
+        }
+        if string.length(cur) == 0 {
+            done = 1
+        } else {
+            cur = _dirname(cur)
+        }
+    }
+    return out
+}
+
+affected_set(changed_paths: ptr, indices: ptr) {
+    reverse, _ = map.get(indices, "reverse")
+    visited = map.new()
+    queue = list.new()
+    n = list.size(changed_paths)
+    i = 0
+    while i < n {
+        cp, _ = list.get(changed_paths, i)
+        owners = owning_targets(cp, indices)
+        on = list.size(owners)
+        oi = 0
+        while oi < on {
+            t, _ = list.get(owners, oi)
+            if map.has(visited, t) == 0 {
+                map.put(visited, t, "1")
+                list.add(queue, t)
+            }
+            oi = oi + 1
+        }
+        i = i + 1
+    }
+    head = 0
+    while head < list.size(queue) {
+        cur, _ = list.get(queue, head)
+        head = head + 1
+        if map.has(reverse, cur) == 1 {
+            consumers, _ = map.get(reverse, cur)
+            cn = list.size(consumers)
+            ci = 0
+            while ci < cn {
+                c, _ = list.get(consumers, ci)
+                if map.has(visited, c) == 0 {
+                    map.put(visited, c, "1")
+                    list.add(queue, c)
+                }
+                ci = ci + 1
+            }
+        }
+    }
+    return queue
+}
+
+// --- assertion helpers ---
+
+_assert_set_eq(label: string, actual: ptr, expected_csv: string) {
+    // Sort both via shell, compare sorted strings. Robust to BFS
+    // visit-order being implementation-specific.
+    actual_buf = ""
+    n = list.size(actual)
+    i = 0
+    while i < n {
+        v, _ = list.get(actual, i)
+        if i > 0 { actual_buf = string.concat(actual_buf, "\n") }
+        actual_buf = string.concat(actual_buf, v)
+        i = i + 1
+    }
+    a_sorted_raw, _ae = os.exec("printf '%s' '${actual_buf}' | sort -u")
+    a_sorted = string.trim(a_sorted_raw)
+    e_csv = expected_csv
+    e_buf = ""
+    while string.length(e_csv) > 0 {
+        c = string.index_of(e_csv, ",")
+        tok = ""
+        if c < 0 {
+            tok = e_csv
+            e_csv = ""
+        } else {
+            tok = string.substring(e_csv, 0, c)
+            e_csv = string.substring(e_csv, c + 1, string.length(e_csv))
+        }
+        tok = string.trim(tok)
+        if string.length(tok) > 0 {
+            if string.length(e_buf) > 0 { e_buf = string.concat(e_buf, "\n") }
+            e_buf = string.concat(e_buf, tok)
+        }
+    }
+    e_sorted_raw, _ee = os.exec("printf '%s' '${e_buf}' | sort -u")
+    e_sorted = string.trim(e_sorted_raw)
+    if a_sorted == e_sorted {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected (sorted): '${e_sorted}'")
+        println("  actual   (sorted): '${a_sorted}'")
+    }
+}
+
+_lst1(a: string) { l = list.new() list.add(l, a) return l }
+_lst2(a: string, b: string) { l = list.new() list.add(l, a) list.add(l, b) return l }
+
+main() {
+    // The graph used across most tests:
+    //   app/.build.ae          deps: lib/.build.ae
+    //   tests/.tests.ae        deps: app/.build.ae
+    // so reverse-walk: lib → app → tests
+    edges = "app/.build.ae lib/.build.ae\ntests/.tests.ae app/.build.ae\n"
+    indices = _build_indices(edges)
+
+    // --- owning_targets: source under a target dir ---
+    _assert_set_eq("owning: lib/main.ae → lib/.build.ae",
+        owning_targets("lib/main.ae", indices),
+        "lib/.build.ae")
+
+    _assert_set_eq("owning: app/main.ae → app/.build.ae",
+        owning_targets("app/main.ae", indices),
+        "app/.build.ae")
+
+    _assert_set_eq("owning: tests/test_a.sh → tests/.tests.ae",
+        owning_targets("tests/test_a.sh", indices),
+        "tests/.tests.ae")
+
+    // --- owning: build-file itself is its own owner ---
+    _assert_set_eq("owning: lib/.build.ae → lib/.build.ae",
+        owning_targets("lib/.build.ae", indices),
+        "lib/.build.ae")
+
+    // --- owning: nested source under target dir ---
+    _assert_set_eq("owning: nested src walks up to target",
+        owning_targets("lib/sub/dir/deep.ae", indices),
+        "lib/.build.ae")
+
+    // --- owning: file outside any target → empty ---
+    _assert_set_eq("owning: file outside all targets → empty",
+        owning_targets("README.md", indices),
+        "")
+
+    // --- affected_set: change in lib transitively impacts app + tests ---
+    _assert_set_eq("affected: lib/main.ae → lib + app + tests",
+        affected_set(_lst1("lib/main.ae"), indices),
+        "lib/.build.ae,app/.build.ae,tests/.tests.ae")
+
+    // --- affected_set: change in app impacts app + tests, not lib ---
+    _assert_set_eq("affected: app/main.ae → app + tests",
+        affected_set(_lst1("app/main.ae"), indices),
+        "app/.build.ae,tests/.tests.ae")
+
+    // --- affected_set: change in tests impacts only tests ---
+    _assert_set_eq("affected: tests/test_a.sh → tests only",
+        affected_set(_lst1("tests/test_a.sh"), indices),
+        "tests/.tests.ae")
+
+    // --- affected_set: union across multiple changed files ---
+    _assert_set_eq("affected: lib/x.ae + tests/test_b.sh union",
+        affected_set(_lst2("lib/main.ae", "tests/test_b.sh"), indices),
+        "lib/.build.ae,app/.build.ae,tests/.tests.ae")
+
+    // --- affected_set: file outside all targets contributes nothing ---
+    _assert_set_eq("affected: README.md only → empty",
+        affected_set(_lst1("README.md"), indices),
+        "")
+
+    // --- affected_set: empty input → empty ---
+    _assert_set_eq("affected: no changed paths → empty",
+        affected_set(list.new(), indices),
+        "")
+
+    // --- affected_set: change to a build-file itself ---
+    _assert_set_eq("affected: lib/.build.ae touched → lib + app + tests",
+        affected_set(_lst1("lib/.build.ae"), indices),
+        "lib/.build.ae,app/.build.ae,tests/.tests.ae")
+
+    // --- arbitrary dot-prefixed names work uniformly ---
+    edges_arbitrary = "driver/.bar-step.ae worker/.foo.ae\n"
+    indices2 = _build_indices(edges_arbitrary)
+    _assert_set_eq("arbitrary names: worker/x.ae → worker + driver",
+        affected_set(_lst1("worker/something.c"), indices2),
+        "worker/.foo.ae,driver/.bar-step.ae")
+    _assert_set_eq("arbitrary names: driver/x.ae → driver only",
+        affected_set(_lst1("driver/something.c"), indices2),
+        "driver/.bar-step.ae")
+
+    // --- multiple targets in same dir share ownership ---
+    edges_multi = "ae/svnserver/.build.ae\nae/svnserver/.build-seed.ae\n"
+    indices3 = _build_indices(edges_multi)
+    _assert_set_eq("multi-target dir: src in dir → both targets",
+        owning_targets("ae/svnserver/main.ae", indices3),
+        "ae/svnserver/.build.ae,ae/svnserver/.build-seed.ae")
+
+    println("affected-targets tests done")
+}
