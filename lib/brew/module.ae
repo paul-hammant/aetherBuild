@@ -1,0 +1,317 @@
+// brew — Homebrew formula exporter as an aeb target type.
+//
+// Declare a `brew.formula(b) { ... }` closure in a `.dist.ae`
+// (alongside `meta.*` setters on `b`) and aeb will treat the
+// `.dist.ae` like any other target: walk the graph, run the
+// builder, emit the formula. Composes with `--affected`,
+// `--print-affected`, `--graph` etc. — distribution targets are
+// just another node.
+//
+// Usage:
+//   import build
+//   import meta
+//   import brew
+//
+//   meta.desc(b, "Tiny hello-world greeter")
+//   meta.homepage(b, "https://example.com/hello")
+//   meta.license(b, "MIT")
+//   meta.version(b, "0.1.0")
+//   meta.url(b, "https://example.com/dl/hello-0.1.0.tar.gz")
+//   meta.sha256(b, "abc123...")
+//
+//   brew.formula(b) {
+//       aeb_target("lib/hello/.build.ae")   // required — what `def install` runs
+//       binary("hello-world")               // optional — defaults to last segment of aeb_target
+//       class_name("HelloWorld")            // optional — auto-derived from binary
+//       test_assertion("system bin/\"hello-world\", \"--version\"")
+//   }
+//
+// Builder writes the formula to:
+//   target/<module-path>/<binary>.rb
+//
+// and prints the path on stdout. Pipe into your tap manually, or
+// wire `cp` into a downstream rule.
+//
+// Required: meta.url + meta.sha256 (Homebrew won't accept a formula
+// without them) AND aeb_target (so def install knows what to build).
+// Everything else is optional with sensible defaults.
+
+import build
+import meta
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+
+// --- DSL setters (live on _builder) ---
+
+aeb_target(_ctx: ptr, target_path: string) {
+    _e = map.put(_ctx, "aeb_target", target_path)
+}
+
+binary(_ctx: ptr, name: string) {
+    _e = map.put(_ctx, "binary", name)
+}
+
+class_name(_ctx: ptr, name: string) {
+    _e = map.put(_ctx, "class_name", name)
+}
+
+test_assertion(_ctx: ptr, ruby_line: string) {
+    _e = map.put(_ctx, "test_assertion", ruby_line)
+}
+
+// --- Pure helpers ---
+
+// hyphenated-name → CamelCase. "hello-world" → "HelloWorld".
+_camelize(name: string) {
+    if string.length(name) == 0 { return "Formula" }
+    out = ""
+    rest = name
+    while string.length(rest) > 0 {
+        dash = string.index_of(rest, "-")
+        word = ""
+        if dash < 0 {
+            word = rest
+            rest = ""
+        } else {
+            word = string.substring(rest, 0, dash)
+            rest = string.substring(rest, dash + 1, string.length(rest))
+        }
+        if string.length(word) > 0 {
+            first = string.substring(word, 0, 1)
+            tail = string.substring(word, 1, string.length(word))
+            up = _upper_ascii(first)
+            out = string.concat(out, up)
+            out = string.concat(out, tail)
+        }
+    }
+    return out
+}
+
+_upper_ascii(c: string) {
+    if string.length(c) == 0 { return c }
+    pairs = "abcdefghijklmnopqrstuvwxyz"
+    upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    n = string.length(pairs)
+    i = 0
+    while i < n {
+        if string.equals(c, string.substring(pairs, i, i + 1)) == 1 {
+            return string.substring(upper, i, i + 1)
+        }
+        i = i + 1
+    }
+    return c
+}
+
+// _basename(path) — last path segment. "lib/hello/.build.ae" → ".build.ae".
+// Used as a fallback for `binary` when the user's aeb_target points at a
+// dot-prefixed file that doesn't itself name the binary.
+_basename(p: string) {
+    n = string.length(p)
+    if n == 0 { return "" }
+    i = n - 1
+    while i >= 0 {
+        c = string.substring(p, i, i + 1)
+        if string.equals(c, "/") == 1 {
+            return string.substring(p, i + 1, n)
+        }
+        i = i - 1
+    }
+    return p
+}
+
+// _strip_dotbuild(name) — ".build.ae" / ".dist.ae" / ".foo.ae" → "foo".
+// We strip the leading "." and trailing ".ae", and additionally peel
+// off a "build"/"dist" prefix if present (since those are aeb-meta
+// markers, not the binary's actual name).
+_strip_dotbuild(name: string) {
+    n = string.length(name)
+    if n == 0 { return name }
+    // Strip leading '.'
+    if string.equals(string.substring(name, 0, 1), ".") == 1 {
+        name = string.substring(name, 1, n)
+        n = string.length(name)
+    }
+    // Strip trailing '.ae'
+    if n >= 3 {
+        tail = string.substring(name, n - 3, n)
+        if string.equals(tail, ".ae") == 1 {
+            name = string.substring(name, 0, n - 3)
+            n = string.length(name)
+        }
+    }
+    return name
+}
+
+// _module_basename(module_dir) — last segment of `lib/hello` etc.
+_module_basename(p: string) {
+    return _basename(p)
+}
+
+// brew_formula_render — assemble the formula text. Pure: no I/O.
+// Empty optional fields are omitted from the output.
+brew_formula_render(class_name_v: string, name: string, target_path: string,
+                    desc: string, homepage: string, url_text: string,
+                    sha256: string, license: string, version: string,
+                    test_line: string) {
+    out = "# Generated by aeb (do not edit; regenerate via `aeb <.dist.ae>`)\n"
+    out = string.concat(out, "class ")
+    out = string.concat(out, class_name_v)
+    out = string.concat(out, " < Formula\n")
+    if string.length(desc) > 0 {
+        out = string.concat(out, "  desc \"")
+        out = string.concat(out, desc)
+        out = string.concat(out, "\"\n")
+    }
+    if string.length(homepage) > 0 {
+        out = string.concat(out, "  homepage \"")
+        out = string.concat(out, homepage)
+        out = string.concat(out, "\"\n")
+    }
+    if string.length(url_text) > 0 {
+        out = string.concat(out, "  url \"")
+        out = string.concat(out, url_text)
+        out = string.concat(out, "\"\n")
+    }
+    if string.length(sha256) > 0 {
+        out = string.concat(out, "  sha256 \"")
+        out = string.concat(out, sha256)
+        out = string.concat(out, "\"\n")
+    }
+    if string.length(license) > 0 {
+        out = string.concat(out, "  license \"")
+        out = string.concat(out, license)
+        out = string.concat(out, "\"\n")
+    }
+    if string.length(version) > 0 {
+        out = string.concat(out, "  version \"")
+        out = string.concat(out, version)
+        out = string.concat(out, "\"\n")
+    }
+    out = string.concat(out, "\n")
+    out = string.concat(out, "  depends_on \"aeb\" => :build\n")
+    out = string.concat(out, "\n")
+    out = string.concat(out, "  def install\n")
+    out = string.concat(out, "    system \"aeb\", \"")
+    out = string.concat(out, target_path)
+    out = string.concat(out, "\"\n")
+    out = string.concat(out, "    bin.install \"target/")
+    out = string.concat(out, name)
+    out = string.concat(out, "/bin/")
+    out = string.concat(out, name)
+    out = string.concat(out, "\"\n")
+    out = string.concat(out, "  end\n")
+    out = string.concat(out, "\n")
+    out = string.concat(out, "  test do\n")
+    if string.length(test_line) > 0 {
+        out = string.concat(out, "    ")
+        out = string.concat(out, test_line)
+        out = string.concat(out, "\n")
+    } else {
+        out = string.concat(out, "    # Placeholder smoke — refine to exercise real behaviour.\n")
+        out = string.concat(out, "    system bin/\"")
+        out = string.concat(out, name)
+        out = string.concat(out, "\", \"--version\"\n")
+    }
+    out = string.concat(out, "  end\n")
+    out = string.concat(out, "end\n")
+    return out
+}
+
+// --- Builder entry point ---
+
+builder formula(ctx: ptr) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+
+    // Required: aeb_target — what `def install` shells out to.
+    aeb_t = ""
+    if _builder != null {
+        if map.has(_builder, "aeb_target") == 1 {
+            aeb_t, _ = map.get(_builder, "aeb_target")
+        }
+    }
+    if string.length(aeb_t) == 0 {
+        println("${mod_dir}: brew.formula requires aeb_target(\"...\")")
+        return 1
+    }
+
+    // Required: meta.url + meta.sha256.
+    url_text = meta.get_url(ctx)
+    sha = meta.get_sha256(ctx)
+    if string.length(url_text) == 0 {
+        println("${mod_dir}: brew.formula requires meta.url(b, \"...\")")
+        return 1
+    }
+    if string.length(sha) == 0 {
+        println("${mod_dir}: brew.formula requires meta.sha256(b, \"...\")")
+        return 1
+    }
+
+    // binary name — explicit, else derive from aeb_target's filename
+    // (".build.ae" → "build", which usually isn't what users want, so
+    // fall back further to the module dir's basename when the derived
+    // name is one of the aeb-meta markers).
+    bin_name = ""
+    if _builder != null {
+        if map.has(_builder, "binary") == 1 {
+            bin_name, _ = map.get(_builder, "binary")
+        }
+    }
+    if string.length(bin_name) == 0 {
+        leaf = _basename(aeb_t)
+        stripped = _strip_dotbuild(leaf)
+        if string.equals(stripped, "build") == 1 {
+            bin_name = _module_basename(mod_dir)
+        } else {
+            if string.equals(stripped, "dist") == 1 {
+                bin_name = _module_basename(mod_dir)
+            } else {
+                bin_name = stripped
+            }
+        }
+    }
+
+    // class name — explicit, else CamelCase from binary.
+    cname = ""
+    if _builder != null {
+        if map.has(_builder, "class_name") == 1 {
+            cname, _ = map.get(_builder, "class_name")
+        }
+    }
+    if string.length(cname) == 0 {
+        cname = _camelize(bin_name)
+    }
+
+    // Optional test line.
+    test_line = ""
+    if _builder != null {
+        if map.has(_builder, "test_assertion") == 1 {
+            test_line, _ = map.get(_builder, "test_assertion")
+        }
+    }
+
+    // Read the rest from meta.
+    desc_v   = meta.get_desc(ctx)
+    home_v   = meta.get_homepage(ctx)
+    lic_v    = meta.get_license(ctx)
+    ver_v    = meta.get_version(ctx)
+
+    formula_text = brew_formula_render(cname, bin_name, aeb_t,
+                                       desc_v, home_v, url_text, sha,
+                                       lic_v, ver_v, test_line)
+
+    // Write to target_dir/<binary>.rb
+    out_path = path.join(target_dir, string.concat(bin_name, ".rb"))
+    _e = fs.write_atomic(out_path, formula_text, string.length(formula_text))
+
+    println("${mod_dir}: wrote Homebrew formula → ${out_path}")
+    build._write_artifact(ctx, "brew_formula", out_path)
+    return 0
+}

@@ -329,46 +329,56 @@ coverage.py, dotnet test --collect, `-cover`, llvm-cov, etc.) —
 not yet wired through `aeb --coverage`. Tracked in TODO.md as
 follow-up.
 
-### Distribution metadata (`meta` SDK + `aeb --brew`)
+### Distribution metadata (`meta` SDK) and exporters (`brew`, …)
 
-Targets can declare distribution metadata orthogonally to how
-they're built. The `meta` SDK takes the build context (`b`) and
-records strings into the build map; exporters read them back.
+Distribution is just another target type. Declare metadata via
+the `meta` SDK and an exporter closure (e.g. `brew.formula(b)`)
+inside a `.dist.ae` file; `aeb` walks it like any other target,
+running the exporter to emit the formula.
 
 ```aether
-import aether
+// lib/hello/.dist.ae
+import build
 import meta
+import brew
+import brew (aeb_target, binary)
 
-aether.program(b) {
-    source("hello.ae")
-    output("hello-world")
+main() {
+    b = build.start()
+    meta.desc(b, "Tiny hello-world greeter")
+    meta.homepage(b, "https://example.com/hello")
+    meta.license(b, "MIT")
+    meta.version(b, "0.1.0")
+    meta.url(b, "https://example.com/dl/hello-0.1.0.tar.gz")
+    meta.sha256(b, "0123...cdef")
+
+    brew.formula(b) {
+        aeb_target("lib/hello/.build.ae")  // what `def install` runs
+        binary("hello-world")               // optional override
+    }
 }
-meta.desc(b, "Tiny hello-world greeter")
-meta.homepage(b, "https://example.com/hello")
-meta.license(b, "MIT")
-meta.version(b, "0.1.0")
-meta.url(b, "https://example.com/dl/hello-world-0.1.0.tar.gz")
-meta.sha256(b, "0123...cdef")
-meta.maintainer(b, "Alice <alice@example.com>")
 ```
-
-`aeb --brew <target>` text-extracts those declarations and emits
-a Homebrew formula on stdout — pipe it to your tap's
-`Formula/<name>.rb`:
 
 ```bash
-aeb --brew lib/hello/.dist.ae > Formula/hello-world.rb
+aeb lib/hello/.dist.ae          # emits target/lib/hello/hello-world.rb
 ```
 
-`meta.url` and `meta.sha256` are required for a valid formula.
-The class name is auto-derived from `output(...)`
-(`hello-world` → `HelloWorld`); the `def install` body shells
-out to `aeb <target>` and copies the built binary into `bin/`,
-so consumers of the formula get the same build pipeline you
-would run locally.
+`meta.url` + `meta.sha256` are required (Homebrew won't accept a
+formula without them); `aeb_target` is required (so `def install`
+knows which target to build). Class name is auto-derived from the
+binary name (hyphens become CamelCase: `hello-world` → `HelloWorld`,
+overridable via `class_name(...)`). Custom test assertion via
+`test_assertion("...")`.
 
-This is the source-of-truth for distribution metadata. Future
-exporters (`--nix`, `--deb`, `--pkgsrc`) read the same fields.
+Because distribution targets are real graph nodes, they compose
+with everything else: `aeb --affected --since main` will surface
+a `.dist.ae` whose upstream `meta.version` changed; `aeb --graph`
+shows them; `aeb --watch` rebuilds them on file edits.
+
+`meta.*` is the source-of-truth — future exporters
+(`nix.derivation`, `deb.control`, `pkgsrc.makefile`) will read
+the same fields, only adding their packaging-specific overrides
+in their own closure.
 
 ## Dependencies
 
