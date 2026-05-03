@@ -1,4 +1,4 @@
-# scala-cli to aetherBuild Migration Status
+# scala-cli to aeb Migration Status
 
 Upstream: https://github.com/VirtusLab/scala-cli-multi-module-demo.git
 

@@ -9,7 +9,7 @@
 //   aeb-init <aeb-home>
 //
 // <aeb-home> is the directory containing the shipped lib/<sdk> trees
-// (i.e. the aetherBuild checkout). Operates on the current working
+// (i.e. the aeb checkout). Operates on the current working
 // directory; aeb is expected to chdir to the consuming repo root before
 // invoking this tool.
 
@@ -46,12 +46,14 @@ readlink_pure(path: string) {
     return string.trim(out)
 }
 
-// Append `.gitignore` marker if absent.
+// Append `.gitignore` marker if absent. Idempotency check looks for
+// the `.aeb/` line itself rather than the comment marker — avoids
+// duplicate appends if the comment text drifts (it changed once
+// already, from "aetherBuild" to "aeb"; repos initialized under the
+// old name shouldn't get re-appended on a fresh `aeb --init` run).
 finalize_gitignore() {
-    marker = "# aetherBuild modules"
     if file.exists(".gitignore") == 1 {
-        check_cmd = string.concat("grep -F '", marker)
-        check_cmd = string.concat(check_cmd, "' .gitignore 2>/dev/null && echo yes || echo no")
+        check_cmd = "grep -Fx '.aeb/' .gitignore 2>/dev/null && echo yes || echo no"
         check_out, cerr = os.exec(check_cmd)
         if cerr == "" {
             if string.trim(check_out) == "yes" {
@@ -60,7 +62,7 @@ finalize_gitignore() {
             }
         }
     }
-    os.system("printf '\\n# aetherBuild modules\\n.aeb/\\n' >> .gitignore")
+    os.system("printf '\\n# aeb modules\\n.aeb/\\n' >> .gitignore")
     println("  updated .gitignore")
     return 0
 }
@@ -147,6 +149,6 @@ main() {
     }
 
     finalize_gitignore()
-    println("aetherBuild initialized.")
+    println("aeb initialized.")
     return 0
 }

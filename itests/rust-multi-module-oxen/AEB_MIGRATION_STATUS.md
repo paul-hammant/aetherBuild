@@ -1,4 +1,4 @@
-# Cargo workspace to aetherBuild Migration Status
+# Cargo workspace to aeb Migration Status
 
 Upstream: https://github.com/Oxen-AI/Oxen.git
 

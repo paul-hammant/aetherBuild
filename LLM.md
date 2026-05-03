@@ -1,9 +1,9 @@
-# Notes to self (LLM assisting on aetherBuild / aeb)
+# Notes to self (LLM assisting on aeb / aeb)
 
 Not a CLAUDE.md — short, opinionated, written for a future LLM picking
 up mid-task. Re-read at start of every session.
 
-## What aetherBuild is, in one paragraph
+## What aeb is, in one paragraph
 
 Polyglot-monorepo build runner. Replaces `Makefile` / `pom.xml` /
 `package.json scripts` / `Cargo.toml` / `.csproj` / `pyproject.toml`

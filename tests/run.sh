@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/run.sh — local test runner for aetherBuild unit tests
+# tests/run.sh — local test runner for aeb unit tests
 #
 # Discovers every test_*.ae in this directory, builds it with `ae`, runs
 # the resulting binary, and reports build/run status per test. Designed
@@ -78,7 +78,7 @@ if [ -z "$test_files" ]; then
 fi
 
 echo
-echo "aetherBuild test suite"
+echo "aeb test suite"
 echo "lib: $LIB_DIR"
 echo "ae:  $(command -v "$AETHER")"
 echo

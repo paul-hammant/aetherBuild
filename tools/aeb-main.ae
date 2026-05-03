@@ -11,7 +11,7 @@
 //   aeb-main <aether-bin> <aeb-home> <root> [target]
 //
 // <aether-bin> : path to the `ae` driver (so we can lazy-build helpers)
-// <aeb-home>   : path to the aetherBuild checkout
+// <aeb-home>   : path to the aeb checkout
 // <root>       : monorepo root (cwd at invocation time)
 // [target]     : optional file path or directory; same semantics as aeb
 //

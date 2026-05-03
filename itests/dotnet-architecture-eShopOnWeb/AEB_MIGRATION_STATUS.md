@@ -1,4 +1,4 @@
-# .NET Solution to aetherBuild Migration Status
+# .NET Solution to aeb Migration Status
 
 Upstream: https://github.com/dotnet-architecture/eShopOnWeb.git
 

@@ -1,4 +1,4 @@
-# deps.edn to aetherBuild Migration Status
+# deps.edn to aeb Migration Status
 
 Upstream: https://github.com/adityaathalye/clojure-multiproject-example.git
 

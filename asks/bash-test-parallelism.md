@@ -15,7 +15,7 @@ each, bound on real network ports + filesystem ops), sequential
 execution is a regression vs. the harness it replaces.
 
 We'd like `bash.test(b)` to grow optional parallelism — a `jobs(N)`
-DSL setter mirroring the convention in other aetherBuild language
+DSL setter mirroring the convention in other aeb language
 modules.
 
 ## Suggested shape
@@ -40,7 +40,7 @@ bash.test(b) {
 }
 ```
 
-Implementation sketch (the part I'd do if I were on the aetherBuild
+Implementation sketch (the part I'd do if I were on the aeb
 side):
 
 1. Add a `jobs(_ctx, n)` DSL setter in `lib/bash/module.ae` next to

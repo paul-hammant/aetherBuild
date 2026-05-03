@@ -1,9 +1,12 @@
-# Aether Build
+# aeb
 
 A build system for polyglot monorepos. Small declarative files replace
 Makefiles, `pom.xml`, `package.json` scripts, `deps.edn`, `Cargo.toml`,
 `.csproj`, and `pyproject.toml` — and replace them consistently across
 languages. Convention does the work; you declare the intent.
+
+(`aeb` was originally short for "Aether Build" — the runner is written
+in Aether and was the project's first non-trivial Aether application.)
 
 ## What it looks like
 
@@ -126,10 +129,10 @@ java/components/vowelbase/.build.ae
 
 ## Setup
 
-Initialize a repo to use aetherBuild:
+Initialize a repo to use aeb:
 
 ```bash
-/path/to/aetherBuild/aeb --init
+/path/to/aeb/aeb --init
 ```
 
 This creates symlinks in `.aeb/lib/` for every shipped SDK module and
@@ -703,7 +706,7 @@ per-file compile, orchestrator generation, gcc link, exec — runs in
 Aether.
 
 ```
-aetherBuild/
+aeb/
 ├── aeb                        # thin bash trampoline → tools/aeb-main
 ├── lib/                       # shipped SDK modules (symlinked into consumer repos)
 │   ├── build/module.ae        # core: session, deps, context, artifact helpers
@@ -776,7 +779,7 @@ or an upstream Aether compiler issue. Exits non-zero on any failure.
 ## Integration tests (`itests/`)
 
 Real-world open-source projects converted from their native build systems
-to aetherBuild. Upstream sources are fetched via `itests/fetch-upstream.sh`
+to aeb. Upstream sources are fetched via `itests/fetch-upstream.sh`
 and not committed — only the `.build.ae`, `.tests.ae`, `.dist.ae`,
 `.bom.ae`, and migration-status docs are tracked. Some repositories are
 pinned to a specific commit to avoid source drift against unreleased

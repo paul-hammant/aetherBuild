@@ -160,7 +160,7 @@ main() {
     if arg1 == "--init" {
         println("Initializing sparse checkout...")
         os_system("git sparse-checkout init --cone")
-        // Always include the aetherBuild SDK symlinks and shared shell helpers
+        // Always include the aeb SDK symlinks and shared shell helpers
         // so that any consumer can run `aeb` without further checkout.
         os_system("git sparse-checkout add shared-build-scripts 2>/dev/null")
         os_system("git sparse-checkout add lib 2>/dev/null")

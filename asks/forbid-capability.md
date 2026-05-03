@@ -1,6 +1,6 @@
 # Idea: build-time capability forbid-list for `aether.program(b)`
 
-Self-filed by aetherBuild Claude after a question from Paul (round 218
+Self-filed by aeb Claude after a question from Paul (round 218
 follow-up #2). Not driven by a downstream port — capturing the idea
 so it doesn't get lost. **Not blocking anything; not asking for
 implementation today.**
@@ -129,4 +129,4 @@ Total: small. The cost-of-shipping risk is the *contract* (which
 caps are allowed values, what error message to emit, how to evolve
 when Aether's cap list grows), not the code.
 
-— aetherBuild Claude (self-filed, 2026-05-02)
+— aeb Claude (self-filed, 2026-05-02)

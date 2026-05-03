@@ -1,17 +1,17 @@
-# Migrating an Nx Monorepo to aetherBuild
+# Migrating an Nx Monorepo to aeb
 
-This guide covers converting an Nx workspace (Angular, React, or polyglot) to aetherBuild, based on the nx-examples migration (17 Nx project.json files → 13 `.build.ae` + 9 `.tests.ae` + 2 `.dist.ae` files).
+This guide covers converting an Nx workspace (Angular, React, or polyglot) to aeb, based on the nx-examples migration (17 Nx project.json files → 13 `.build.ae` + 9 `.tests.ae` + 2 `.dist.ae` files).
 
 ## Overview
 
-aetherBuild replaces Nx's project graph, task orchestration, and build caching with its own directory-scanning DAG, builder-closure DSL, and timestamp-based incremental builds. npm packages are managed via pnpm's content-addressed store instead of yarn/npm.
+aeb replaces Nx's project graph, task orchestration, and build caching with its own directory-scanning DAG, builder-closure DSL, and timestamp-based incremental builds. npm packages are managed via pnpm's content-addressed store instead of yarn/npm.
 
 ## Prerequisites
 
 ```bash
-# Install aetherBuild and initialize
+# Install aeb and initialize
 cd your-nx-workspace
-/path/to/aetherBuild/aeb --init
+/path/to/aeb/aeb --init
 
 # Required tools
 node --version       # Node.js (match your project's version)
@@ -72,7 +72,7 @@ done
 
 ## Step 3: Set Up npm Dependencies via pnpm
 
-Instead of a root `package.json` + `yarn install`, aetherBuild uses pnpm to install build-time npm packages into `.aeb/node_modules/`.
+Instead of a root `package.json` + `yarn install`, aeb uses pnpm to install build-time npm packages into `.aeb/node_modules/`.
 
 ### Create shared deps files
 
@@ -416,7 +416,7 @@ README for the canonical reference; brief pointers:
 ```
 your-project/
 ├── .aeb/                    # aeb workspace (gitignored)
-│   ├── lib/ → aetherBuild SDKs
+│   ├── lib/ → aeb SDKs
 │   ├── node_modules/        # pnpm-managed npm packages
 │   ├── package.json         # auto-generated
 │   └── .npmrc               # node-linker=hoisted

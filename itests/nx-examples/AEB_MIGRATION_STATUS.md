@@ -1,4 +1,4 @@
-# Nx to aetherBuild Migration — Dependency Status
+# Nx to aeb Migration — Dependency Status
 
 After dropping nx as orchestrator, the dev team still needs:
 

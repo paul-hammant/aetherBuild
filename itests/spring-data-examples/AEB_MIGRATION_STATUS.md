@@ -1,4 +1,4 @@
-# Maven to aetherBuild Migration — Status
+# Maven to aeb Migration — Status
 
 90 leaf modules converted from Maven to aeb. All compilation and testing
 is driven by `.build.ae` / `.tests.ae` files using the Java SDK + a

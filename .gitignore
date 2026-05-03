@@ -22,5 +22,5 @@ tools/scan-ae-files
 tools/topo-sort
 tools/transform-ae
 
-# aetherBuild modules
+# aeb modules
 .aeb/

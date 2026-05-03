@@ -1,5 +1,5 @@
 /*
- * aeb-resolve — Maven dependency resolver for aetherBuild
+ * aeb-resolve — Maven dependency resolver for aeb
  *
  * Resolves Maven coordinates (g:a:v) with transitive dependencies,
  * BOM version management, and custom repository support.

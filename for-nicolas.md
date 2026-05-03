@@ -5,7 +5,7 @@ Hi Nicolas 👋
 Paul here. I've been porting `aeb` (the Aether Build runner) from bash to
 Aether, methodically, one function at a time. It's gone well — `aeb` is
 now a ~36-line bash trampoline plus thirteen Aether-language tools under
-`aetherBuild/tools/`. The bash bit only sets a few env vars and dispatches
+`aeb/tools/`. The bash bit only sets a few env vars and dispatches
 to `tools/aeb-main` / `tools/aeb-init` / `tools/gcheckout`. Everything
 else — argument parsing, DAG discovery, dep extraction, topo sort,
 per-file compile, orchestrator generation, gcc link, exec — is Aether.
@@ -29,7 +29,7 @@ ordered them by value.
 
 You can read the longer, more detailed version in
 [`docs/aether-runtime-needs.md`](docs/aether-runtime-needs.md) in the
-aetherBuild repo. This file is the "if you only have time for one
+aeb repo. This file is the "if you only have time for one
 PR, do this first" summary.
 
 ## Priority 1 — `os_run` argv-based process launch

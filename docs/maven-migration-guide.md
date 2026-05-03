@@ -1,10 +1,10 @@
-# Migrating a Maven Project to aetherBuild
+# Migrating a Maven Project to aeb
 
-This guide covers converting a multi-module Maven project to aetherBuild, based on the spring-data-examples migration (107 pom.xml files → 90 `.build.ae` + 86 `.tests.ae` files).
+This guide covers converting a multi-module Maven project to aeb, based on the spring-data-examples migration (107 pom.xml files → 90 `.build.ae` + 86 `.tests.ae` files).
 
 ## Overview
 
-aetherBuild replaces Maven's XML-based build configuration with Aether's builder-closure DSL. Each Maven module gets two files:
+aeb replaces Maven's XML-based build configuration with Aether's builder-closure DSL. Each Maven module gets two files:
 
 - `.build.ae` — compile-time dependencies and javac configuration
 - `.tests.ae` — test dependencies and test execution
@@ -14,9 +14,9 @@ The migration is incremental: pom.xml files stay in place until the `.ae` files 
 ## Prerequisites
 
 ```bash
-# Install aetherBuild and initialize the project
+# Install aeb and initialize the project
 cd your-project
-/path/to/aetherBuild/aeb --init
+/path/to/aeb/aeb --init
 
 # Verify tools
 ae version          # Aether compiler
@@ -122,9 +122,9 @@ If your project uses snapshot or milestone repositories, add them:
 
 For each leaf module, create a `.build.ae` using the deps from Step 1.
 
-### Mapping Maven scopes to aetherBuild
+### Mapping Maven scopes to aeb
 
-| Maven scope | aetherBuild |
+| Maven scope | aeb |
 |-------------|-------------|
 | `compile` | `dep(b, "g:a")` in `.build.ae` (version from BOM) |
 | `compile` (not in BOM) | `dep(b, "g:a:v")` in `.build.ae` (explicit version) |
@@ -254,7 +254,7 @@ If tests use TestContainers, add these deps and set a longer timeout:
 
 Note: TestContainers 2.x renamed modules with a `testcontainers-` prefix (e.g., `testcontainers-mongodb` instead of `mongodb`).
 
-aetherBuild auto-detects Podman sockets for TestContainers. If using Podman, start the socket first:
+aeb auto-detects Podman sockets for TestContainers. If using Podman, start the socket first:
 
 ```bash
 systemctl --user start podman.socket
@@ -287,7 +287,7 @@ dep(b, "com.fasterxml.jackson.core:jackson-core")
 ```
 
 **Command line too long (6000+ source files)**
-Already handled — aetherBuild uses `@argfile` automatically via `find`.
+Already handled — aeb uses `@argfile` automatically via `find`.
 
 **Tests hang waiting for external services**
 `test_timeout("30")` wraps the test JVM with `timeout`. TestContainers tests should use `test_timeout("120")` to allow time for container startup.
@@ -335,7 +335,7 @@ README for the canonical reference; brief pointers:
 
 These Maven features need manual handling:
 
-| Maven feature | aetherBuild equivalent |
+| Maven feature | aeb equivalent |
 |--------------|----------------------|
 | Profiles | `if` checks on environment variables in `.build.ae` |
 | Resource filtering | Not yet supported — copy resources manually |
@@ -349,7 +349,7 @@ These Maven features need manual handling:
 
 ## Appendix: Resolver Limitations
 
-The aetherBuild resolver (`aeb-resolve.jar`) uses the Maven Resolver API but has one known limitation compared to full Maven:
+The aeb resolver (`aeb-resolve.jar`) uses the Maven Resolver API but has one known limitation compared to full Maven:
 
 **Property-interpolated transitive versions are not resolved.** When a POM declares a dependency with `<version>${some.property}</version>` where the property is defined in a parent POM, the resolver can't interpolate it. This affects:
 - Jackson (jackson-databind → jackson-core via `${jackson.version.core}`)

@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>aeb-resolve</name>
-    <description>Maven dependency resolver for aetherBuild. No temp pom.xml files.</description>
+    <description>Maven dependency resolver for aeb. No temp pom.xml files.</description>
 
     <!-- Licensed under Apache-2.0 (uses Maven Resolver APIs) -->
 

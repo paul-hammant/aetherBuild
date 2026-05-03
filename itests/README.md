@@ -1,7 +1,7 @@
-# aetherBuild Integration Tests
+# aeb Integration Tests
 
 Real-world open-source projects converted from their native build systems
-to aetherBuild. Each project is a shallow clone of an upstream repo with
+to aeb. Each project is a shallow clone of an upstream repo with
 `.build.ae`, `.tests.ae`, and `.bom.ae` files added.
 
 ## Setup
@@ -48,7 +48,7 @@ AETHER=/path/to/ae aeb
 
 ## What gets committed
 
-Only aeb-specific files are tracked in the aetherBuild repo:
+Only aeb-specific files are tracked in the aeb repo:
 
 - `.build.ae`, `.tests.ae`, `.dist.ae` — build scripts
 - `*.bom.ae`, `*.deps.ae` — shared dependency declarations

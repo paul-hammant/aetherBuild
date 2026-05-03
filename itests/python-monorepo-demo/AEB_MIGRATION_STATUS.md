@@ -1,4 +1,4 @@
-# Pants Python monorepo to aetherBuild Migration Status
+# Pants Python monorepo to aeb Migration Status
 
 Upstream: https://github.com/SystemCraftsman/pants-python-monorepo-demo.git
 

@@ -1,4 +1,4 @@
-# Go single-module to aetherBuild Migration Status
+# Go single-module to aeb Migration Status
 
 Upstream: https://github.com/fyne-io/fyne.git
 
