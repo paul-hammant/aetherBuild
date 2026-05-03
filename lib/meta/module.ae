@@ -1,0 +1,103 @@
+// meta — distribution metadata setters for aeb targets.
+//
+// Orthogonal to building: these setters describe a target as a
+// distributable artifact (homepage, license, version, upstream
+// source URL+hash, maintainers). Consumers are exporters — e.g.
+// `aeb dist --brew` emits a Homebrew formula by reading these
+// fields, future `aeb dist --nix` / `--deb` / `--pkgsrc` would
+// read the same source-of-truth.
+//
+// No build-time effect by themselves. The build runs the same
+// whether or not metadata is declared. The information is
+// captured into the build context's metadata map; downstream
+// exporters read it.
+//
+// Usage:
+//   import meta
+//   import meta (desc, homepage, license, version, url, sha256, maintainer)
+//
+//   aether.program(b) { source("main.ae") output("svn") }
+//   meta.desc(b, "An Aether-port of Apache Subversion server")
+//   meta.homepage(b, "https://example.com/svn-aether")
+//   meta.license(b, "Apache-2.0")
+//   meta.version(b, "1.2.3")
+//   meta.url(b, "https://example.com/releases/svn-aether-1.2.3.tar.gz")
+//   meta.sha256(b, "abc123...")
+//   meta.maintainer(b, "Alice <alice@example.com>")
+//   meta.maintainer(b, "Bob <bob@example.com>")
+//
+// All setters live at the build-context level (b), not inside a
+// language-SDK builder block. Repeated single-value calls
+// (desc, homepage, license, version, url, sha256) are last-writer-
+// wins. `maintainer` accumulates.
+
+import build
+import std.string
+import std.io
+import std.list
+import std.map
+
+// --- Single-value setters (last-writer-wins) ---
+
+desc(ctx: ptr, text: string) {
+    _e = map.put(ctx, "_meta_desc", text)
+}
+
+homepage(ctx: ptr, url_text: string) {
+    _e = map.put(ctx, "_meta_homepage", url_text)
+}
+
+license(ctx: ptr, spdx: string) {
+    _e = map.put(ctx, "_meta_license", spdx)
+}
+
+version(ctx: ptr, ver: string) {
+    _e = map.put(ctx, "_meta_version", ver)
+}
+
+url(ctx: ptr, url_text: string) {
+    _e = map.put(ctx, "_meta_url", url_text)
+}
+
+sha256(ctx: ptr, hash: string) {
+    _e = map.put(ctx, "_meta_sha256", hash)
+}
+
+// --- Multi-value setter (accumulates) ---
+
+maintainer(ctx: ptr, who: string) {
+    if map.has(ctx, "_meta_maintainers") == 0 {
+        _e1 = map.put(ctx, "_meta_maintainers", list.new())
+    }
+    maintainers, _ = map.get(ctx, "_meta_maintainers")
+    _e2 = list.add(maintainers, who)
+}
+
+// --- Read accessors (for exporters) ---
+
+// _get_or(ctx, key, fallback) — read a single-value meta field.
+// Returns the stored string or the fallback if unset.
+_get_or(ctx: ptr, key: string, fallback: string) {
+    if map.has(ctx, key) == 0 {
+        return fallback
+    }
+    v, _ = map.get(ctx, key)
+    return v
+}
+
+get_desc(ctx: ptr)      { return _get_or(ctx, "_meta_desc", "") }
+get_homepage(ctx: ptr)  { return _get_or(ctx, "_meta_homepage", "") }
+get_license(ctx: ptr)   { return _get_or(ctx, "_meta_license", "") }
+get_version(ctx: ptr)   { return _get_or(ctx, "_meta_version", "") }
+get_url(ctx: ptr)       { return _get_or(ctx, "_meta_url", "") }
+get_sha256(ctx: ptr)    { return _get_or(ctx, "_meta_sha256", "") }
+
+// get_maintainers(ctx) — list of maintainer strings, or empty list.
+// Caller iterates with list.size / list.get.
+get_maintainers(ctx: ptr) {
+    if map.has(ctx, "_meta_maintainers") == 0 {
+        return list.new()
+    }
+    out, _ = map.get(ctx, "_meta_maintainers")
+    return out
+}
