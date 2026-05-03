@@ -201,7 +201,14 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
   today.
 - `lib/build/module.ae` — the core API: `build.start()`,
   `build.begin()`, `build.dep()`, `build._get()`, artifact helpers.
-  Every language SDK depends on this.
+  Every language SDK depends on this. Also hosts shared **fixture
+  synthesis** (`_synth_fixture_pre`, `_synth_fixture_post`,
+  `_has_fixtures`) — test SDKs that need spawn/seed/cleanup
+  lifecycle (today: `bash.test`, future: `aether.driver_test`)
+  populate `fixture_seeds` / `fixture_servers` records on their
+  builder map and call these helpers to lower them into shell
+  statements. The shell-quoting traps are nontrivial — read the
+  docstrings before adding a new caller.
 - `lib/<lang>/module.ae` — language SDKs. Java, Kotlin, Go, Rust,
   TypeScript, Scala, Clojure, .NET, Python, Aether (native programs),
   Bash (test runner), Maven (resolver), pnpm/jest/webpack/angular,
@@ -212,9 +219,10 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
   `extra_source(...)` / `link_flag(...)` / `regen(...)` opts into the
   manual `aetherc + gcc` path.
 - `lib/bash/module.ae` — bash test runner. `bash.test(b)` with
-  `script(...)`, `jobs(N)`, `pre_command(...)`, `post_command(...)`.
-  Parallel mode via `xargs -P` (jobs(0) = nproc/2). Hooks force
-  sequential.
+  `script(...)`, `jobs(N)`, `pre_command(...)`, `post_command(...)`,
+  and structured server fixtures (`fixture_seed`, `fixture_server`).
+  Parallel mode via `xargs -P` (jobs(0) = nproc/2). Hooks AND
+  fixtures force sequential.
 - `tests/` — string-builder unit tests, one `test_*.ae` per
   command-string-builder. Each asserts the exact string passed to
   exec. Run with `./tests/run.sh` (pattern arg filters).

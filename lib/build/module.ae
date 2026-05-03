@@ -361,6 +361,274 @@ _read_test_result(target_dir: string) {
     return passed, failed, 1
 }
 
+// --- Fixture synthesis (shared by bash.test, aether.driver_test) ---
+//
+// Test SDKs that drive a separate process against a freshly-spawned
+// server share the same lifecycle: rm-and-(re-)seed some directories,
+// spawn some servers in the background with their PID captured,
+// sleep N ms for "readiness," run the test, then kill servers and
+// clean up directories. Only the *test step* differs (a `bash
+// <script>` invocation vs. an Aether-compiled driver binary
+// invocation).
+//
+// To avoid duplicating the synthesis logic across SDKs, the shared
+// pieces — env-var prefix derivation, packed-record splitting,
+// pre/post shell-statement synthesis — live here. Each consumer SDK
+// declares its own setters that pack records into builder-map keys
+// named "fixture_seeds" / "fixture_servers" (a list of tab-packed
+// strings); both keys' shapes are documented on the synth helpers
+// below. The synthesis helpers don't care which closure populated
+// the map; they just need lists of records.
+//
+// Each entry of the returned pre/post lists is a single shell
+// statement (no embedded `;`). Consumers join them with `; ` into
+// a `bash -c '...'` body. Single quotes inside any returned string
+// would close the outer wrapper, so the helpers stick to double
+// quotes throughout.
+
+// _upper_ascii_word(s) — uppercase a-z to A-Z, leave other chars
+// unchanged. Used to derive the env-var prefix from a fixture name
+// (`primary` → `PRIMARY`). Names with hyphens or dots survive
+// verbatim; users get exactly the env vars they declared.
+_upper_ascii_word(s: string) {
+    n = string.length(s)
+    if n == 0 { return s }
+    pairs = "abcdefghijklmnopqrstuvwxyz"
+    upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    out = ""
+    i = 0
+    while i < n {
+        ch = string.substring(s, i, i + 1)
+        idx = string.index_of(pairs, ch)
+        if idx >= 0 {
+            out = string.concat(out, string.substring(upper, idx, idx + 1))
+        } else {
+            out = string.concat(out, ch)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// _split_tabs(rec, n) — pull n tab-separated fields out of a packed
+// fixture record. Returns a list of strings sized to n; missing
+// trailing fields are "". Pure.
+_split_tabs(rec: string, n: int) {
+    out = list.new()
+    rest = rec
+    i = 0
+    while i < n - 1 {
+        t = string.index_of(rest, "\t")
+        if t < 0 {
+            list.add(out, rest)
+            rest = ""
+        } else {
+            list.add(out, string.substring(rest, 0, t))
+            rest = string.substring(rest, t + 1, string.length(rest))
+        }
+        i = i + 1
+    }
+    list.add(out, rest)
+    return out
+}
+
+// _synth_fixture_pre(seeds, servers) — emit the shell statements
+// that run before the test step.
+//
+// `seeds` is a list of tab-packed records of the form
+//   "name\trepo\tseed_bin"
+// where seed_bin may be empty (skip seeding, just rm+mkdir).
+//
+// `servers` is a list of tab-packed records of the form
+//   "name\tbin\targs\tport\tready_after_ms"
+// where args is a single shell-words string and the trailing two
+// fields are stringified ints.
+//
+// Either list may be null. The returned list is a sequence of
+// single-statement shell commands ready to inject into a
+// `bash -c '...'`-style chain.
+//
+// Order: all seeds (declaration order), then all servers
+// (declaration order). Servers spawn after seeds because their
+// args may reference $<NAME>_REPO.
+//
+// Each fixture's name is uppercased for env-var prefixes:
+// $<NAME>_REPO, $<NAME>_BIN, $<NAME>_PORT, $<NAME>_PID.
+_synth_fixture_pre(seeds: ptr, servers: ptr) {
+    out = list.new()
+    dol = "$"
+
+    // Seeds first — servers may want $<NAME>_REPO populated before
+    // they spawn. Walk in declaration order.
+    if seeds != null {
+        ns = list.size(seeds)
+        i = 0
+        while i < ns {
+            rec, _ = list.get(seeds, i)
+            f = _split_tabs(rec, 3)
+            name, _ = list.get(f, 0)
+            repo, _ = list.get(f, 1)
+            seed_bin, _ = list.get(f, 2)
+            up = _upper_ascii_word(name)
+            // Export the repo path before any seeding runs so that
+            // a custom seed_bin can read $<NAME>_REPO if it cares.
+            list.add(out, "export ${up}_REPO=\"${repo}\"")
+            list.add(out, "rm -rf \"${repo}\"")
+            if string.length(seed_bin) > 0 {
+                list.add(out, "\"${seed_bin}\" \"${repo}\" >/dev/null")
+            } else {
+                list.add(out, "mkdir -p \"${repo}\"")
+            }
+            i = i + 1
+        }
+    }
+
+    // Servers next.
+    if servers != null {
+        nv = list.size(servers)
+        j = 0
+        while j < nv {
+            rec, _ = list.get(servers, j)
+            f = _split_tabs(rec, 5)
+            name, _ = list.get(f, 0)
+            bin, _ = list.get(f, 1)
+            args, _ = list.get(f, 2)
+            port_s, _ = list.get(f, 3)
+            ready_s, _ = list.get(f, 4)
+            up = _upper_ascii_word(name)
+            // Per-fixture log file in /tmp so scripts can `cat` it
+            // for diagnostics; kept short-named (the fixture name
+            // is unique-per-builder, not unique-globally, but
+            // scripts run sequentially so collisions don't matter).
+            log = string.concat("/tmp/aeb_fixture_", name)
+            log = string.concat(log, ".log")
+            // Aether's ${...} interpolation is resolved at compile
+            // time. Variables like ${up} ARE resolved (we want that),
+            // but if a value happens to contain a literal "${X}" the
+            // parser tries to look up X. Build via string.concat where
+            // the *output* needs to keep a `${...}` for the shell.
+            list.add(out, string.concat(string.concat("export ", up), "_BIN=\"${bin}\""))
+            list.add(out, string.concat(string.concat("export ", up), "_PORT=\"${port_s}\""))
+            // Spawn-and-capture-PID in a single shell statement.
+            //
+            // We need `$!` to be the *binary's* PID so cleanup can
+            // kill it directly — without a process-group dance or
+            // pgrep heuristics. The trick is `exec` inside the
+            // backgrounded subshell:
+            //
+            //   ( exec "$BIN" args ) > log 2>&1 &
+            //
+            // The subshell forks (giving us a PID via `$!`), then
+            // `exec` replaces it with the binary. So `$!` and the
+            // binary's PID are the same. Without `exec`, an `eval`
+            // or naked invocation would leave a wrapping bash that
+            // forks the binary as its child — `$!` would be the
+            // wrapper, killing it would orphan the binary to init.
+            //
+            // The eval-with-escaped-double-quotes lets `${args}`
+            // re-expand at run time so users can interpolate
+            // $<NAME>_REPO into their args string.
+            bin_ref = string.concat(dol, "{")
+            bin_ref = string.concat(bin_ref, up)
+            bin_ref = string.concat(bin_ref, "_BIN}")
+            spawn_line = string.concat("( eval exec \"\\\"", bin_ref)
+            spawn_line = string.concat(spawn_line, "\\\" ")
+            spawn_line = string.concat(spawn_line, args)
+            spawn_line = string.concat(spawn_line, "\" ) > \"")
+            spawn_line = string.concat(spawn_line, log)
+            spawn_line = string.concat(spawn_line, "\" 2>&1 & export ")
+            spawn_line = string.concat(spawn_line, up)
+            spawn_line = string.concat(spawn_line, "_PID=")
+            spawn_line = string.concat(spawn_line, dol)
+            spawn_line = string.concat(spawn_line, "!")
+            list.add(out, spawn_line)
+            // sleep N.NNN — convert ready_after_ms into decimal
+            // seconds via bash arith + printf (no awk, since
+            // single-quoted awk programs would conflict with the
+            // outer `bash -c '...'` wrapper).
+            // Renders: sleep $(printf "%d.%03d" $((N/1000)) $((N%1000)))
+            dol_paren_paren_l = string.concat(dol, "((")
+            sleep_line = string.concat("sleep $(printf \"%d.%03d\" ", dol_paren_paren_l)
+            sleep_line = string.concat(sleep_line, ready_s)
+            sleep_line = string.concat(sleep_line, "/1000)) ")
+            sleep_line = string.concat(sleep_line, dol_paren_paren_l)
+            sleep_line = string.concat(sleep_line, ready_s)
+            sleep_line = string.concat(sleep_line, "%1000)))")
+            list.add(out, sleep_line)
+            j = j + 1
+        }
+    }
+    return out
+}
+
+// _synth_fixture_post(seeds, servers) — emit the shell statements
+// that run after the test step: kill each server in reverse order,
+// then rm -rf each fixture's repo.
+//
+// Cleanup is best-effort (`|| true` on every step); even if a
+// server already died or a directory is locked, the chain
+// completes so subsequent scripts get a clean state.
+_synth_fixture_post(seeds: ptr, servers: ptr) {
+    out = list.new()
+    dol = "$"
+
+    // Servers killed in reverse order (LIFO — youngest first).
+    // Build "${PRIMARY_PID}" via string.concat so Aether's own
+    // ${...} interpolation doesn't try to resolve it at compile time.
+    if servers != null {
+        nv = list.size(servers)
+        j = nv - 1
+        while j >= 0 {
+            rec, _ = list.get(servers, j)
+            f = _split_tabs(rec, 5)
+            name, _ = list.get(f, 0)
+            up = _upper_ascii_word(name)
+            // Render: kill "${PRIMARY_PID}" 2>/dev/null || true
+            pid_ref = string.concat(dol, "{")
+            pid_ref = string.concat(pid_ref, up)
+            pid_ref = string.concat(pid_ref, "_PID}")
+            kill_line = string.concat("kill \"", pid_ref)
+            kill_line = string.concat(kill_line, "\" 2>/dev/null || true")
+            wait_line = string.concat("wait \"", pid_ref)
+            wait_line = string.concat(wait_line, "\" 2>/dev/null || true")
+            list.add(out, kill_line)
+            list.add(out, wait_line)
+            j = j - 1
+        }
+    }
+
+    // Repos removed in declaration order; doesn't matter much,
+    // they're independent.
+    if seeds != null {
+        ns = list.size(seeds)
+        i = 0
+        while i < ns {
+            rec, _ = list.get(seeds, i)
+            f = _split_tabs(rec, 3)
+            repo, _ = list.get(f, 1)
+            list.add(out, "rm -rf \"${repo}\" 2>/dev/null || true")
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// _has_fixtures(builder_map) — does the builder map declare any
+// fixture_seed or fixture_server? Read by SDK builders to decide
+// whether to lower fixtures into pre/post shell chains.
+_has_fixtures(builder_map: ptr) {
+    if builder_map == null { return 0 }
+    if map.has(builder_map, "fixture_seeds") == 1 {
+        s, _ = map.get(builder_map, "fixture_seeds")
+        if list.size(s) > 0 { return 1 }
+    }
+    if map.has(builder_map, "fixture_servers") == 1 {
+        v, _ = map.get(builder_map, "fixture_servers")
+        if list.size(v) > 0 { return 1 }
+    }
+    return 0
+}
+
 // _label_to_target_dir(root, module_dir) — invert the label →
 // target_dir mapping (mirrors the logic in build.begin's setup
 // of fs_dir + tgt_dir). Used by the orchestrator to find the

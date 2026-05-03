@@ -1,10 +1,15 @@
-// Tests for the fixture-synthesis helpers in lib/bash/module.ae.
+// Tests for the fixture-synthesis helpers in lib/build/module.ae.
 //
 // _upper_ascii_word, _split_tabs, _synth_fixture_pre,
 // _synth_fixture_post are all pure — they take packed string
 // records and return shell-statement lists. The actual spawn /
 // kill / sleep timing is exercised indirectly via the bash test
 // runner; these tests pin the rendered shell shape.
+//
+// Lives under tests/ rather than near lib/build/ for parity with
+// the rest of the suite. Imported names should be considered
+// public-ish helpers consumable by other test SDKs (next user:
+// aether.driver_test).
 
 import std.string
 import std.io
@@ -16,9 +21,8 @@ import std.map
 import std.path
 import std.dir
 
-import build
-import bash (_upper_ascii_word, _split_tabs, _synth_fixture_pre,
-             _synth_fixture_post)
+import build (_upper_ascii_word, _split_tabs, _synth_fixture_pre,
+              _synth_fixture_post)
 
 extern println(s: string)
 
