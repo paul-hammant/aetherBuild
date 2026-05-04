@@ -1,5 +1,7 @@
 # aeb
 
+> Your build is a graph whether you acknowledge it or not.
+
 A build system for polyglot monorepos. Small declarative files replace
 Makefiles, `pom.xml`, `package.json` scripts, `deps.edn`, `Cargo.toml`,
 `.csproj`, and `pyproject.toml` — and replace them consistently across
