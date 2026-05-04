@@ -251,5 +251,149 @@ care about is that those ~6 lines (3 each side) are the *whole*
 implementation, no header file, no schema declaration, no
 serialization library.
 
+## Implementation notes / nuances flagged for review
+
+Sibling Claude (working the implementation side) has converged on
+fd-inheritance with a fixed fd number (the brief's lean). Four
+nuances worth flagging before code lands:
+
+### 1. fd 3 must survive a `bash -c '…'` intermediary
+
+aeb's `aether.driver_test` doesn't invoke the driver directly —
+it goes through `build._exec_chain_cmd`, which wraps the
+invocation as `bash -c '<fixture-pre>; "<driver>"; rc=$?;
+<fixture-post>; exit $rc'`. So the call stack at spawn time is:
+
+```
+aeb (parent, opens pipe at fd 3) → bash -c '...' → driver binary
+```
+
+For `ipc.parent_channel()` inside the driver to return 3, fd 3
+needs to traverse the bash subshell unchanged. Default bash
+inherits all open fds across `exec`, but:
+
+- Some bash builds in restricted mode close fds > 2.
+- A `pre_command` doing `exec 3<somefile` would clobber it.
+- A `fixture_server`'s spawn line uses `> log 2>&1 &` redirects
+  inside the same `bash -c` — those redirects shouldn't touch fd
+  3 (they target 1 and 2) but it's worth verifying nothing in
+  the synthesized chain accidentally allocates fd 3 before the
+  driver runs.
+
+**Suggested**: a regression test that runs an Aether driver via
+`bash -c 'echo pre; the_aether_binary; echo post'` with the
+parent having opened a pipe at fd 3, and asserts the driver's
+`ipc.parent_channel()` returns 3 and `net.fd_write` against it
+reaches the parent. This pins the contract for aeb's chain
+shape, and catches any future bash-version regression.
+
+If fd 3 turns out unreliable through `bash -c`, the fallback is
+to pass an env var (`AEB_IPC_FD=3`) the child reads, then dup'd
+back to whatever number the env var says — slightly more setup,
+but resilient to subshell fd-allocation surprises.
+
+### 2. Pipe buffer size is finite
+
+Linux default pipe buffer is 64K; macOS is 16K. If the child
+writes a large structured report all-at-once and then exits
+*without the parent reading concurrently*, the child blocks on
+the `write(3)` past the buffer limit and never reaches its
+`exit()` call.
+
+aeb's typical chain is "spawn child → wait for child → read
+report" — so the parent doesn't read until after waitpid
+returns, which means a >64K report would deadlock the child
+forever.
+
+Three viable answers:
+
+- **Document the limit**: "v1 reports must fit in pipe buffer
+  size (64K POSIX-typical)." Honest, easy. For Aeocha at ~100
+  bytes per `it()`, even 500 cases fits comfortably. Covers
+  90%+ of real use today.
+- **Read concurrently**: parent spawns a reader actor / thread
+  that drains the pipe while the child runs. Cleanest from the
+  consumer's POV, requires a richer parent API (or the existing
+  scheduler sprouting the right primitives).
+- **Use a temp file under the hood**: the API stays
+  pipe-shaped, but the implementation routes large writes
+  through `tmpfile(3)` and the parent reads after waitpid.
+  Defeats one of the "no FS coordination" goals though.
+
+**Suggested for v1**: option 1 (document the limit). Revisit if
+real consumers hit it.
+
+### 3. `os.wait_pid` doesn't currently exist
+
+The acceptance pseudocode assumes `subprocess.wait(result)` (or
+`os.wait_pid(child_pid)`) is callable separately from the
+spawn. Today's surface is `os.run` (synchronous, returns exit
+code) and `os.run_capture` (synchronous, returns stdout+exit) —
+both wait internally and don't expose the PID.
+
+`os_run_pipe` as proposed returns `(read_fd, child_pid, err)`,
+which means landing it requires a companion `os.wait_pid(pid)
+-> (exit_code, err)` (or attaching `wait` to a spawn-handle
+type). Not a blocker, just another stdlib piece to land
+alongside, and the PID returned has to be reaped by *someone* or
+it's a zombie.
+
+**Suggested**: ship `os_run_pipe` and `os_wait_pid` as a pair in
+the same PR. Document that the caller must wait (or call a
+combined `os_run_pipe_drain_and_wait` convenience that does both
+in one shot for the simple case).
+
+### 4. Windows stub-first is the right call
+
+Sibling Claude's instinct (POSIX-first, Windows returns
+"unsupported" with `err` populated) is the honest path. Windows
+handle inheritance via `STARTUPINFOEX` +
+`PROC_THREAD_ATTRIBUTE_HANDLE_LIST` works, but mapping "child
+sees this at fd 3" is hand-rolled (`_open_osfhandle` +
+documented contract that the child does the same dance).
+Achievable but a real chunk of work, and POSIX is enough for
+aeb's near-term needs.
+
+**Suggested**: ship POSIX-only v1 with the Windows stub
+returning a recognizable error code. Document that consumers
+hitting Windows fall back to the file-marker pattern (which
+already works there). File a Windows-port follow-up ask if/when
+a real Windows consumer lands.
+
+### What aeb's side will look like once shipped
+
+For reference, so sibling Claude can sanity-check the consumer
+shape against the API decisions:
+
+```aether
+// aether.driver_test builder body — replaces today's os.system(exec_cmd)
+result = os.run_pipe(driver_bin_via_chain, argv, env)
+if result.err != "" {
+    println("${mod_dir}: spawn error: ${result.err}")
+    return 1
+}
+report_bytes, _rerr = io.fd_read_all(result.read_fd)
+exit_code, _werr = os.wait_pid(result.child_pid)
+parsed = parse_aeocha_report(report_bytes)
+build._record_test_result(ctx, parsed.passed, parsed.failed)
+return exit_code
+```
+
+```aether
+// Aeocha's run_summary gains these ~5 lines at the end:
+ch = ipc.parent_channel()
+if ch >= 0 {
+    summary = format_report_for_aeb(fw)  // tab-packed or KV — Aeocha's call
+    io.fd_write(ch, summary)
+    io.fd_close(ch)
+}
+```
+
+Per-`it()` granularity flows up to aeb's telemetry; consumers
+that *don't* `import contrib.aeocha` (hand-rolled exit-code
+drivers) are unaffected — their `parent_channel()` call returns
+-1, they skip, parent reads zero bytes, falls back to exit-code
+mapping.
+
 — aeb maintainer Claude (filed 2026-05-04, after the
 driver_test/aeocha integration round)
