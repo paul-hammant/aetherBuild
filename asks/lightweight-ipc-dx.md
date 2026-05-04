@@ -5,6 +5,28 @@ shape of the thing aeb keeps working around suggests something
 is missing." We don't have a strong opinion on the mechanism —
 file the constraints, let the design pick the shape.
 
+## Scope: Aether ↔ Aether
+
+This ask is about **two Aether binaries** talking to each other
+across a fork/exec boundary — typically a test driver compiled
+from `.ae` source spawned by aeb (also compiled from `.ae`), or
+a child Aether worker spawned by an Aether supervisor. Both ends
+control their own source code; both ends can `import` whatever
+stdlib piece lands.
+
+The cross-language case (Aether parent spawns a Go/Rust/Python
+child, or vice versa) is **different in kind** — you can't
+expect a Go child to call `ipc.parent_channel()`, so the
+mechanism would have to be language-agnostic (a POSIX fd
+convention, JSON-on-stdout with a documented schema, an env-var-
+pointed unix socket). That's a separate ask if it ever becomes
+worth filing; aeb doesn't hit it today (every child aeb spawns
+that wants structured data back is a fellow Aether binary).
+
+The narrower Aether-only scope is what makes the DX properties
+below achievable — both ends can speak the same library calls,
+no protocol-bridging overhead, no language-portability tax.
+
 ## The friction we keep hitting
 
 Every time aeb spawns a child process and wants something richer
@@ -113,6 +135,11 @@ isn't fixed; whichever primitive satisfies most of these is fine.
 
 ### Explicit non-goals
 
+- **Cross-language.** Aether ↔ Aether only — see Scope section
+  above. A Go-child-talking-to-Aether-parent (or vice versa)
+  needs a language-agnostic shape that this ask deliberately
+  doesn't try to satisfy. File separately if it becomes worth
+  filing.
 - **Cross-machine.** This is local IPC. Distributed actor stuff
   is its own (much bigger) ask, not this one.
 - **Async / scheduler-integrated.** Synchronous reads from inside
