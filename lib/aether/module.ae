@@ -1331,7 +1331,7 @@ builder driver_test(ctx: ptr) {
         return 1
     }
 
-    passed, failed, errored, has_report = build._parse_aeocha_report(report)
+    passed, failed, errored, failed_names, has_report = build._parse_aeocha_report(report)
     if has_report == 0 {
         // No structured report — fall back to exit-code mapping
         // (preserves behaviour for hand-rolled drivers that just
@@ -1347,6 +1347,11 @@ builder driver_test(ctx: ptr) {
 
     total_failed = failed + errored
     build._record_test_result(ctx, passed, total_failed)
+    // Persist failed-test names so the orchestrator can render
+    // them under the FAIL line in [telemetry]. No-op when
+    // failed_names is empty (all-pass run, or hand-rolled driver
+    // with no report).
+    build._record_test_failures(ctx, failed_names)
     if rc != 0 {
         if has_report == 1 {
             println("${mod_dir}: driver FAILED (${passed} passed, ${total_failed} failed)")

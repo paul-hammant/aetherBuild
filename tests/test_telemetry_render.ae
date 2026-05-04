@@ -139,5 +139,50 @@ main() {
     _assert_eq("render: mixed compile + 2 test records (one PASS, one FAIL)",
         render_telemetry(mixed, 9640), expected_mixed)
 
+    // --- render_telemetry: FAIL row with test_failed_names → indented detail ---
+    detailed = list.new()
+    detail_rec = _record("ae/wc", "test", 5400, "n/a")
+    map.put(detail_rec, "test_passed", "28")
+    map.put(detail_rec, "test_failed", "2")
+    map.put(detail_rec, "test_failed_names",
+            "blame against demo\texpected 'alice' got 'bob'\nlog shows three commits\texit 1")
+    list.add(detailed, detail_rec)
+    expected_detail = "[telemetry]\n  test:    ae/wc                            5.40s [n/a] 28/30 FAIL\n          - blame against demo\texpected 'alice' got 'bob'\n          - log shows three commits\texit 1\ntotal: 5.40s wall"
+    _assert_eq("render: FAIL row with detailed names indented",
+        render_telemetry(detailed, 5400), expected_detail)
+
+    // --- render_telemetry: PASS row with test_failed_names is unusual but
+    // shouldn't render anything (failed=0 gates the detail block). ---
+    paranoid = list.new()
+    paranoid_rec = _record("ae/wc", "test", 100, "n/a")
+    map.put(paranoid_rec, "test_passed", "5")
+    map.put(paranoid_rec, "test_failed", "0")
+    map.put(paranoid_rec, "test_failed_names", "stale data\nfrom previous run")
+    list.add(paranoid, paranoid_rec)
+    expected_paranoid = "[telemetry]\n  test:    ae/wc                            0.10s [n/a] 5/5 PASS\ntotal: 0.10s wall"
+    _assert_eq("render: failed=0 gates detail block (no indented lines)",
+        render_telemetry(paranoid, 100), expected_paranoid)
+
+    // --- render_telemetry: FAIL row WITHOUT test_failed_names → no detail block ---
+    nodetail = list.new()
+    nodetail_rec = _record("ae/jest", "test", 200, "n/a")
+    map.put(nodetail_rec, "test_passed", "3")
+    map.put(nodetail_rec, "test_failed", "1")
+    list.add(nodetail, nodetail_rec)
+    expected_nodetail = "[telemetry]\n  test:    ae/jest                          0.20s [n/a] 3/4 FAIL\ntotal: 0.20s wall"
+    _assert_eq("render: FAIL row without names → no detail block",
+        render_telemetry(nodetail, 200), expected_nodetail)
+
+    // --- render_telemetry: single failed name (no embedded message, no newline) ---
+    single = list.new()
+    single_rec = _record("ae/x", "test", 1000, "n/a")
+    map.put(single_rec, "test_passed", "0")
+    map.put(single_rec, "test_failed", "1")
+    map.put(single_rec, "test_failed_names", "the only test")
+    list.add(single, single_rec)
+    expected_single = "[telemetry]\n  test:    ae/x                             1.00s [n/a] 0/1 FAIL\n          - the only test\ntotal: 1.00s wall"
+    _assert_eq("render: single failed name, no message",
+        render_telemetry(single, 1000), expected_single)
+
     println("telemetry render tests done")
 }

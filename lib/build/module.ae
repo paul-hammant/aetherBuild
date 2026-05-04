@@ -361,6 +361,48 @@ _read_test_result(target_dir: string) {
     return passed, failed, 1
 }
 
+// _record_test_failures(ctx, names) — write failed-test names to
+// `.aeb_test_failures` so the orchestrator can render them under
+// the FAIL line in [telemetry] output.
+//
+// `names` is a string of newline-joined entries; each entry is
+// either bare `name` or `name\tmessage`. Empty `names` is a no-op
+// (don't write the marker file at all).
+//
+// SDKs that have per-test granularity (currently aether.driver_test
+// via the Aeocha report parser) call this; SDKs without it (jest,
+// junit5, etc.) leave the marker absent and the renderer skips the
+// indented detail block.
+_record_test_failures(ctx: ptr, names: string) {
+    if string.length(names) == 0 { return 0 }
+    td = _get(ctx, "target_dir")
+    _mkdirs(td)
+    p = path.join(td, ".aeb_test_failures")
+    body = names
+    // Ensure trailing newline so the file is line-terminated.
+    n = string.length(body)
+    if n > 0 {
+        last = string.substring(body, n - 1, n)
+        if string.equals(last, "\n") == 0 {
+            body = string.concat(body, "\n")
+        }
+    }
+    _e = fs.write_atomic(p, body, string.length(body))
+    return 0
+}
+
+// _read_test_failures(target_dir) — orchestrator-side read of the
+// marker written by _record_test_failures. Returns the file
+// content as a string (newline-joined entries) or "" if absent.
+_read_test_failures(target_dir: string) {
+    p = path.join(target_dir, ".aeb_test_failures")
+    if fs.exists(p) == 0 {
+        return ""
+    }
+    content, _err = fs.read(p)
+    return content
+}
+
 // --- Fixture synthesis (shared by bash.test, aether.driver_test) ---
 //
 // Test SDKs that drive a separate process against a freshly-spawned
@@ -803,12 +845,16 @@ _drain_pending_fixtures(b: ptr, builder_map: ptr) {
 }
 
 // _parse_aeocha_report(text) — pull (passed, failed, errored,
-// has_report) out of the structured report Aeocha writes through
-// the IPC back-channel. Returns (0, 0, 0, 0) when the input is
-// empty or unrecognisable; (P, F, E, 1) when a v1 header parsed
-// cleanly. Per-row data (PASS/FAIL/ERROR lines after the `---`
-// separator) is currently ignored — aeb only consumes the
-// header counts in v1.
+// failed_names, has_report) out of the structured report Aeocha
+// writes through the IPC back-channel.
+//
+// Returns (0, 0, 0, "", 0) when input is empty or unrecognisable;
+// (P, F, E, NAMES, 1) when a v1 header parsed cleanly. NAMES is a
+// newline-joined string of failed-test names (one per line), or ""
+// if no failures or rows are absent (e.g. Aeocha's header-only
+// truncation fallback under buffer pressure). Each name carries
+// the unquoted text from the row's name field; failure messages
+// are appended after a tab if present.
 //
 // Format reference (from aeocha.run_summary, aether-side ask
 // `aeocha-aeb-ipc-reporting.md`):
@@ -822,26 +868,29 @@ _drain_pending_fixtures(b: ptr, builder_map: ptr) {
 //   ---
 //   PASS\t1\t"first"\t12
 //   FAIL\t2\t"second"\t180\texpected ...
-//   ...
+//   ERROR\t3\t"third"\t...
 //
 // Pure: walks the input string with string.index_of /
 // string.substring; no I/O. Tested in tests/test_aeocha_report.ae.
 _parse_aeocha_report(text: string) {
     n = string.length(text)
     if n == 0 {
-        return 0, 0, 0, 0
+        return 0, 0, 0, "", 0
     }
     // Find the header/rows separator. Without it we don't have a
     // valid report — bail. We don't insist on a trailing newline
     // before "---" so a report ending exactly at the separator
     // (no rows) still parses.
     sep = string.index_of(text, "\n---\n")
+    rows_text = ""
     if sep < 0 {
         // Tolerate a report that's header-only without the
         // separator at all — useful if Aeocha truncated to
         // header-only fallback under buffer pressure. Treat the
         // whole text as the header block.
         sep = n
+    } else {
+        rows_text = string.substring(text, sep + 5, n)
     }
     header = string.substring(text, 0, sep)
 
@@ -881,9 +930,80 @@ _parse_aeocha_report(text: string) {
         // No "version=" line means this isn't a v1 report.
         // Conservative: treat as no report so callers fall back
         // to exit-code mapping rather than acting on garbage.
-        return 0, 0, 0, 0
+        return 0, 0, 0, "", 0
     }
-    return passed, failed, errored, 1
+
+    // Walk rows, picking out FAIL / ERROR entries. Each row is
+    // tab-separated: STATUS\tINDEX\t"NAME"\tDURATION[\tMESSAGE].
+    // We only need NAME (and MESSAGE if present) from non-PASS rows.
+    failed_names = ""
+    rest = rows_text
+    while string.length(rest) > 0 {
+        nl = string.index_of(rest, "\n")
+        line = ""
+        if nl < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = string.substring(rest, 0, nl)
+            rest = string.substring(rest, nl + 1, string.length(rest))
+        }
+        if string.length(line) > 0 {
+            // Split on tab: status, index, "name", duration, [message]
+            t1 = string.index_of(line, "\t")
+            if t1 > 0 {
+                status = string.substring(line, 0, t1)
+                if string.equals(status, "PASS") == 0 {
+                    // Non-PASS row — extract name and optional message.
+                    after_status = string.substring(line, t1 + 1, string.length(line))
+                    t2 = string.index_of(after_status, "\t")
+                    if t2 > 0 {
+                        after_index = string.substring(after_status, t2 + 1, string.length(after_status))
+                        // after_index starts with a quoted name; find the
+                        // closing quote, then the next tab → duration,
+                        // then the next tab → optional message. (Local
+                        // var named `msg` rather than `message` because
+                        // `message` is reserved in Aether — actor
+                        // pattern-matching keyword. Same trap several
+                        // other lib modules dodge.)
+                        name = ""
+                        msg = ""
+                        if string.length(after_index) > 0 {
+                            first = string.substring(after_index, 0, 1)
+                            if string.equals(first, "\"") == 1 {
+                                close_q = string.index_of(string.substring(after_index, 1, string.length(after_index)), "\"")
+                                if close_q >= 0 {
+                                    name = string.substring(after_index, 1, close_q + 1)
+                                    after_name = string.substring(after_index, close_q + 2, string.length(after_index))
+                                    // Skip duration field (next \t-delimited segment).
+                                    t3 = string.index_of(after_name, "\t")
+                                    if t3 >= 0 {
+                                        after_dur = string.substring(after_name, t3 + 1, string.length(after_name))
+                                        t4 = string.index_of(after_dur, "\t")
+                                        if t4 >= 0 {
+                                            msg = string.substring(after_dur, t4 + 1, string.length(after_dur))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if string.length(name) > 0 {
+                            entry = name
+                            if string.length(msg) > 0 {
+                                entry = string.concat(entry, "\t")
+                                entry = string.concat(entry, msg)
+                            }
+                            if string.length(failed_names) > 0 {
+                                failed_names = string.concat(failed_names, "\n")
+                            }
+                            failed_names = string.concat(failed_names, entry)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return passed, failed, errored, failed_names, 1
 }
 
 // _label_to_target_dir(root, module_dir) — invert the label →
@@ -981,12 +1101,22 @@ _format_telemetry_line(label: string, type_word: string, wall_ms: int, cache: st
 // println()s the result.
 //
 // Each record is a map with keys: label, type, wall_ms, cache.
-// Output shape:
+// Test rows additionally have test_passed / test_failed; rows with
+// per-test granularity (currently aether.driver_test via Aeocha)
+// also have test_failed_names — a newline-joined string of
+// "name" or "name\tmessage" entries that get indented under the
+// FAIL line:
+//
 //   [telemetry]
 //     compile: foo/bar                     1.21s [miss]
-//     compile: foo/baz                     0.01s [hit]
-//     test:    foo/quux                    3.03s [n/a]
+//     test:    foo/baz                     3.03s [n/a] 28/30 FAIL
+//             - blame against demo	expected 'alice' got 'bob'
+//             - log shows three commits	exit 1
 //   total: 4.25s wall
+//
+// The dash-prefixed indented lines are SKIPPED when failed=0 (no
+// failures to detail) or when test_failed_names is absent (SDK
+// doesn't provide per-test granularity yet).
 render_telemetry(records: ptr, total_ms: int) {
     out = "[telemetry]\n"
     n = list.size(records)
@@ -1013,6 +1143,32 @@ render_telemetry(records: ptr, total_ms: int) {
         line = _format_telemetry_line(label, type_word, wall_ms, cache, passed, failed, has_test_result)
         out = string.concat(out, line)
         out = string.concat(out, "\n")
+
+        // Indent failed-test names under the FAIL line, if any.
+        if failed > 0 {
+            if map.has(rec, "test_failed_names") == 1 {
+                tfn, _ = map.get(rec, "test_failed_names")
+                if string.length(tfn) > 0 {
+                    rest = tfn
+                    while string.length(rest) > 0 {
+                        nl = string.index_of(rest, "\n")
+                        entry = ""
+                        if nl < 0 {
+                            entry = rest
+                            rest = ""
+                        } else {
+                            entry = string.substring(rest, 0, nl)
+                            rest = string.substring(rest, nl + 1, string.length(rest))
+                        }
+                        if string.length(entry) > 0 {
+                            out = string.concat(out, "          - ")
+                            out = string.concat(out, entry)
+                            out = string.concat(out, "\n")
+                        }
+                    }
+                }
+            }
+        }
         i = i + 1
     }
     secs = total_ms / 1000

@@ -192,6 +192,14 @@ main() {
             println("        map.put(_rec, \"test_passed\", string.from_int(_tp))")
             println("        map.put(_rec, \"test_failed\", string.from_int(_tf))")
             println("    }")
+            // Read failed-test names marker — present when an SDK
+            // (currently aether.driver_test via Aeocha report) wrote
+            // per-test detail. Absent for SDKs without per-test
+            // granularity; renderer skips the indented detail block.
+            println("    _tfn = build._read_test_failures(_td)")
+            println("    if string.length(_tfn) > 0 {")
+            println("        map.put(_rec, \"test_failed_names\", _tfn)")
+            println("    }")
         }
         println("    list.add(_records, _rec)")
         i = i + 1
