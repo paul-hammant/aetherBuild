@@ -463,7 +463,10 @@ exists if a need arises."
   libs for sqlite + host bridges at `$(PREFIX)/lib/aether/`.
   aeb users can `link_flag("-laether_sqlite")` instead of pointing
   `extra_source` at the C file. aeb's existing `-L` includes that
-  dir; no change needed.
+  dir; no change needed. **As of 0.123 this also ships
+  `contrib/aeocha/module.ae`** under
+  `$(PREFIX)/share/aether/contrib/aeocha/` (was deleted post-copy
+  in 0.111; see the 0.123 entry below).
 - **0.111 `string.glob_match`** — POSIX fnmatch surface in
   stdlib. Useful if aeb grows pattern-based source discovery
   (e.g. a glob form of `extra_source(...)`); not consumed today.
@@ -477,6 +480,46 @@ exists if a need arises."
   it on both shell-out and manual paths. Cache key segregates
   coverage from non-coverage builds. Other test SDKs (jacoco,
   jest --coverage, etc.) not yet wired — tracked in TODO.
+- **0.118 `contrib.aeocha` integration-shape matchers** —
+  describe/it/before_each + `expect_*` matchers that absorb
+  bash-shaped "spawn / capture / awk-and-compare" idioms into
+  single Aether calls. Process surface (`expect_exit`,
+  `expect_no_spawn_error`, `expect_stdout_contains`,
+  `expect_stdout_line_field`, `expect_stdout_line_count`,
+  `expect_stdout_matches`) consumes the `(stdout, exit, err)`
+  triple from `os.run_capture`; HTTP surface
+  (`expect_http_status` / `_no_error` / `_body_contains` /
+  `_header` / `_body_json_field`) consumes a `resp: ptr` from
+  `http.get` / `client.send_request`. Drivers written for
+  `aether.driver_test(b)` should reach for these by default —
+  they're what the porter's ask was anticipating.
+- **0.123 `expect_stdout_line_field` tokenises on whitespace
+  runs (awk semantics)** — was single-space splits, broke against
+  column-aligned output like `Revision:    3`. Now indexes 0-based
+  on non-whitespace spans regardless of padding. Also new:
+  **`expect_stdout_line_after`** for "value after a `Key:` line"
+  with embedded spaces (svn/git-style log-line idiom).
+- **0.123 closure-extern-ordering fix in aetherc codegen** —
+  closure bodies that called imported externs (e.g.
+  `callback { argv = list.new() }` where `list_new` is `extern`'d
+  in `contrib.aeocha`) emitted into the generated C *before* the
+  imported-module extern prototypes, so gcc rejected with
+  "conflicting types for 'list_new'". Fix hoists extern emission
+  before closure discovery. **Workaround for ae < 0.123**: wrap
+  the extern call in a local helper (`fresh_argv() { return
+  list.new() }`) so the call site sees an Aether forward decl.
+  Driver tests in this repo's own smoke fixtures used the
+  workaround; once the installed `ae` is ≥ 0.123 the helper can
+  be inlined.
+
+A note on resolution order: an `ae` binary installed under
+`~/.local/bin/` will pick up contrib modules from
+`/usr/local/share/aether/contrib/` if its own prefix doesn't have
+them — verified by spinning up `import contrib.aeocha` against an
+`ae 0.118` binary while aeocha was only present at the system
+prefix. So `make install-contrib` from the Aether source tree
+(typically requires sudo) suffices even when the toolchain itself
+was a per-user `make install`.
 
 ## The load-bearing principle
 
