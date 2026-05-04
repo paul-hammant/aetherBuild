@@ -505,12 +505,34 @@ exists if a need arises."
   in `contrib.aeocha`) emitted into the generated C *before* the
   imported-module extern prototypes, so gcc rejected with
   "conflicting types for 'list_new'". Fix hoists extern emission
-  before closure discovery. **Workaround for ae < 0.123**: wrap
-  the extern call in a local helper (`fresh_argv() { return
-  list.new() }`) so the call site sees an Aether forward decl.
-  Driver tests in this repo's own smoke fixtures used the
-  workaround; once the installed `ae` is ≥ 0.123 the helper can
-  be inlined.
+  before closure discovery. Workaround for ae < 0.123 (wrap the
+  extern call in a local helper) is no longer needed.
+- **0.124 `std.ipc` + `os.run_pipe*` — child-to-parent IPC
+  back-channel**. Parent uses `os.run_pipe(prog, argv, env)` (or
+  the deadlock-free convenience
+  `os.run_pipe_drain_and_wait(prog, argv, env) -> (payload,
+  exit_code, err)`) to spawn a child with an inherited pipe at
+  fd 3 (env var `AETHER_IPC_FD` carries the number, so the
+  contract isn't the literal 3). Child uses
+  `ipc.parent_channel() -> int` to get the fd, writes via
+  `ipc.write_close(fd, bytes)`. POSIX-only; Windows returns
+  "unsupported." Three rounds of design discussion led to the v1
+  surface; the four-doc dialogue retired from `asks/` after the
+  feature shipped. **Now consumed**: `aether.driver_test` uses
+  `os.run_pipe_drain_and_wait` to spawn the driver and read a
+  structured per-it() report from the back-channel.
+- **0.124+ `contrib.aeocha` emits structured per-it() report
+  through the back-channel** — when invoked under a parent that
+  opened an IPC channel, `aeocha.run_summary` writes a `version=1`
+  KV-header report (`total/passed/failed/errored/duration_ms`) +
+  `---` + tab-packed per-it() rows before exit. Gated on
+  `parent_channel() >= 0`, so `ae run foo.ae` directly is
+  unchanged. **Now consumed**: aeb parses the header in
+  `lib/aether/driver_test` (via `build._parse_aeocha_report`)
+  and reports real granularity in the `[telemetry]` block —
+  e.g. `2/3 FAIL` instead of binary-level `0/1 FAIL`. Hand-rolled
+  drivers (no Aeocha) emit no report; aeb falls back to
+  exit-code mapping (`0 → 1/0`, non-zero → `0/1`).
 
 A note on resolution order: an `ae` binary installed under
 `~/.local/bin/` will pick up contrib modules from

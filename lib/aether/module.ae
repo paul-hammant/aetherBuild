@@ -1312,15 +1312,53 @@ builder driver_test(ctx: ptr) {
         exec_cmd = string.concat(exec_cmd, "\"")
     }
 
+    // Spawn via os.run_pipe_drain_and_wait so the child sees an
+    // inherited fd at AETHER_IPC_FD. If the driver uses
+    // contrib.aeocha, run_summary will write a structured per-it()
+    // report back through the channel; aeb parses the header for
+    // real (P/F/E) granularity. Drivers that don't write to the
+    // channel (hand-rolled exit-code-only) produce an empty
+    // report and we fall back to mapping exit code → 0/1.
     println("${mod_dir}: running Aether driver")
-    full_cmd = build._exec_chain_cmd(pre_cmds, exec_cmd, post_cmds)
-    rc = os.system(full_cmd)
-    if rc != 0 {
+    prog, argv = build._exec_chain_argv(pre_cmds, exec_cmd, post_cmds)
+    report, rc, run_err = os.run_pipe_drain_and_wait(prog, argv, null)
+    if string.length(run_err) > 0 {
+        // Spawn itself failed (binary not found, permission
+        // denied, Windows fall-through, …). Distinct from the
+        // driver running and exiting non-zero.
         build._record_test_result(ctx, 0, 1)
-        println("${mod_dir}: driver FAILED")
+        println("${mod_dir}: driver spawn error: ${run_err}")
+        return 1
+    }
+
+    passed, failed, errored, has_report = build._parse_aeocha_report(report)
+    if has_report == 0 {
+        // No structured report — fall back to exit-code mapping
+        // (preserves behaviour for hand-rolled drivers that just
+        // exit 0/non-0).
+        if rc == 0 {
+            passed = 1
+            failed = 0
+        } else {
+            passed = 0
+            failed = 1
+        }
+    }
+
+    total_failed = failed + errored
+    build._record_test_result(ctx, passed, total_failed)
+    if rc != 0 {
+        if has_report == 1 {
+            println("${mod_dir}: driver FAILED (${passed} passed, ${total_failed} failed)")
+        } else {
+            println("${mod_dir}: driver FAILED")
+        }
         return rc
     }
-    build._record_test_result(ctx, 1, 0)
-    println("${mod_dir}: driver PASSED")
+    if has_report == 1 {
+        println("${mod_dir}: driver PASSED (${passed}/${passed})")
+    } else {
+        println("${mod_dir}: driver PASSED")
+    }
     return 0
 }

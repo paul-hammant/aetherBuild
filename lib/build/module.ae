@@ -644,16 +644,41 @@ _synth_fixture_post(seeds: ptr, servers: ptr) {
 // or null. Pure: just string assembly. Tested in
 // tests/test_bash_chain_cmd.ae (via bash_chain_cmd).
 _exec_chain_cmd(pre_cmds: ptr, exec_cmd: string, post_cmds: ptr) {
+    if _exec_chain_is_passthrough(pre_cmds, post_cmds) == 1 {
+        return exec_cmd
+    }
+    body = _exec_chain_body(pre_cmds, exec_cmd, post_cmds)
+    return "bash -c '${body}'"
+}
+
+// _exec_chain_is_passthrough — internal helper: returns 1 when
+// both pre_cmds and post_cmds are empty/null. In that case the
+// exec_cmd doesn't need wrapping in `bash -c '...'`.
+_exec_chain_is_passthrough(pre_cmds: ptr, post_cmds: ptr) {
     pre_n = 0
     if pre_cmds != null { pre_n = list.size(pre_cmds) }
     post_n = 0
     if post_cmds != null { post_n = list.size(post_cmds) }
-
     if pre_n == 0 {
         if post_n == 0 {
-            return exec_cmd
+            return 1
         }
     }
+    return 0
+}
+
+// _exec_chain_body — internal helper: returns just the inner
+// shell body (everything that goes between `bash -c '...'`).
+// Reused by _exec_chain_cmd (wraps as one shell-string) and
+// _exec_chain_argv (returns it as the second argv element so
+// `os.run_pipe_drain_and_wait("bash", argv, env)` can spawn the
+// child with an inherited fd 3 — the wrapped form goes through
+// `os.system` which can't attach the IPC channel).
+_exec_chain_body(pre_cmds: ptr, exec_cmd: string, post_cmds: ptr) {
+    pre_n = 0
+    if pre_cmds != null { pre_n = list.size(pre_cmds) }
+    post_n = 0
+    if post_cmds != null { post_n = list.size(post_cmds) }
 
     dol_q  = string.concat("$", "?")
     dol_rc = string.concat("$", "rc")
@@ -678,7 +703,32 @@ _exec_chain_cmd(pre_cmds: ptr, exec_cmd: string, post_cmds: ptr) {
     }
     body = string.concat(body, "; exit ")
     body = string.concat(body, dol_rc)
-    return "bash -c '${body}'"
+    return body
+}
+
+// _exec_chain_argv — like _exec_chain_cmd, but returns
+// (prog, argv) suitable for os.run_pipe_drain_and_wait.
+//
+//   prog="bash", argv=["-c", "<body>"]
+//
+// Used by aether.driver_test where the child process needs
+// access to the inherited fd 3 / AETHER_IPC_FD env var that
+// std.os's spawn primitives set up. Going through os.system
+// (which _exec_chain_cmd's output targets) would re-exec
+// through a shell that doesn't open the IPC channel.
+//
+// When pre_cmds and post_cmds are both empty/null, returns
+// the exec_cmd as-is split on the first space (caller passes
+// e.g. `"<bin_path>"` and we return prog="<bin_path>" with an
+// empty argv) — but realistically every aeb test SDK that
+// reaches for this has at least the dyld-prefix shape, so the
+// no-pre/no-post case is rare. Pure: just string assembly.
+_exec_chain_argv(pre_cmds: ptr, exec_cmd: string, post_cmds: ptr) {
+    body = _exec_chain_body(pre_cmds, exec_cmd, post_cmds)
+    argv = list.new()
+    list.add(argv, "-c")
+    list.add(argv, body)
+    return "bash", argv
 }
 
 // _has_fixtures(builder_map) — does the builder map declare any
@@ -752,59 +802,88 @@ _drain_pending_fixtures(b: ptr, builder_map: ptr) {
     return 0
 }
 
-// _drain_pending_fixtures(b, builder_map) — move per-fixture
-// records from `b._pending_fixture_seeds` / `_pending_fixture_servers`
-// into `builder_map.fixture_seeds` / `fixture_servers`, then clear
-// the pending lists on `b`.
+// _parse_aeocha_report(text) — pull (passed, failed, errored,
+// has_report) out of the structured report Aeocha writes through
+// the IPC back-channel. Returns (0, 0, 0, 0) when the input is
+// empty or unrecognisable; (P, F, E, 1) when a v1 header parsed
+// cleanly. Per-row data (PASS/FAIL/ERROR lines after the `---`
+// separator) is currently ignored — aeb only consumes the
+// header counts in v1.
 //
-// Why two-stage storage: Aether's `_builder` magic only exposes the
-// immediately enclosing closure's map. A `fixture_seed(b, "name")
-// { ... }` builder runs *before* the enclosing `bash.test(b)` body,
-// so its setters can't write directly into bash.test's map. They
-// stage records onto `b` (the build context, accessible everywhere)
-// and bash.test's body drains them into its own _builder before
-// running synthesis.
+// Format reference (from aeocha.run_summary, aether-side ask
+// `aeocha-aeb-ipc-reporting.md`):
 //
-// Clearing the pending list on `b` after consumption is what keeps
-// two consecutive test builders in the same main() isolated:
-// each drains only the records its own inner builders staged.
-_drain_pending_fixtures(b: ptr, builder_map: ptr) {
-    if builder_map == null { return 0 }
-    if map.has(b, "_pending_fixture_seeds") == 1 {
-        pending, _ = map.get(b, "_pending_fixture_seeds")
-        if list.size(pending) > 0 {
-            if map.has(builder_map, "fixture_seeds") == 0 {
-                _e1 = map.put(builder_map, "fixture_seeds", list.new())
+//   version=1
+//   total=N
+//   passed=N
+//   failed=N
+//   errored=N
+//   duration_ms=N
+//   ---
+//   PASS\t1\t"first"\t12
+//   FAIL\t2\t"second"\t180\texpected ...
+//   ...
+//
+// Pure: walks the input string with string.index_of /
+// string.substring; no I/O. Tested in tests/test_aeocha_report.ae.
+_parse_aeocha_report(text: string) {
+    n = string.length(text)
+    if n == 0 {
+        return 0, 0, 0, 0
+    }
+    // Find the header/rows separator. Without it we don't have a
+    // valid report — bail. We don't insist on a trailing newline
+    // before "---" so a report ending exactly at the separator
+    // (no rows) still parses.
+    sep = string.index_of(text, "\n---\n")
+    if sep < 0 {
+        // Tolerate a report that's header-only without the
+        // separator at all — useful if Aeocha truncated to
+        // header-only fallback under buffer pressure. Treat the
+        // whole text as the header block.
+        sep = n
+    }
+    header = string.substring(text, 0, sep)
+
+    // Walk header lines. Expect "key=value\n" form. Unknown keys
+    // ignored. Missing keys default 0.
+    passed = 0
+    failed = 0
+    errored = 0
+    saw_version = 0
+    rest = header
+    while string.length(rest) > 0 {
+        nl = string.index_of(rest, "\n")
+        line = ""
+        if nl < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = string.substring(rest, 0, nl)
+            rest = string.substring(rest, nl + 1, string.length(rest))
+        }
+        if string.length(line) == 0 {
+            // skip blank line
+        } else {
+            eq = string.index_of(line, "=")
+            if eq > 0 {
+                key = string.substring(line, 0, eq)
+                value_str = string.substring(line, eq + 1, string.length(line))
+                value, _verr = string.to_int(string.trim(value_str))
+                if string.equals(key, "passed") == 1   { passed = value }
+                if string.equals(key, "failed") == 1   { failed = value }
+                if string.equals(key, "errored") == 1  { errored = value }
+                if string.equals(key, "version") == 1  { saw_version = 1 }
             }
-            seeds, _ = map.get(builder_map, "fixture_seeds")
-            n = list.size(pending)
-            i = 0
-            while i < n {
-                rec, _ = list.get(pending, i)
-                list.add(seeds, rec)
-                i = i + 1
-            }
-            _e2 = map.put(b, "_pending_fixture_seeds", list.new())
         }
     }
-    if map.has(b, "_pending_fixture_servers") == 1 {
-        pending, _ = map.get(b, "_pending_fixture_servers")
-        if list.size(pending) > 0 {
-            if map.has(builder_map, "fixture_servers") == 0 {
-                _e3 = map.put(builder_map, "fixture_servers", list.new())
-            }
-            servers, _ = map.get(builder_map, "fixture_servers")
-            n = list.size(pending)
-            i = 0
-            while i < n {
-                rec, _ = list.get(pending, i)
-                list.add(servers, rec)
-                i = i + 1
-            }
-            _e4 = map.put(b, "_pending_fixture_servers", list.new())
-        }
+    if saw_version == 0 {
+        // No "version=" line means this isn't a v1 report.
+        // Conservative: treat as no report so callers fall back
+        // to exit-code mapping rather than acting on garbage.
+        return 0, 0, 0, 0
     }
-    return 0
+    return passed, failed, errored, 1
 }
 
 // _label_to_target_dir(root, module_dir) — invert the label →

@@ -1,0 +1,92 @@
+// Tests for build._parse_aeocha_report.
+//
+// Pure parser — extracts (passed, failed, errored, has_report)
+// from the structured report Aeocha writes through std.ipc.
+// Format reference: aeocha-aeb-ipc-reporting.md upstream ask.
+
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+import build (_parse_aeocha_report)
+
+extern println(s: string)
+
+_assert_eq_int(label: string, actual: int, expected: int) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: ${expected}")
+        println("  actual:   ${actual}")
+    }
+}
+
+main() {
+    // --- Empty input → no report ---
+    p, f, e, h = _parse_aeocha_report("")
+    _assert_eq_int("empty: passed", p, 0)
+    _assert_eq_int("empty: failed", f, 0)
+    _assert_eq_int("empty: errored", e, 0)
+    _assert_eq_int("empty: has_report", h, 0)
+
+    // --- Hand-rolled-driver text (no version line) → no report ---
+    junk = "this is not an aeocha report\nrandom output\n"
+    p, f, e, h = _parse_aeocha_report(junk)
+    _assert_eq_int("junk: has_report", h, 0)
+
+    // --- Canonical v1 report (header + rows) ---
+    full = "version=1\ntotal=3\npassed=2\nfailed=1\nerrored=0\nduration_ms=42\n---\nPASS\t1\t\"first\"\t10\nFAIL\t2\t\"second\"\t20\texpected 1 got 2\nPASS\t3\t\"third\"\t5\n"
+    p, f, e, h = _parse_aeocha_report(full)
+    _assert_eq_int("full: passed",     p, 2)
+    _assert_eq_int("full: failed",     f, 1)
+    _assert_eq_int("full: errored",    e, 0)
+    _assert_eq_int("full: has_report", h, 1)
+
+    // --- Header-only (no separator) — Aeocha's truncation fallback ---
+    header_only = "version=1\ntotal=500\npassed=499\nfailed=1\nerrored=0\nduration_ms=99999\n"
+    p, f, e, h = _parse_aeocha_report(header_only)
+    _assert_eq_int("header-only: passed",     p, 499)
+    _assert_eq_int("header-only: failed",     f, 1)
+    _assert_eq_int("header-only: has_report", h, 1)
+
+    // --- Header with errored count ---
+    with_err = "version=1\ntotal=5\npassed=3\nfailed=1\nerrored=1\nduration_ms=100\n---\n"
+    p, f, e, h = _parse_aeocha_report(with_err)
+    _assert_eq_int("with-err: passed",     p, 3)
+    _assert_eq_int("with-err: failed",     f, 1)
+    _assert_eq_int("with-err: errored",    e, 1)
+    _assert_eq_int("with-err: has_report", h, 1)
+
+    // --- All passed ---
+    all_pass = "version=1\ntotal=10\npassed=10\nfailed=0\nerrored=0\nduration_ms=200\n---\n"
+    p, f, e, h = _parse_aeocha_report(all_pass)
+    _assert_eq_int("all-pass: passed",     p, 10)
+    _assert_eq_int("all-pass: failed",     f, 0)
+    _assert_eq_int("all-pass: errored",    e, 0)
+    _assert_eq_int("all-pass: has_report", h, 1)
+
+    // --- Unknown keys ignored (forward compat) ---
+    fwd = "version=1\nfuture_key=ignored\npassed=2\nfailed=0\nerrored=0\ntotal=2\nduration_ms=50\nnew_field=42\n---\n"
+    p, f, e, h = _parse_aeocha_report(fwd)
+    _assert_eq_int("fwd-compat: passed",     p, 2)
+    _assert_eq_int("fwd-compat: has_report", h, 1)
+
+    // --- Missing version still gates: no version → no report ---
+    no_ver = "passed=5\nfailed=0\nerrored=0\ntotal=5\n---\n"
+    p, f, e, h = _parse_aeocha_report(no_ver)
+    _assert_eq_int("no-version: has_report", h, 0)
+
+    // --- Trailing whitespace tolerated by string.to_int via trim ---
+    ws = "version=1\npassed=  3  \nfailed=0\nerrored=0\ntotal=3\n---\n"
+    p, f, e, h = _parse_aeocha_report(ws)
+    _assert_eq_int("whitespace: passed", p, 3)
+
+    println("aeocha report parser tests done")
+}
