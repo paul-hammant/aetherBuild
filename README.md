@@ -709,7 +709,7 @@ python.package(b) { … }     // generate pyproject.toml and build wheel
 
 ```aether
 import bash
-import bash (script, jobs, pre_command, post_command,
+import bash (script, jobs, pre_command, post_command, on_failure,
               fixture_seed, fixture_server,
               repo, seed_bin, bin, args, port, ready_after_ms)  // see note below
 
@@ -728,6 +728,14 @@ bash.test(b) {              // pre/post commands run around every script.
     post_command("source teardown.sh") // posts always run after, pass or fail
     script("test_acl.sh")
 }                           // (forces sequential mode if jobs(N>1) also set)
+
+bash.test(b) {              // on_failure fires ONCE if any script fails —
+    script("test_acl.sh")   //   diagnostics / notification, not cleanup.
+    on_failure("echo \"FAILED: \$AEB_MODULE_DIR (\$AEB_TEST_FAILED/\$AEB_TEST_TOTAL)\"")
+    on_failure("curl -X POST \$SLACK_WEBHOOK -d \"text=tests broke\"")
+}                           // env: $AEB_TEST_PASSED, $AEB_TEST_FAILED,
+                            // $AEB_TEST_TOTAL, $AEB_MODULE_DIR.
+                            // Compatible with parallel mode (fires after).
 
 bash.test(b) {                                       // structured server fixtures —
     fixture_seed(b, "primary") {                     //   spawned per-script, env vars

@@ -83,6 +83,51 @@ post_command(_ctx: ptr, cmd: string) {
     _e2 = list.add(posts, cmd)
 }
 
+// on_failure(cmd) — append a shell command to run AFTER the test
+// target finishes, IF any script in the target failed. Fires once
+// per target (not once per failed script), in declaration order
+// when multiple on_failure() calls are made. Non-zero exit from
+// the on_failure command is logged but does not change the test
+// result — same semantics as post_command (notification hiccups
+// shouldn't mask the underlying test failure).
+//
+// Distinct from post_command:
+//   pre_command   — runs BEFORE each script. Good for spawn/seed.
+//   post_command  — runs AFTER each script, ALWAYS. Good for cleanup.
+//   on_failure    — runs ONCE AFTER all scripts, only if any failed.
+//                   Good for diagnostics, notification, log capture.
+//
+// Use case: post-failure Slack notification, copying logs to a
+// well-known dir, kicking off bisect. The escape hatch is shell;
+// aeb stays out of the notification ecosystem (no built-in slack
+// plugin, no email integration — just `run shell command on fail`).
+//
+// Compatible with parallel mode (jobs(N>1)) — fires once at the
+// end after the parallel run completes, so no per-script
+// concurrency issues.
+//
+// Available env vars at fire time:
+//   $AEB_TEST_PASSED   — count of scripts that passed
+//   $AEB_TEST_FAILED   — count that failed
+//   $AEB_TEST_TOTAL    — total scripts in this target
+//   $AEB_MODULE_DIR    — module path (e.g. "ae/wc")
+//
+// Quoting note: the cmd is run as `<env> bash -c '<cmd>'`, so
+// single quotes in the cmd will close the outer wrapper. For
+// commands that need apostrophes, source a separate .sh file —
+// matches the same documented limit on pre_command/post_command.
+//
+// Aether's `${...}` interpolation is parse-time. To pass a
+// literal `$VAR` reference through to the shell, escape the
+// dollar sign as `\$VAR` in the .ae source.
+on_failure(_ctx: ptr, cmd: string) {
+    if map.has(_ctx, "on_failure_commands") == 0 {
+        _e1 = map.put(_ctx, "on_failure_commands", list.new())
+    }
+    fails, _ = map.get(_ctx, "on_failure_commands")
+    _e2 = list.add(fails, cmd)
+}
+
 // --- Sub-setters for fixture_seed / fixture_server closures ---
 //
 // These are plain setters on the *inner* closure's _builder map.
@@ -683,6 +728,50 @@ builder test(ctx: ptr) {
     }
 
     build._record_test_result(ctx, passed, failed)
+
+    // Fire on_failure(...) hooks once if any script failed. Commands
+    // see $AEB_TEST_PASSED / _FAILED / _TOTAL / $AEB_MODULE_DIR via
+    // env. Errors logged but ignored (don't mask the test failure).
+    if failed > 0 {
+        if _builder != null {
+            if map.has(_builder, "on_failure_commands") == 1 {
+                fail_cmds, _ = map.get(_builder, "on_failure_commands")
+                fc_n = list.size(fail_cmds)
+                if fc_n > 0 {
+                    // Set the env vars on bash itself (NOT just the
+                    // command line), so the user's command — which may
+                    // reference $AEB_TEST_* in double-quoted strings —
+                    // sees them at expansion time. The `VAR=val cmd
+                    // "$VAR"` shape doesn't work because the shell
+                    // expands `$VAR` BEFORE setting the env (chicken-
+                    // and-egg). Wrapping in `bash -c '...'` shifts
+                    // expansion to a fresh bash process that inherits
+                    // the env.
+                    //
+                    // Caveat documented in on_failure's docstring:
+                    // single quotes in the user's command will close
+                    // the outer wrapper. For commands that need
+                    // apostrophes, source a separate .sh file —
+                    // matches the same documented limit on
+                    // pre_command/post_command.
+                    env_prefix = "AEB_TEST_PASSED=${passed} AEB_TEST_FAILED=${failed} AEB_TEST_TOTAL=${n} AEB_MODULE_DIR='${mod_dir}'"
+                    fci = 0
+                    while fci < fc_n {
+                        fcmd, _ = list.get(fail_cmds, fci)
+                        full_cmd = string.concat(env_prefix, " bash -c '")
+                        full_cmd = string.concat(full_cmd, fcmd)
+                        full_cmd = string.concat(full_cmd, "'")
+                        frc = os.system(full_cmd)
+                        if frc != 0 {
+                            println("  on_failure exited ${frc}: ${fcmd}")
+                        }
+                        fci = fci + 1
+                    }
+                }
+            }
+        }
+    }
+
     if failed > 0 {
         println("${mod_dir}: tests FAILED (${passed} passed, ${failed} failed)")
         return 1
