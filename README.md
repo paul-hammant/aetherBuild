@@ -105,6 +105,27 @@ A module's build intent lives in one or more dot-prefixed `.ae` files:
 | `.{name}.nupkg.ae`    | vendored / registry NuGet package         |
 | `.{name}.whl.ae`      | vendored / registry Python wheel          |
 
+#### Multiple build files per directory
+
+A module dir can hold more than one of each role using a `<tag>`
+suffix. Useful when the same source tree produces multiple binaries
+(e.g. a server and a paired seeder), or runs multiple test phases
+against shared sources:
+
+```
+ae/myserver/
+├── .build.ae           # → label "ae/myserver"
+├── .build-seed.ae      # → label "ae/myserver:seed"
+├── .tests.ae           # → label "test:ae/myserver"
+└── .tests-it.ae        # → label "test:ae/myserver:it"
+```
+
+Each tagged file is its own graph node — `aeb --graph` shows them
+separately, `aeb --since` walks them independently, and a downstream
+`build.dep("ae/myserver/.build-seed.ae")` references just the seed
+target. The labels appear in `[telemetry]` so you can see per-target
+timing for each binary.
+
 The runner (`aeb`) does four things:
 
 1. **Scan** — walk the tree and collect every `.*.ae` file
@@ -381,6 +402,82 @@ cleanly with `aeb gcheckout`'s sparse-checkout (dirs that
 sparse-checkout has hidden don't error). Re-running aeb-watch
 after `aeb gcheckout add ...` picks up the newly materialised
 dirs.
+
+### Build telemetry (`[telemetry]` block)
+
+Every `aeb` run prints a per-target summary at the end. No
+configuration; no opt-in flag.
+
+```
+[telemetry]
+  compile: java/components/vowelbase     1.21s [miss]
+  compile: rust/components/vowelbase     0.01s [hit]
+  test:    javatests/components/vowelbase 3.03s [n/a] 17/17 PASS
+  test:    apptests/integration          5.40s [n/a] 28/30 FAIL
+            - blame against demo	expected 'alice' got 'bob'
+            - log shows three commits	exit 1
+total: 9.65s wall
+aeb: 2 compile + 0 dist + 2 test
+```
+
+Per-target row format: `<type>: <label> <wall>s [<cache>] <P>/<T> PASS|FAIL`
+
+- **`<type>`** — `compile` / `test` / `dist`. Derived from the file
+  type (`.build.ae` → compile, `.tests.ae` → test, `.dist.ae` → dist).
+- **`<label>`** — module path, with `:tag` suffix for tagged build
+  files (see "Multiple build files per directory" above).
+- **`<wall>s`** — wall time in seconds, two decimals.
+- **`[<cache>]`** — content-addressed cache outcome:
+  `hit` (used cached output, skipped work) /
+  `miss` (cache key didn't match, ran the build) /
+  `unavailable` (cache disabled or errored) /
+  `n/a` (this SDK doesn't participate in caching yet).
+- **`<P>/<T> PASS|FAIL`** — only on test rows. P passed of T total.
+  Verdict is `FAIL` if any failed.
+
+When a test target fails AND the SDK provides per-test detail
+(currently `aether.driver_test` driven by `contrib.aeocha`),
+failed test names are indented under the FAIL line with their
+failure messages. Other test SDKs (jest, junit5, bash.test, etc.)
+report counts only — adding per-test-name detail is per-SDK
+follow-up.
+
+The bottom-line summary (`total: 9.65s wall`) is wall-clock for
+the whole build session. `aeb: 2 compile + 0 dist + 2 test` is
+the count of targets that ran (independent of cache outcome).
+
+### Content-addressed cache
+
+aeb caches per-target build artifacts by hash of the inputs. Same
+shape as Bazel's local cache or sccache. When inputs (sources +
+flags + classpath + toolchain version) hash to a key already in
+the cache, the cached artifact is restored and the build step is
+skipped — `[hit]` in `[telemetry]`.
+
+Storage:
+
+- Default location: `~/.aeb/cache/` (override with `$AEB_CACHE_DIR`).
+- Content-addressed via sha256; entries are zlib-compressed.
+- No size cap or eviction yet; users prune manually if needed.
+
+Currently wired (other SDKs report `[n/a]` and skip the cache):
+
+- **`lib/aether`** — manual-path link binary
+- **`lib/java`** — `javac` and `javac_test` classes trees (tar+zlib)
+- **`lib/maven`** — resolved classpath (separate cache from per-target)
+
+When you run `aeb` twice in a row with no source changes, the
+second run is mostly `[hit]` lines. When you change a single
+source file, only its target and its direct downstream rebuild;
+everything else stays cached. The `--coverage` flag is part of
+the cache key, so coverage and non-coverage builds segregate
+cleanly (you don't get a stale instrumented binary when you
+asked for a clean build, or vice versa).
+
+The cache works orthogonally to incremental-build mtimes (which
+SDKs check independently). Incremental skips work that's
+clearly redundant on this machine; the cache shares work across
+machines (when remote storage backends ship — see TODO.md).
 
 ### Coverage (`aeb --coverage`)
 
