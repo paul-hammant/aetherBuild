@@ -69,15 +69,34 @@ fi
 # coverage builds from regular ones). SDKs without a coverage flow
 # (bash.test, etc.) ignore the env var.
 #
-# Consumed by position-agnostic strip: `aeb --coverage <target>`,
-# `aeb <target> --coverage`, `aeb --coverage --since main` all work.
+# --pattern '<glob>': intersects the build set with paths matching
+# the glob. Designed for CI shapes like
+# `aeb --since main --pattern '.tests.ae'` — runs only the test
+# targets impacted by the PR's changes, skipping affected
+# .build.ae / .dist.ae rows. POSIX fnmatch (`*`, `?`, `[abc]`).
+# Pattern matches the file's basename, so `.tests.ae` matches
+# both `lib/foo/.tests.ae` and `apps/bar/.tests.ae`.
+#
+# Both flags consumed by position-agnostic strip: their position
+# in argv doesn't matter, and they compose with each other and
+# with --since / target args.
 ARGS=()
-for a in "$@"; do
+i=1
+while [[ $i -le $# ]]; do
+    a="${!i}"
     if [[ "$a" == "--coverage" ]]; then
         export AEB_COVERAGE=1
+    elif [[ "$a" == "--pattern" ]]; then
+        i=$((i + 1))
+        if [[ $i -gt $# ]]; then
+            echo "aeb: --pattern requires a glob argument (e.g. --pattern '.tests.ae')" >&2
+            exit 1
+        fi
+        export AEB_PATTERN="${!i}"
     else
         ARGS+=("$a")
     fi
+    i=$((i + 1))
 done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 

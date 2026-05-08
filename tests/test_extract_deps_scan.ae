@@ -1,0 +1,179 @@
+// Tests for tools/extract-deps.ae's scan(b, "<glob>") expansion.
+//
+// extract-deps is a tool (not a lib), so the test invokes it as a
+// subprocess via os.exec against tmpdir fixtures. Different shape
+// from the pure string-builder tests in this directory; same
+// approach as test_aether_resolvers.ae's filesystem fixtures.
+//
+// What we cover:
+//   - dep(b, "...") still works (regression — pass 1 unchanged)
+//   - scan(b, "<glob>") expands to matching files
+//   - dep + scan together don't double-add the same path
+//   - scan() doesn't include the file containing it (self-loop)
+//   - depth-0 glob duplicates (./X appearing twice from `./**/X`)
+//     collapse to one
+//   - empty scan + no dep = empty output
+//
+// Not covered (delegated to runtime build.scan):
+//   - zero-match → loud error (extract-deps is silent at extraction
+//     time; runtime build.scan reports the error)
+//   - npm:/maven coord classification (separate code path in dep)
+
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+extern println(s: string)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: '${expected}'")
+        println("  actual:   '${actual}'")
+    }
+}
+
+_mktempdir() {
+    raw, _err = os.exec("mktemp -d")
+    return string.trim(raw)
+}
+
+// Invoke extract-deps from the given working dir against the given
+// .ae file path (relative to that dir). Returns the trimmed stdout.
+_run_extract_deps(workdir: string, target: string) {
+    extract_bin = os.getenv("AEB_EXTRACT_DEPS_BIN")
+    if string.length(extract_bin) == 0 {
+        // Default location relative to repo root. Tests/run.sh runs
+        // from repo root so relative path works.
+        extract_bin = "tools/extract-deps"
+    }
+    // Resolve to absolute path before changing dir.
+    abs_raw, _e1 = os.exec("readlink -f '${extract_bin}'")
+    abs_bin = string.trim(abs_raw)
+    if string.length(abs_bin) == 0 {
+        return string.concat("ERROR: extract-deps not found at ", extract_bin)
+    }
+    raw, _e2 = os.exec("cd '${workdir}' && '${abs_bin}' '${target}'")
+    return string.trim(raw)
+}
+
+// Setup a small monorepo-shaped fixture under root.
+//   .all-tests.ae  (uses scan to bundle every .tests.ae)
+//   .everything.ae (uses scan with ** matching itself, for self-loop test)
+//   lib/foo/.tests.ae
+//   lib/bar/.tests.ae
+//   apps/baz/.tests.ae
+//   single/.build.ae
+//   single/.tests.ae   (manual dep target)
+_setup_fixture(root: string) {
+    os.system("mkdir -p '${root}/lib/foo' '${root}/lib/bar' '${root}/apps/baz' '${root}/single'")
+
+    // Aggregator using scan
+    all_tests = "import build\nmain() {\n    b = build.start()\n    build.scan(b, \"**/.tests.ae\")\n}\n"
+    fs.write_atomic("${root}/.all-tests.ae", all_tests, string.length(all_tests))
+
+    // Aggregator with potential self-match
+    everything = "import build\nmain() {\n    b = build.start()\n    build.scan(b, \"**/.*.ae\")\n}\n"
+    fs.write_atomic("${root}/.everything.ae", everything, string.length(everything))
+
+    // Stub leaf files (content irrelevant — extract-deps reads, doesn't compile)
+    stub = "import build\nmain() { b = build.start(); return 0 }\n"
+    fs.write_atomic("${root}/lib/foo/.tests.ae", stub, string.length(stub))
+    fs.write_atomic("${root}/lib/bar/.tests.ae", stub, string.length(stub))
+    fs.write_atomic("${root}/apps/baz/.tests.ae", stub, string.length(stub))
+    fs.write_atomic("${root}/single/.build.ae", stub, string.length(stub))
+    fs.write_atomic("${root}/single/.tests.ae", stub, string.length(stub))
+
+    // Mixed: dep + scan, expect dedup if scan matches one of the deps
+    mixed = "import build\nmain() {\n    b = build.start()\n    build.dep(b, \"lib/foo/.tests.ae\")\n    build.scan(b, \"**/.tests.ae\")\n}\n"
+    fs.write_atomic("${root}/.mixed.ae", mixed, string.length(mixed))
+}
+
+// Sort whitespace-separated tokens so test assertions don't depend on
+// the order extract-deps emits (which depends on glob() ordering,
+// which depends on libc readdir() and isn't guaranteed stable).
+_normalise(out: string) {
+    if string.length(out) == 0 { return out }
+    sorted_raw, _err = os.exec("printf '%s' '${out}' | tr ' ' '\\n' | grep -v '^$' | sort | tr '\\n' ' ' | sed 's/ $//'")
+    return string.trim(sorted_raw)
+}
+
+main() {
+    root = _mktempdir()
+    _setup_fixture(root)
+
+    // --- dep alone (regression: pass 1 unchanged) ---
+    dep_only = "import build\nmain() {\n    b = build.start()\n    build.dep(b, \"single/.build.ae\")\n}\n"
+    fs.write_atomic("${root}/.dep-only.ae", dep_only, string.length(dep_only))
+    out_dep = _run_extract_deps(root, ".dep-only.ae")
+    _assert_eq("dep-only: pass 1 still works",
+        _normalise(out_dep), "single/.build.ae")
+
+    // --- scan alone, expanding to 3 matches at varying depths ---
+    out_all = _run_extract_deps(root, ".all-tests.ae")
+    _assert_eq("scan: 3 .tests.ae files at varying depths (sorted)",
+        _normalise(out_all),
+        "apps/baz/.tests.ae lib/bar/.tests.ae lib/foo/.tests.ae single/.tests.ae")
+
+    // --- scan with self-loop avoidance ---
+    // .everything.ae's scan("**/.*.ae") would otherwise include itself.
+    // Result should NOT contain ".everything.ae".
+    out_every = _run_extract_deps(root, ".everything.ae")
+    has_self = string.index_of(out_every, ".everything.ae")
+    if has_self < 0 {
+        println("PASS: scan: self-loop excluded")
+    } else {
+        println("FAIL: scan: self-loop NOT excluded")
+        println("  output: '${out_every}'")
+    }
+
+    // --- dep + scan dedup ---
+    // .mixed.ae has dep(lib/foo/.tests.ae) AND scan("**/.tests.ae") which
+    // also matches it. Expected: lib/foo/.tests.ae appears exactly once.
+    out_mixed = _run_extract_deps(root, ".mixed.ae")
+    foo_idx = string.index_of(out_mixed, "lib/foo/.tests.ae")
+    foo_idx2 = -1
+    if foo_idx >= 0 {
+        rest_after = string.substring(out_mixed, foo_idx + 17, string.length(out_mixed))
+        foo_idx2 = string.index_of(rest_after, "lib/foo/.tests.ae")
+    }
+    if foo_idx >= 0 {
+        if foo_idx2 < 0 {
+            println("PASS: dep+scan: lib/foo/.tests.ae appears exactly once")
+        } else {
+            println("FAIL: dep+scan: lib/foo/.tests.ae appears twice")
+            println("  output: '${out_mixed}'")
+        }
+    } else {
+        println("FAIL: dep+scan: lib/foo/.tests.ae missing entirely")
+        println("  output: '${out_mixed}'")
+    }
+
+    // --- empty file: no deps, no scans ---
+    empty = "import build\nmain() { b = build.start(); return 0 }\n"
+    fs.write_atomic("${root}/.empty.ae", empty, string.length(empty))
+    out_empty = _run_extract_deps(root, ".empty.ae")
+    _assert_eq("empty: no deps", out_empty, "")
+
+    // --- scan finding only the pattern's matched files (not e.g. .build.ae) ---
+    // Pattern is specifically .tests.ae; the .build.ae in single/ should
+    // NOT appear in the output.
+    has_build = string.index_of(out_all, ".build.ae")
+    if has_build < 0 {
+        println("PASS: scan: pattern restricts to .tests.ae only")
+    } else {
+        println("FAIL: scan: pattern should have excluded .build.ae files")
+        println("  output: '${out_all}'")
+    }
+
+    os.system("rm -rf '${root}'")
+    println("extract-deps scan tests done")
+}

@@ -25,6 +25,7 @@ import std.io
 import std.os
 import std.list
 import std.map
+import std.path
 
 extern println(s: string)
 extern exit(code: int)
@@ -261,6 +262,15 @@ main() {
     // hand it to the affected-targets tool, get back the impacted
     // targets, and either print them (--print-affected) or rewrite
     // the build set so only those targets and their deps build.
+    // narrowed: did --since or --pattern shrink `files`/`seen` from
+    // the full scanned set? Drives the edges-file rewrite below
+    // (single rewrite covers both code paths).
+    narrowed = 0
+    // AEB_PATTERN read up here so --print-affected can also honour
+    // it. The actual filter (against `files`/`seen`) happens after
+    // the --since block; for --print-affected we filter `aff_out`
+    // (a string) inline since that path returns early.
+    pattern = os.getenv("AEB_PATTERN")
     is_since   = string.equals(flag, "--since")
     is_aff     = string.equals(flag, "--affected")
     is_print   = string.equals(flag, "--print-affected")
@@ -332,10 +342,37 @@ main() {
         aff_out = string.trim(aff_out_raw)
 
         if is_print == 1 {
-            // Print the list and exit. Empty output is meaningful
-            // ("nothing affected") and we just emit nothing.
-            if string.length(aff_out) > 0 {
-                println(aff_out)
+            // Print the list and exit. If --pattern is also set,
+            // filter the lines by basename glob first; empty
+            // output is meaningful ("nothing affected after the
+            // pattern filter") and we just emit nothing.
+            out_str = aff_out
+            if string.length(pattern) > 0 {
+                filtered = ""
+                rest_p = aff_out
+                while string.length(rest_p) > 0 {
+                    nl_p = string.index_of(rest_p, "\n")
+                    line_p = ""
+                    if nl_p < 0 {
+                        line_p = rest_p
+                        rest_p = ""
+                    } else {
+                        line_p = string.substring(rest_p, 0, nl_p)
+                        rest_p = string.substring(rest_p, nl_p + 1, string.length(rest_p))
+                    }
+                    if string.length(line_p) > 0 {
+                        if string.glob_match(pattern, path.basename(line_p)) == 1 {
+                            if string.length(filtered) > 0 {
+                                filtered = string.concat(filtered, "\n")
+                            }
+                            filtered = string.concat(filtered, line_p)
+                        }
+                    }
+                }
+                out_str = filtered
+            }
+            if string.length(out_str) > 0 {
+                println(out_str)
             }
             return 0
         }
@@ -372,10 +409,70 @@ main() {
         // entries it sees in `files`.
         files = new_files
         seen  = new_seen
-        // Rewrite the edges file so topo-sort + aeb-link agree on
-        // the narrowed set. Only emit rows whose first column is
-        // in the affected set; deps reference the same paths so
-        // unaffected entries are silently dropped.
+        narrowed = 1
+        // Edges-file rewrite happens once below, after both --since
+        // and --pattern have had a chance to narrow.
+    }
+
+    // --- AEB_PATTERN: filter files by basename glob ---
+    //
+    // Set by the trampoline when the user passes `--pattern <glob>`.
+    // Intersects the current file set with paths whose basename
+    // matches the POSIX fnmatch pattern. Composes with --since: a
+    // pattern after --since further narrows the affected set.
+    //
+    // Designed for CI shapes:
+    //   aeb --since main --pattern '.tests.ae'      # PR-impact tests only
+    //   aeb --since main --pattern '.tests*.ae'     # incl .tests-it.ae
+    //   aeb --pattern '.tests.ae'                   # all tests, no diff filter
+    //
+    // The match target is the file's basename (path.basename), so
+    // `.tests.ae` matches both `lib/foo/.tests.ae` and
+    // `apps/bar/.tests.ae`. Users can scope by cd'ing or by
+    // running aeb from a sub-directory.
+    //
+    // (Already read into `pattern` at function top; --print-affected
+    // applies it inline, this block applies it for build mode.)
+    if string.length(pattern) > 0 {
+        pat_files = list.new()
+        pat_seen  = map.new()
+        pn = list.size(files)
+        pi = 0
+        while pi < pn {
+            f, _ = list.get(files, pi)
+            base = path.basename(f)
+            if string.glob_match(pattern, base) == 1 {
+                _e_pl = list.add(pat_files, f)
+                _e_pm = map.put(pat_seen, f, "1")
+            }
+            pi = pi + 1
+        }
+        if list.size(pat_files) == 0 {
+            // Empty intersection — distinct from "nothing affected"
+            // because the user asked for a specific filter. Be
+            // explicit so a CI green-light isn't ambiguous with
+            // "your pattern was wrong."
+            scope = "scanned set"
+            if narrowed == 1 {
+                ref_str = flag_arg
+                if string.length(ref_str) == 0 { ref_str = "HEAD" }
+                scope = "affected set (since ${ref_str})"
+            }
+            println("aeb: no targets matching pattern '${pattern}' in ${scope}")
+            return 0
+        }
+        files = pat_files
+        seen  = pat_seen
+        narrowed = 1
+    }
+
+    // --- Rewrite edges file if narrowed (by --since and/or --pattern) ---
+    //
+    // Topo-sort + aeb-link read the edges file; if we narrowed the
+    // file set above, only emit rows whose first column is in the
+    // narrowed set. Deps reference the same paths so unaffected
+    // entries are silently dropped.
+    if narrowed == 1 {
         narrowed_buf = ""
         nlines = list.size(files)
         nf = 0
@@ -396,7 +493,6 @@ main() {
             println(string.concat("aeb-main: ", werr_n))
             exit(1)
         }
-        // Continue to topo-sort + link with narrowed set.
     }
 
     // --- Run topo-sort, capture output, write sorted edges file ---

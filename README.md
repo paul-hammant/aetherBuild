@@ -258,6 +258,98 @@ Combines well with cache integration: targets that are affected
 but cache-hit on their inputs still skip work. Telemetry shows
 what built and what hit the cache.
 
+#### Filter by target type (`aeb --pattern`)
+
+`--pattern <glob>` intersects the build set with paths whose
+basename matches a POSIX fnmatch pattern. Designed for CI
+shapes where you want only one *type* of impacted target —
+typically tests on a PR check, distributions on a release tag:
+
+```bash
+# PR check: run only tests impacted by the PR. Skip .build.ae,
+# .dist.ae rebuild rows.
+aeb --since main --pattern '.tests.ae'
+
+# Cover convention variations (.tests.ae, .tests-it.ae, etc.)
+aeb --since main --pattern '.tests*.ae'
+
+# Release pipeline: build only impacted .dist.ae packagers.
+aeb --since main --pattern '.dist.ae'
+
+# All matching targets in the tree (no diff filter).
+aeb --pattern '.tests.ae'
+
+# Inspect the filtered set without running it.
+aeb --print-affected main --pattern '.tests.ae'
+```
+
+The match is against the file's basename, so `.tests.ae`
+matches both `lib/foo/.tests.ae` and `apps/bar/.tests.ae`.
+Empty intersection (pattern matched nothing in the affected
+set) exits 0 with a clear note — distinct from "nothing was
+affected at all," which is also exit 0 but a different message.
+
+`--pattern` composes with `--since`, `--coverage`, position-
+agnostic. Build telemetry rolls up across the filtered set in
+one `[telemetry]` block (vs. piping `--print-affected` through
+`xargs aeb`, which would produce N separate blocks and re-scan
+the tree N times).
+
+#### Composite targets via `build.scan()`
+
+Where `--pattern` is the imperative one-shot ("filter to .tests.ae
+right now"), `build.scan()` is the declarative recurring form:
+commit a composite `.ae` file once, point CI at it forever.
+
+```aether
+// .all-tests.ae at the repo root
+import build
+main() {
+    b = build.start()
+    build.scan(b, "**/.tests.ae")
+}
+```
+
+```bash
+aeb .all-tests.ae --since main          # recurring CI shape
+aeb .all-tests.ae --since main --coverage
+```
+
+`build.scan(b, "<glob>")` expands to every matching `.ae` file at
+build-graph extraction time (the same grep pass that picks up
+`build.dep` lines), so the DAG is still grep-extractable from the
+source tree — `aeb --graph`, `aeb --since`, `aeb --print-affected`
+all see the expanded set.
+
+Composes naturally with manual deps and other scans:
+
+```aether
+// .smoke-tests.ae — narrower aggregator
+main() {
+    b = build.start()
+    build.scan(b, "javatests/components/**/.tests.ae")
+    build.scan(b, "csharptests/components/**/.tests.ae")
+}
+
+// .integration.ae — compose scans with explicit deps
+main() {
+    b = build.start()
+    build.dep(b, ".smoke-tests.ae")
+    build.dep(b, ".release-builds.ae")
+    build.dep(b, "end-to-end/.tests.ae")
+}
+```
+
+Implementation notes:
+
+- Patterns are POSIX globs with `**` recursive marker (auto-prepended
+  with `./` so the marker fires from depth 0). `*` is single-level.
+- A `scan()` call's pattern matching its own file is silently
+  excluded — self-loop avoidance.
+- Zero matches is a hard error at runtime (typo protection — better
+  to fail loudly than silently produce a green build that ran nothing).
+- `build.dep` and `build.scan` interleave freely: dedup is automatic.
+
 ### Watch mode (`aeb --watch`)
 
 `aeb --watch [target]` does an initial build, then watches every

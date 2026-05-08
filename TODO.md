@@ -120,59 +120,29 @@ aeb javatests/components/vowelbase            # auto-detects test
 aeb --dist java/applications/monorepos_rule   # compile + package
 ```
 
-### `scan()` grammar function — glob-based dep discovery
+### ~~`scan()` grammar function — glob-based dep discovery~~ (done)
 
-A DSL function inside a composite `.ae` file that expands to many
-`build.dep()` entries via a glob pattern. Enables named bundles
-composed from globs, without any CLI flag.
+`build.scan(b, "<glob>")` lives in lib/build/module.ae. Static
+extraction is wired in tools/extract-deps.ae (alongside the
+existing dep() needle). The runtime side calls fs.glob and
+forwards each match through dep() so cargo/npm/maven
+classification works transparently. Tests in
+tests/test_extract_deps_scan.ae (6 assertions, fixture-tree
+based — first one of its kind alongside test_aether_resolvers).
+README documents it under "Affected-target detection" as the
+declarative complement to `--pattern`.
 
-```aether
-// .all_tests.ae at the repo root
-import build
-
-main() {
-    b = build.start()
-    build.scan(b, "**/*.tests.ae")
-}
-```
-
-```aether
-// .smoke-tests.ae
-main() {
-    b = build.start()
-    build.scan(b, "javatests/components/**/*.tests.ae")
-    build.scan(b, "csharptests/components/**/*.tests.ae")
-}
-```
-
-```aether
-// .integration.ae — compose scans with explicit deps
-main() {
-    b = build.start()
-    build.dep(b, ".smoke-tests.ae")
-    build.dep(b, ".release-builds.ae")
-    build.dep(b, "end-to-end/.tests.ae")
-}
-```
-
-`aeb .all_tests.ae` runs all matching tests plus their transitive deps.
-Named targets become composable `.ae` files — no CLI flags, same DAG,
-same topo sort, same sparse-checkout story via `gcheckout`.
-
-**Implementation:**
-- Extract `scan()` calls during the same grep pass as `dep()` in
-  `aeb`'s `extract_deps`
-- For each pattern, run `find . -path "./$pattern" -type f` (respecting
-  `.aebignore`)
-- Concatenate matched paths into the file's `FILE_DEPS` list
-- BFS + topo sort handle the rest
-- `build.scan()` is a runtime no-op (like `build.dep()` — both are
-  statically extracted by the runner, not executed)
-
-**Gotchas:**
-- Glob must respect `.aebignore`
-- Zero matches should be an error (typo protection)
-- A file shouldn't match its own `scan()` pattern (self-ref loop)
+What's NOT implemented from the original sketch:
+- **`.aebignore` respect**: scan() expansion currently ignores
+  the same .aebignore file that scan-ae-files reads. Low priority
+  — most users want their tests/builds/dists picked up regardless
+  of the global ignore list, and scan patterns are explicit
+  enough that the user's intent is clear. Revisit if a real
+  porter hits the gap.
+- **Multi-pattern scan() in one call**: today's signature is
+  one pattern per call. Users compose by writing N scan() lines.
+  Could add `scan_all(b, "p1", "p2", ...)` if a real consumer
+  needs it; not asked for yet.
 
 ### Parallel execution
 

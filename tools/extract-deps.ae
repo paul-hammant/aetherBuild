@@ -13,11 +13,34 @@
 
 import std.string
 import std.file
+import std.fs
 import std.io
 import std.os
+import std.map
 
 extern println(s: string)
 extern exit(code: int)
+
+// Auto-prepend "./" so fs.glob's recursive `**` marker fires.
+// Mirrors the same trick `tools/scan-ae-files.ae` uses; see also
+// the runtime `build.scan(...)` setter.
+prepend_dot_slash(pattern: string) {
+    if string.length(pattern) == 0 { return pattern }
+    first = string.substring(pattern, 0, 1)
+    if string.equals(first, "/") == 1 { return pattern }
+    if string.length(pattern) >= 2 {
+        head2 = string.substring(pattern, 0, 2)
+        if string.equals(head2, "./") == 1 { return pattern }
+    }
+    return string.concat("./", pattern)
+}
+
+strip_dot_slash(p: string) {
+    if string.starts_with(p, "./") == 1 {
+        return string.substring(p, 2, string.length(p))
+    }
+    return string.concat(p, "")
+}
 
 resolve_dep(dep: string) {
     if string.ends_with(dep, ".ae") == 1 {
@@ -55,11 +78,17 @@ main() {
         // Silent on read failure — same as bash's `|| true` behavior.
         return 0
     }
+    // Track emitted paths so dep+scan don't double-add and so the
+    // glob's depth-0 duplicates (fs.glob returns ./X twice when the
+    // pattern's `./**` matches a depth-0 file) collapse to one.
+    out = ""
+    seen = map.new()
+
+    // Pass 1: dep(b, "...") — explicit single-target deps.
     needle = "dep(b, \""
     nlen = string.length(needle)
 
     rest = content
-    out = ""
     while string.length(rest) > 0 {
         idx = string.index_of(rest, needle)
         if idx < 0 {
@@ -73,11 +102,72 @@ main() {
             } else {
                 dep = string.substring(tail, 0, close)
                 resolved = resolve_dep(dep)
-                if string.length(out) > 0 {
-                    out = string.concat(out, " ")
+                if map.has(seen, resolved) == 0 {
+                    if string.length(out) > 0 {
+                        out = string.concat(out, " ")
+                    }
+                    out = string.concat(out, resolved)
+                    _e_s = map.put(seen, resolved, "1")
                 }
-                out = string.concat(out, resolved)
                 rest = string.substring(tail, close + 1, string.length(tail))
+            }
+        }
+    }
+
+    // Pass 2: scan(b, "...") — glob-based bulk dep discovery.
+    // Each pattern expands to every matching file at extraction time;
+    // each match becomes a dep of the file containing the scan() call.
+    // Runtime-side build.scan() expands the same set; aeb-main's
+    // `seen` map dedups when the BFS hits the same file via two
+    // routes.
+    //
+    // Patterns are auto-./-prefixed so fs.glob's recursive `**`
+    // marker works (see prepend_dot_slash above).
+    scan_needle = "scan(b, \""
+    snlen = string.length(scan_needle)
+    rest = content
+    while string.length(rest) > 0 {
+        sidx = string.index_of(rest, scan_needle)
+        if sidx < 0 {
+            rest = ""
+        } else {
+            sao = sidx + snlen
+            stail = string.substring(rest, sao, string.length(rest))
+            sclose = string.index_of(stail, "\"")
+            if sclose < 0 {
+                rest = ""
+            } else {
+                pat = string.substring(stail, 0, sclose)
+                norm = prepend_dot_slash(pat)
+                matches, gerr = fs.glob(norm)
+                if gerr == "" {
+                    n = dir_list_count(matches)
+                    j = 0
+                    while j < n {
+                        raw = dir_list_get(matches, j)
+                        clean = strip_dot_slash(raw)
+                        // Skip the file we're scanning IF the pattern
+                        // matched it — self-loop avoidance. resolve_dep
+                        // unnecessary (glob already gave us file paths).
+                        if string.equals(clean, path) == 0 {
+                            if map.has(seen, clean) == 0 {
+                                if string.length(out) > 0 {
+                                    out = string.concat(out, " ")
+                                }
+                                out = string.concat(out, clean)
+                                _e_s2 = map.put(seen, clean, "1")
+                            }
+                        }
+                        j = j + 1
+                    }
+                    dir_list_free(matches)
+                }
+                // Glob errors and zero-match cases are handled at
+                // runtime by `build.scan` (loud failure with a clear
+                // message). Here at extraction time we silently produce
+                // an empty contribution — extract-deps shouldn't be
+                // the place that reports user errors.
+                rest = string.substring(stail, sclose + 1, string.length(stail))
             }
         }
     }

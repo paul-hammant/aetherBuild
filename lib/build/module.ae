@@ -179,6 +179,103 @@ dep(ctx: ptr, path_str: string) {
     }
 }
 
+// scan(ctx, pattern) — glob-based dep discovery. Expands `pattern`
+// to every matching file at run time and registers each as a `dep`.
+//
+// Use case: a composite `.ae` file at the repo root that bundles
+// many targets without listing them individually. Pattern is a
+// POSIX glob with the recursive `**` marker; `./**/.tests.ae`
+// matches every `.tests.ae` at any depth.
+//
+//   // .all-tests.ae
+//   main() {
+//       b = build.start()
+//       build.scan(b, "**/.tests.ae")        // every test target
+//   }
+//
+// Then `aeb .all-tests.ae --since main` runs only the test targets
+// affected by changes since main, with one rolled-up [telemetry]
+// block.
+//
+// Implementation: this runtime-side call expands the glob and
+// invokes `dep(ctx, ...)` for each match, so cargo/npm/maven
+// classification works transparently. The static dep-graph
+// extractor in `tools/extract-deps` ALSO scans for `scan(b, "...")`
+// calls and expands them at extraction time — that's what
+// populates `file_deps` for the BFS / topo-sort. Both paths
+// produce the same set; aeb-main's `seen` map dedups.
+//
+// Behaviour notes:
+//   - Patterns are relative to the cwd (aeb chdirs to the
+//     monorepo root before scanning).
+//   - Zero matches is a hard error — typo protection. Compare to
+//     `dep("nope/.build.ae")` which silently produces a missing-
+//     file message later in the pipeline; with `scan` the typo
+//     surfaces immediately.
+//   - The leading `./` is auto-prepended if missing, so the
+//     recursive glob marker `**` works (fs.glob treats `**` as
+//     a single-level wildcard unless preceded by a directory
+//     prefix; see tools/scan-ae-files.ae for the same trick).
+//   - A scan() call WILL include the file containing it if the
+//     pattern matches its own path. The BFS dedup handles this
+//     gracefully (a self-loop becomes a no-op visit).
+scan(ctx: ptr, pattern: string) {
+    // Auto-prepend "./" so fs.glob's recursive ** marker fires
+    // correctly. Patterns the user wrote with a leading absolute
+    // path or "./" already are passed through unchanged.
+    norm = pattern
+    if string.length(pattern) >= 1 {
+        first = string.substring(pattern, 0, 1)
+        if string.equals(first, "/") == 0 {
+            if string.length(pattern) >= 2 {
+                head2 = string.substring(pattern, 0, 2)
+                if string.equals(head2, "./") == 0 {
+                    norm = string.concat("./", pattern)
+                }
+            } else {
+                norm = string.concat("./", pattern)
+            }
+        }
+    }
+
+    matches, gerr = fs.glob(norm)
+    if gerr != "" {
+        // Glob error — propagate as a build-time failure rather
+        // than silently expanding to zero deps.
+        println("build.scan: glob failed for '${pattern}': ${gerr}")
+        return 1
+    }
+    n = dir_list_count(matches)
+    if n == 0 {
+        // Typo protection: zero matches is almost never what the
+        // user wanted. Loud failure beats silent green-light.
+        dir_list_free(matches)
+        println("build.scan: no files matched '${pattern}' (cwd: $(pwd))")
+        return 1
+    }
+    // For each match, register as a dep. dep() classifies the path
+    // (npm/maven/local) so cargo etc. semantics flow normally;
+    // for graph-only files (.tests.ae, .build.ae, .dist.ae) the
+    // classification is "local" and the orchestrator picks them up.
+    i = 0
+    while i < n {
+        raw = dir_list_get(matches, i)
+        // Strip the auto-prepended "./" so the dep path matches
+        // what the static extractor produces.
+        cleaned = string.concat(raw, "")
+        if string.length(cleaned) >= 2 {
+            head2 = string.substring(cleaned, 0, 2)
+            if string.equals(head2, "./") == 1 {
+                cleaned = string.substring(cleaned, 2, string.length(cleaned))
+            }
+        }
+        dep(ctx, cleaned)
+        i = i + 1
+    }
+    dir_list_free(matches)
+    return 0
+}
+
 // Note: build.lib, build.cargo_dep, build.npm_dep have been removed.
 // Use the .ae-as-dep pattern instead:
 //

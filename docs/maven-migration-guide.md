@@ -326,6 +326,28 @@ README for the canonical reference; brief pointers:
   are downstream of the PR's changes. Combined with aeb's
   content-addressed cache, a typical PR run is many times faster than
   a full Maven `verify`.
+- **Narrow PR checks to tests with `--pattern '.tests.ae'`.** A typical
+  Maven PR triggers `mvn verify` (compile + test + package) on every
+  affected module. With aeb you usually only want the *tests* on a PR;
+  packaging belongs on release tags. `aeb --since main --pattern '.tests.ae'`
+  runs only the test targets impacted by the PR; `--pattern '.dist.ae'`
+  is the symmetric release-pipeline shape.
+- **Composite test targets via `build.scan()`.** Commit a
+  `.all-tests.ae` once and your CI command stays
+  `aeb .all-tests.ae --since main` forever:
+
+  ```aether
+  // .all-tests.ae at the repo root
+  import build
+  main() {
+      b = build.start()
+      build.scan(b, "**/.tests.ae")
+  }
+  ```
+
+  Every `.tests.ae` in the tree is automatically picked up at build-graph
+  extraction time. New modules join the test set the moment their
+  `.tests.ae` lands; no CI config change needed.
 - **Cache and telemetry are auto-on.** No configuration. Each `aeb`
   run prints a `[telemetry]` block at the end with per-module
   wall-time and `[hit]`/`[miss]` cache outcomes — useful for

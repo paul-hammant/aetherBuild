@@ -385,6 +385,29 @@ README for the canonical reference; brief pointers:
   `aeb --since main` builds and tests only modules downstream of the
   PR's changed files. Combined with aeb's content-addressed cache,
   this is the standard CI shape.
+- **Narrow PR checks to tests with `--pattern '.tests.ae'`.** Nx has
+  `nx affected:test` (only the test target type). aeb's equivalent is
+  `aeb --since main --pattern '.tests.ae'` — runs only the test
+  targets impacted by the PR, skipping `.build.ae` rebuild rows and
+  `.dist.ae` packagers. `--pattern '.dist.ae'` is the symmetric
+  release-pipeline shape.
+- **Composite test targets via `build.scan()`.** Equivalent to Nx
+  project tags + `nx run-many --target=test`. Commit a `.all-tests.ae`
+  once and your CI command stays `aeb .all-tests.ae --since main`
+  forever:
+
+  ```aether
+  // .all-tests.ae at the workspace root
+  import build
+  main() {
+      b = build.start()
+      build.scan(b, "**/.tests.ae")
+  }
+  ```
+
+  Every `.tests.ae` in the tree is automatically picked up at
+  build-graph extraction time. New apps/libs join the test set the
+  moment their `.tests.ae` lands; no CI config change needed.
 - **Cache and telemetry are auto-on.** Each `aeb` run prints a
   `[telemetry]` block at the end with per-module wall-time and
   `[hit]`/`[miss]` cache outcomes. Useful for spotting which modules
