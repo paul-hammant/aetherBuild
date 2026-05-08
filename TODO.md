@@ -907,6 +907,347 @@ Cake's build.sh/build.ps1 install specific .NET SDK versions before
 building. aeb assumes tools are on PATH. A `require_tool("dotnet", "10.0")`
 or similar could validate/install prerequisites.
 
+## Cross-cutting — capabilities from CI-as-code (TeamCity, Jenkins)
+
+TeamCity (Kotlin DSL) and Jenkins (Declarative + Scripted Groovy) are
+CI-orchestration platforms; aeb is a build orchestrator. There's
+real overlap, real divergence, and real questions about where the
+boundary should sit.
+
+This section catalogues every plausible capability from those
+platforms, marked **SHOULD** / **MAYBE** / **SHOULDN'T** based on
+whether the shape fits aeb's "the .ae file IS the graph node"
+position. Most of the items here are deliberately not on the
+roadmap — capturing the analysis so future sessions don't
+re-derive it from scratch.
+
+### The structural difference (read this first)
+
+TeamCity and Jenkins both treat *the build invocation* as their
+atomic unit. A Jenkins stage runs a script. A TeamCity build type
+runs steps. The DAG nodes are opaque inside.
+
+aeb treats *the source-tree target* as the atomic unit. A target
+IS a `.ae` file. The DAG is **derived from the source tree** in
+aeb, **declared separately from the source tree** in
+TeamCity/Jenkins. That separation is where pipelines drift out
+of sync with reality. aeb avoids it by construction.
+
+So even if a capability looks transplantable, the right shape
+in aeb is usually a new dot-prefixed `.ae` file type
+(`.trigger.ae`, `.notify.ae`) discovered by file scan, not a
+top-level DSL block in some root config. **Same convention as
+`.build.ae` / `.tests.ae` / `.dist.ae`: discoverable, greppable,
+lives next to the code it describes.**
+
+### SHOULD — these compose with aeb's existing shape
+
+#### `.trigger.ae` target type
+
+Declares CI hooks alongside the code they trigger on. aeb doesn't
+*fire* the trigger — it emits a schedule artifact a CI system
+consumes. Same factoring as the `meta` SDK + `brew.formula`
+exporter: source-of-truth lives in `.trigger.ae`; emitters
+translate to GitHub Actions YAML, GitLab CI, TeamCity DSL, etc.
+
+```aether
+import build
+import trigger
+main() {
+    b = build.start()
+    trigger.cron(b, "0 4 * * *")            // nightly
+    trigger.vcs_change(b, "main")           // on push to main
+    trigger.path_filter(b, "java/**")       // only when Java changed
+    trigger.dep(b, "java/components/.tests.ae")  // run this on trigger
+}
+```
+
+`aeb --print-triggers --emit github-actions` walks every
+`.trigger.ae` and writes `.github/workflows/aeb-triggered.yml`.
+Single source of truth; CI YAML becomes a generated artifact.
+
+**Why SHOULD**: composes with `--affected`, `--graph`,
+`--print-affected`. New target type, same scan/parse pipeline.
+No daemon, no server, just file emission.
+
+#### `on_failure(b) { ... }` setter inside test/build closures
+
+Symmetric to the existing `pre_command` / `post_command` /
+`fixture_seed` lifecycle hooks. Fires the contained command when
+the enclosing target fails. Useful for Slack/email notifications,
+log capture, artifact preservation.
+
+```aether
+bash.test(b) {
+    script("test_acl.sh")
+    on_failure(b) {
+        run_command("notify-slack 'tests failed in ${MOD}'")
+        copy_to("/tmp/aeb-failures/${MOD}-$(date +%s).log")
+    }
+}
+```
+
+**Why SHOULD**: small extension to the lifecycle pattern we
+already have. Doesn't grow into "notification ecosystem"
+because the body is just a shell command — same escape hatch
+`pre_command` uses.
+
+#### Test-passage as a build dep
+
+Today's `.dist.ae` runs whenever `aeb path/.dist.ae` is invoked,
+regardless of whether the corresponding `.tests.ae` passed. A
+`requires_passing(...)` setter would make distribution gated:
+
+```aether
+brew.formula(b) {
+    aeb_target("lib/hello/.build.ae")
+    requires_passing("lib/hello/.tests.ae")
+}
+```
+
+aeb resolves the dep, runs the tests if not cached, refuses to
+emit the formula if any failed.
+
+**Why SHOULD**: closes a real safety gap (no-one wants a brew
+formula for a binary whose tests don't pass) using existing
+mechanism (graph dep + cache). One-line setter, ~30 LOC of
+build-time check. The Aeocha-driven test-result marker we
+already write means we have the data on disk to consult.
+
+#### Artifact promotion / cross-target output passing (formalize)
+
+Already partially done: `target/<module>/` is per-target,
+downstream modules read `jvm_classpath_deps_including_transitive`
+etc. via `build.dep`. What's missing is a *named* artifact API:
+
+```aether
+java.shade(b) {
+    main_class("com.Main")
+    output("app.jar")
+    artifact("app-fat-jar", "app.jar")   // names the artifact
+}
+brew.formula(b) {
+    consume_artifact("ae/app/.dist.ae", "app-fat-jar")
+}
+```
+
+vs. today's "downstream reads a known-named file from
+`target/<module>/`." Names give artifacts an explicit public
+interface; renaming the file in the producer doesn't break
+consumers.
+
+**Why SHOULD**: makes implicit artifact contracts explicit. Aligns
+with how Bazel/Buck/Pants do it. Doesn't grow aeb's surface much.
+
+### MAYBE — interesting but the cost/value isn't obvious yet
+
+#### Pipeline visualization beyond `--graph`
+
+Today `aeb --graph` emits DOT/Mermaid of the static dep graph.
+TeamCity/Jenkins UIs show *runtime* state: which steps ran in
+this build, how long each took, where the failure was, what
+artifacts were produced. We have the data (the `[telemetry]`
+records, the `.aeb_test_failures` markers, per-target
+`test_output.log`) — what's missing is a renderer that joins
+them into a per-build view.
+
+```bash
+aeb --build-report --format html > target/_aeb/last-build.html
+```
+
+Static HTML, opens in a browser, no server. Force-directed
+graph with nodes coloured by cache outcome / duration / pass-fail.
+
+**Why MAYBE**: useful but cosmetic. The data is already in the
+`[telemetry]` block; the HTML renderer is "just" a static-site
+generator over the records list. Lower priority than functional
+gaps. Defer until someone asks.
+
+#### CI-system detection (`build.is_ci()`, `build.branch()`, `build.is_pr()`)
+
+Cake auto-detects 15+ CI systems and exposes a unified API. aeb
+is CI-agnostic today (runs the same everywhere), which is a
+strength. Knowing "am I in CI" enables conditional logic
+(skip-on-CI, skip-when-not-PR), which TeamCity/Jenkins handle
+via build parameters.
+
+**Why MAYBE**: small feature, mild value. Reading `$CI` /
+`$GITHUB_ACTIONS` / `$JENKINS_HOME` is six lines. The
+question is whether to expose it as a builder primitive or
+let users read env vars in their `.ae` files. Lean: expose
+sparingly when a real need surfaces.
+
+#### Conditional task execution (Cake's `.WithCriteria()`)
+
+Already in the Cake section above. Worth re-flagging here
+because TeamCity/Jenkins both have it:
+
+```aether
+java.junit5(b) {
+    criteria(b, "${BRANCH} == 'main'")
+}
+```
+
+**Why MAYBE**: the implementation is environment-variable
+substitution + a string equality / glob check. Cheap. The risk
+is "runtime conditional execution" growing into a mini scripting
+language inside `.ae` files. If we add it, keep the predicate
+language *minimal* — env-var equality, env-var presence/absence,
+nothing else. Don't accidentally reinvent Bash inside Aether.
+
+#### Multi-platform / hermetic toolchain (TeamCity agent requirements)
+
+TeamCity has `agentRequirement("teamcity.agent.jvm.os.name=Linux")`
+to route a build to a matching agent. Jenkins has `agent { label
+'linux' }`. aeb has nothing — it runs on the host you invoke it
+on.
+
+The aeb-shaped version is **NOT** "agent routing" — that's CI's
+job. The aeb-shaped version is "validate the host has the right
+toolchain version, fail fast otherwise." Exactly the
+`build.env(b)` block already in the TODO. Same idea.
+
+**Why MAYBE**: already on the roadmap as `build.env`.
+Cross-listed here for the connection.
+
+### SHOULDN'T — these break aeb's structural position
+
+#### Agent pool / fleet management
+
+TeamCity manages a fleet of build agents, distributes builds
+across them, drains agents for maintenance, prioritises
+pipelines. Jenkins has labels + nodes. aeb is a single-machine
+CLI by design.
+
+**Why SHOULDN'T**: building a fleet manager is a different
+product. The right factoring is what the article on bash-vs-CI
+argues: build tool decides what to do (aeb), CI orchestrator
+decides where each shard runs (Buildkite/GitHub Actions/etc).
+If a user wants 4-way sharding, they run `aeb --since main
+--shard 1/4` four times across four runners. aeb provides the
+sharding semantics; the CI provides the distribution.
+
+#### Build history / cross-build dashboards
+
+TeamCity/Jenkins maintain a database of every build that ever
+ran. UIs show "this pipeline used to take 8 minutes, now it
+takes 22, here's the commit." aeb's `[telemetry]` is per-run,
+ephemeral.
+
+**Why SHOULDN'T**: that's a server. aeb is a CLI. Building a
+server is a different product (and there are several already —
+BuildBuddy, EngFlow, Honeycomb-for-builds). If aeb writes
+structured telemetry to a file (Tier 2 vision in the telemetry
+section above), those servers can consume it. **Emit, don't
+ingest.**
+
+#### Triggers as runtime behaviour
+
+aeb shouldn't become a daemon waiting for VCS pushes or cron
+firings. The `.trigger.ae` form above is fine — emit a
+schedule artifact for *another* system to consume. Becoming the
+scheduler is the wrong direction.
+
+**Why SHOULDN'T**: scope explosion. As soon as aeb fires
+triggers itself, it needs durable queue management,
+backpressure, retry semantics, distributed locks (multiple aeb
+instances contending for a cron tick), monitoring of its own
+triggers. That's a separate product called "a job scheduler"
+and it's solved.
+
+#### Notifier ecosystem (Slack / Teams / email / PagerDuty plugins)
+
+TeamCity has built-in notifiers and a plugin system. Jenkins has
+a vast plugin marketplace including 50+ notification plugins.
+
+**Why SHOULDN'T**: ecosystem trap. Better to expose hook points
+(`on_failure`) and let users shell out (`run_command("curl
+$SLACK_WEBHOOK ...")`). Same factoring as how `bash.test`
+exposes `pre_command` / `post_command` rather than a typed
+fixture API: keep the SDK surface small, let the escape hatch
+be a shell command. If the escape hatch isn't enough, the user
+can write a small `.ae` SDK in `.aeb/lib/notify/module.ae` —
+that's exactly the consumer-local SDK pattern documented in
+LLM.md.
+
+#### Build queue management / priority lanes
+
+TeamCity/Jenkins let you tag builds as high/medium/low priority
+and the scheduler picks accordingly. aeb runs serially in one
+process; the only "queue" is the topological order.
+
+**Why SHOULDN'T**: orthogonal to aeb's job. If you have multiple
+aeb invocations contending for a CI worker pool, the CI system's
+queue is what should arbitrate. aeb running on one machine is
+already done in topo order.
+
+#### Approval gates ("manual approval before deploy")
+
+Common in CI/CD pipelines. The build pauses, a human clicks
+approve, the build resumes. TeamCity calls these "manual
+trigger" build types; Jenkins has `input` steps.
+
+**Why SHOULDN'T**: aeb is a build tool, not a deployment
+orchestrator. Approval gates are a deployment-pipeline concern
+that lives on the CI side. The aeb-shaped equivalent is "split
+your pipeline into pre-approval and post-approval stages, each
+calling `aeb` for the relevant target set"; the CI handles the
+human-in-the-loop.
+
+#### Generic pipeline-as-code language
+
+The temptation: "let users write arbitrary Aether-DSL pipelines
+that aeb interprets." A `pipeline { stage(...) parallel(...)
+when(...) }` block.
+
+**Why SHOULDN'T**: this *is* TeamCity/Jenkins. The whole point
+of aeb's structural position is that the pipeline IS the source
+tree, derived not declared. Inviting users to write arbitrary
+pipelines reintroduces the source-tree-vs-pipeline drift problem
+that aeb's design exists to solve.
+
+If a user genuinely needs imperative pipeline orchestration on
+top of aeb, the answer is a thin shell or Make wrapper that
+calls `aeb <target>` multiple times — same factoring the bash
+article we discussed argues for at the CI level.
+
+### Summary table
+
+| Capability | Verdict | aeb shape if SHOULD |
+|---|---|---|
+| Triggers (cron, VCS, path filter) | SHOULD | `.trigger.ae` + `--print-triggers` exporter |
+| `on_failure(b)` lifecycle hook | SHOULD | Setter inside test/build closures |
+| `requires_passing(...)` dep | SHOULD | Setter; resolver-time gate |
+| Named artifacts | SHOULD | `artifact()` + `consume_artifact()` setters |
+| Pipeline visualization (runtime view) | MAYBE | Static HTML from `[telemetry]` records |
+| CI-system detection | MAYBE | Sparingly; expose env-var reads as primitives |
+| Conditional execution | MAYBE | `criteria()` setter; minimal predicate language |
+| Hermetic toolchain check | MAYBE | Already roadmap as `build.env()` |
+| Agent pool / fleet routing | SHOULDN'T | CI orchestrator's job |
+| Build history / dashboards | SHOULDN'T | Different product (BuildBuddy, etc.) |
+| Triggers as runtime daemon | SHOULDN'T | Scope explosion; emit, don't run |
+| Notifier ecosystem | SHOULDN'T | Hook + shell escape; users write own SDKs |
+| Build queue / priority | SHOULDN'T | CI's queue arbitrates |
+| Approval gates | SHOULDN'T | Deployment-pipeline concern, not build |
+| Generic pipeline-as-code | SHOULDN'T | Reintroduces source-vs-pipeline drift |
+
+### A note on Jenkins's `parallel { }`
+
+Jenkins's most useful primitive is the `parallel` block — run
+N stages concurrently, fail fast or wait-all. aeb already has
+the equivalent at the test level (`bash.test(b) { jobs(N) }`,
+`junit5` parallelism via `forkCount`) and is on track for
+target-level parallelism (the "Parallel execution" item under
+Runner improvements above). When that lands, "two independent
+tests run concurrently" works without a `parallel { }` block —
+the DAG already knows they're independent. **The DAG IS the
+parallelism specification**, same way the DAG IS the
+dependency specification.
+
+This is the strongest concrete demonstration of why the
+TeamCity/Jenkins shape isn't the right import path: their
+`parallel` blocks exist to declare what aeb derives.
+
 ## Java/Maven
 
 What we have today: `java.javac()` covers the maven-compiler-plugin
