@@ -575,7 +575,7 @@ _split_tabs(rec: string, n: int) {
 // that run before the test step.
 //
 // `seeds` is a list of tab-packed records of the form
-//   "name\trepo\tseed_bin"
+//   "name\tpath\tseed_bin"
 // where seed_bin may be empty (skip seeding, just rm+mkdir).
 //
 // `servers` is a list of tab-packed records of the form
@@ -589,15 +589,15 @@ _split_tabs(rec: string, n: int) {
 //
 // Order: all seeds (declaration order), then all servers
 // (declaration order). Servers spawn after seeds because their
-// args may reference $<NAME>_REPO.
+// args may reference $<NAME>_PATH.
 //
 // Each fixture's name is uppercased for env-var prefixes:
-// $<NAME>_REPO, $<NAME>_BIN, $<NAME>_PORT, $<NAME>_PID.
+// $<NAME>_PATH, $<NAME>_BIN, $<NAME>_PORT, $<NAME>_PID.
 _synth_fixture_pre(seeds: ptr, servers: ptr) {
     out = list.new()
     dol = "$"
 
-    // Seeds first — servers may want $<NAME>_REPO populated before
+    // Seeds first — servers may want $<NAME>_PATH populated before
     // they spawn. Walk in declaration order.
     if seeds != null {
         ns = list.size(seeds)
@@ -606,17 +606,17 @@ _synth_fixture_pre(seeds: ptr, servers: ptr) {
             rec, _ = list.get(seeds, i)
             f = _split_tabs(rec, 3)
             name, _ = list.get(f, 0)
-            repo, _ = list.get(f, 1)
+            fpath, _ = list.get(f, 1)
             seed_bin, _ = list.get(f, 2)
             up = _upper_ascii_word(name)
-            // Export the repo path before any seeding runs so that
-            // a custom seed_bin can read $<NAME>_REPO if it cares.
-            list.add(out, "export ${up}_REPO=\"${repo}\"")
-            list.add(out, "rm -rf \"${repo}\"")
+            // Export the fixture path before any seeding runs so
+            // a custom seed_bin can read $<NAME>_PATH if it cares.
+            list.add(out, "export ${up}_PATH=\"${fpath}\"")
+            list.add(out, "rm -rf \"${fpath}\"")
             if string.length(seed_bin) > 0 {
-                list.add(out, "\"${seed_bin}\" \"${repo}\" >/dev/null")
+                list.add(out, "\"${seed_bin}\" \"${fpath}\" >/dev/null")
             } else {
-                list.add(out, "mkdir -p \"${repo}\"")
+                list.add(out, "mkdir -p \"${fpath}\"")
             }
             i = i + 1
         }
@@ -666,7 +666,7 @@ _synth_fixture_pre(seeds: ptr, servers: ptr) {
             //
             // The eval-with-escaped-double-quotes lets `${args}`
             // re-expand at run time so users can interpolate
-            // $<NAME>_REPO into their args string.
+            // $<NAME>_PATH into their args string.
             bin_ref = string.concat(dol, "{")
             bin_ref = string.concat(bin_ref, up)
             bin_ref = string.concat(bin_ref, "_BIN}")
@@ -702,7 +702,7 @@ _synth_fixture_pre(seeds: ptr, servers: ptr) {
 
 // _synth_fixture_post(seeds, servers) — emit the shell statements
 // that run after the test step: kill each server in reverse order,
-// then rm -rf each fixture's repo.
+// then rm -rf each fixture's path.
 //
 // Cleanup is best-effort (`|| true` on every step); even if a
 // server already died or a directory is locked, the chain
@@ -736,7 +736,7 @@ _synth_fixture_post(seeds: ptr, servers: ptr) {
         }
     }
 
-    // Repos removed in declaration order; doesn't matter much,
+    // Paths removed in declaration order; doesn't matter much,
     // they're independent.
     if seeds != null {
         ns = list.size(seeds)
@@ -744,8 +744,8 @@ _synth_fixture_post(seeds: ptr, servers: ptr) {
         while i < ns {
             rec, _ = list.get(seeds, i)
             f = _split_tabs(rec, 3)
-            repo, _ = list.get(f, 1)
-            list.add(out, "rm -rf \"${repo}\" 2>/dev/null || true")
+            fpath, _ = list.get(f, 1)
+            list.add(out, "rm -rf \"${fpath}\" 2>/dev/null || true")
             i = i + 1
         }
     }

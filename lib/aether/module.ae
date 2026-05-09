@@ -39,8 +39,11 @@ driver(_ctx: ptr, file_name: string) {
 // to the inner closure's _builder map; the enclosing builder reads
 // them out when packing the outer record.)
 
-// path("...") — binary_under_test path. Resolved relative to the
-// workspace root if not absolute; verified to exist at runtime.
+// path("...") — directory or file path. Used by both
+// binary_under_test (the binary on disk to spawn) and fixture_seed
+// (the working directory / file the seeder owns). Resolved
+// relative to the workspace root if not absolute; verified to
+// exist at runtime where applicable.
 path(_ctx: ptr, p: string) {
     _e = map.put(_ctx, "path", p)
 }
@@ -52,15 +55,11 @@ env_var(_ctx: ptr, name: string) {
     _e = map.put(_ctx, "env_var", name)
 }
 
-// repo, seed_bin, bin, args, port, ready_after_ms — same closure-
-// local sub-setters as the bash SDK uses. Defined here too so a
+// seed_bin, bin, args, port, ready_after_ms — same closure-local
+// sub-setters as the bash SDK uses. Defined here too so a
 // .tests.ae using aether.driver_test only needs `import aether`,
 // not a mix of imports. Both definitions write to the same map
 // keys; the records they pack are interchangeable.
-
-repo(_ctx: ptr, p: string) {
-    _e = map.put(_ctx, "repo", p)
-}
 
 seed_bin(_ctx: ptr, p: string) {
     _e = map.put(_ctx, "seed_bin", p)
@@ -80,19 +79,6 @@ port(_ctx: ptr, n: int) {
 
 ready_after_ms(_ctx: ptr, n: int) {
     _e = map.put(_ctx, "ready_after_ms", string.from_int(n))
-}
-
-// path("...") — binary_under_test path. Resolved relative to the
-// workspace root if not absolute; verified to exist at runtime.
-path(_ctx: ptr, p: string) {
-    _e = map.put(_ctx, "path", p)
-}
-
-// env_var("CUSTOM_BIN_VAR") — override the auto-derived
-// `$<NAME>_BIN` env var name. Defaults to `<UPPER(NAME)>_BIN`;
-// callers rarely need this.
-env_var(_ctx: ptr, name: string) {
-    _e = map.put(_ctx, "env_var", name)
 }
 
 // binary_under_test(b, name) { path(...); env_var(...) }
@@ -132,18 +118,18 @@ builder binary_under_test(b: ptr, name: string) {
     return 0
 }
 
-// fixture_seed(b, name) { repo(...); seed_bin(...) } — see
+// fixture_seed(b, name) { path(...); seed_bin(...) } — see
 // lib/bash/module.ae for the full contract. The implementation is
 // duplicated here (rather than re-imported from bash) so a
 // .tests.ae using aether.driver_test doesn't need to mix imports.
 // Both definitions stage records onto `b._pending_fixture_seeds`
 // in the same format; the enclosing test builder drains them.
 builder fixture_seed(b: ptr, name: string) {
-    repo_v = ""
+    path_v = ""
     seed_bin_v = ""
     if _builder != null {
-        if map.has(_builder, "repo") == 1 {
-            repo_v, _ = map.get(_builder, "repo")
+        if map.has(_builder, "path") == 1 {
+            path_v, _ = map.get(_builder, "path")
         }
         if map.has(_builder, "seed_bin") == 1 {
             seed_bin_v, _ = map.get(_builder, "seed_bin")
@@ -154,7 +140,7 @@ builder fixture_seed(b: ptr, name: string) {
     }
     pending, _ = map.get(b, "_pending_fixture_seeds")
     rec = string.concat(name, "\t")
-    rec = string.concat(rec, repo_v)
+    rec = string.concat(rec, path_v)
     rec = string.concat(rec, "\t")
     rec = string.concat(rec, seed_bin_v)
     _e2 = list.add(pending, rec)

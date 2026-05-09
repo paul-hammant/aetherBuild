@@ -135,9 +135,11 @@ on_failure(_ctx: ptr, cmd: string) {
 // of its own _builder when packing the per-fixture record onto
 // the build context.
 
-// repo("/tmp/...") — fixture seed/server's working directory.
-repo(_ctx: ptr, p: string) {
-    _e = map.put(_ctx, "repo", p)
+// path("/tmp/...") — fixture seed's working directory or file.
+// Neutral name: applies equally to git/svn repos, sqlite databases,
+// model checkpoints, blob-store directories, build-cache trees, etc.
+path(_ctx: ptr, p: string) {
+    _e = map.put(_ctx, "path", p)
 }
 
 // seed_bin("/path/to/seeder") — optional seed binary; called with
@@ -155,7 +157,7 @@ bin(_ctx: ptr, p: string) {
 
 // args("...") — single shell string passed to the fixture_server
 // binary. The shell interpolates it at run time, so values like
-// "$PRIMARY_REPO" pick up env vars exposed by other fixtures.
+// "$PRIMARY_PATH" pick up env vars exposed by other fixtures.
 args(_ctx: ptr, s: string) {
     _e = map.put(_ctx, "args", s)
 }
@@ -173,40 +175,41 @@ ready_after_ms(_ctx: ptr, n: int) {
     _e = map.put(_ctx, "ready_after_ms", string.from_int(n))
 }
 
-// fixture_seed(b, name) { repo(...); seed_bin(...) } — declare a
-// per-script fixture directory.
+// fixture_seed(b, name) { path(...); seed_bin(...) } — declare a
+// per-script fixture directory or file.
 //
 //   `name` — fixture identifier; uppercased and used as the env-var
 //            prefix exposed to the script (name="primary" →
-//            $PRIMARY_REPO).
+//            $PRIMARY_PATH).
 //
 // Sub-setters:
-//   repo("/tmp/...")           required — directory path. Before
-//                                          each script it is
-//                                          `rm -rf`'d and recreated;
-//                                          after the script it's
-//                                          removed. Exposed as
-//                                          $<NAME>_REPO.
+//   path("/tmp/...")           required — directory or file path.
+//                                          Before each script it
+//                                          is `rm -rf`'d and (when
+//                                          no seed_bin is set)
+//                                          `mkdir -p`'d; after the
+//                                          script it's removed.
+//                                          Exposed as $<NAME>_PATH.
 //   seed_bin("/path/to/seed")  optional — if set, run after the
-//                                          rm/mkdir with the repo
+//                                          rm with the fixture
 //                                          path as its single arg.
 //
 // Repeated `fixture_seed(b, "...") { ... }` calls accumulate; seeds
 // run in declaration order. Pairs with `fixture_server(b, "...")`
 // — both are independent setters and the server's args can
-// reference $<NAME>_REPO.
+// reference $<NAME>_PATH.
 //
-// Storage: packs (name, repo, seed_bin) as a tab-record into
+// Storage: packs (name, path, seed_bin) as a tab-record into
 // `b._pending_fixture_seeds`. The enclosing `bash.test` /
 // `aether.driver_test` builder drains the pending list into its
 // own _builder.fixture_seeds list (consumed by
 // build._synth_fixture_pre/_post).
 builder fixture_seed(b: ptr, name: string) {
-    repo_v = ""
+    path_v = ""
     seed_bin_v = ""
     if _builder != null {
-        if map.has(_builder, "repo") == 1 {
-            repo_v, _ = map.get(_builder, "repo")
+        if map.has(_builder, "path") == 1 {
+            path_v, _ = map.get(_builder, "path")
         }
         if map.has(_builder, "seed_bin") == 1 {
             seed_bin_v, _ = map.get(_builder, "seed_bin")
@@ -217,7 +220,7 @@ builder fixture_seed(b: ptr, name: string) {
     }
     pending, _ = map.get(b, "_pending_fixture_seeds")
     rec = string.concat(name, "\t")
-    rec = string.concat(rec, repo_v)
+    rec = string.concat(rec, path_v)
     rec = string.concat(rec, "\t")
     rec = string.concat(rec, seed_bin_v)
     _e2 = list.add(pending, rec)

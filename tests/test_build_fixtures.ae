@@ -102,7 +102,7 @@ main() {
     p0, _ = list.get(pre1, 0)
     p1, _ = list.get(pre1, 1)
     p2, _ = list.get(pre1, 2)
-    _assert_eq("pre: seed export", p0, "export PRIMARY_REPO=\"/tmp/r1\"")
+    _assert_eq("pre: seed export", p0, "export PRIMARY_PATH=\"/tmp/r1\"")
     _assert_eq("pre: seed rm",     p1, "rm -rf \"/tmp/r1\"")
     _assert_eq("pre: seed mkdir",  p2, "mkdir -p \"/tmp/r1\"")
 
@@ -114,7 +114,7 @@ main() {
     q0, _ = list.get(pre2, 0)
     q1, _ = list.get(pre2, 1)
     q2, _ = list.get(pre2, 2)
-    _assert_eq("pre: seed_bin export", q0, "export PRIMARY_REPO=\"/tmp/r1\"")
+    _assert_eq("pre: seed_bin export", q0, "export PRIMARY_PATH=\"/tmp/r1\"")
     _assert_eq("pre: seed_bin rm",     q1, "rm -rf \"/tmp/r1\"")
     _assert_eq("pre: seed_bin run",    q2, "\"/usr/bin/seed\" \"/tmp/r1\" >/dev/null")
 
@@ -205,7 +205,7 @@ main() {
     // First line should be the primary's seed export (seeds before servers).
     first, _ = list.get(pre_combo, 0)
     _assert_eq("pre: combo starts with primary seed", first,
-               "export PRIMARY_REPO=\"/tmp/p\"")
+               "export PRIMARY_PATH=\"/tmp/p\"")
     // After 6 seed lines, line 6 should be the first server (PRIMARY_BIN).
     line6, _ = list.get(pre_combo, 6)
     _assert_eq("pre: combo seeds-then-servers", line6,

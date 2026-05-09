@@ -947,7 +947,7 @@ python.package(b) { … }     // generate pyproject.toml and build wheel
 import bash
 import bash (script, jobs, pre_command, post_command, on_failure,
               fixture_seed, fixture_server,
-              repo, seed_bin, bin, args, port, ready_after_ms)  // see note below
+              path, seed_bin, bin, args, port, ready_after_ms)  // see note below
 
 bash.test(b) {              // exit 0 = PASS, non-zero = FAIL
     script("test_a.sh")
@@ -975,21 +975,21 @@ bash.test(b) {              // on_failure fires ONCE if any script fails —
 
 bash.test(b) {                                       // structured server fixtures —
     fixture_seed(b, "primary") {                     //   spawned per-script, env vars
-        repo("/tmp/myapp_repo")                      //   exposed to the script,
+        path("/tmp/myapp_data")                      //   exposed to the script,
         seed_bin("target/myapp-seed/bin/seed")       //   cleaned up after.
-    }                                                //   $PRIMARY_REPO is exported
+    }                                                //   $PRIMARY_PATH is exported
     fixture_server(b, "primary") {                   //   to the script.
         bin("target/myapp/bin/server")
-        args("demo $PRIMARY_REPO 9540 --token X")    // shell-interpolates at run time
-        port(9540)                                   //   ($PRIMARY_REPO from the seed
+        args("demo $PRIMARY_PATH 9540 --token X")    // shell-interpolates at run time
+        port(9540)                                   //   ($PRIMARY_PATH from the seed
         ready_after_ms(1500)                         //   above is visible).
     }
-    script("test_acl.sh")                            // sees $PRIMARY_REPO, $PRIMARY_PORT,
+    script("test_acl.sh")                            // sees $PRIMARY_PATH, $PRIMARY_PORT,
 }                                                    // $PRIMARY_BIN, $PRIMARY_PID.
 
 bash.test(b) {                                       // multi-fixture: declare each
-    fixture_seed(b, "source")      { repo("/tmp/r1") }      //   with a different name. Names
-    fixture_seed(b, "destination") { repo("/tmp/r2") }      //   become env-var prefixes
+    fixture_seed(b, "source")      { path("/tmp/r1") }      //   with a different name. Names
+    fixture_seed(b, "destination") { path("/tmp/r2") }      //   become env-var prefixes
     fixture_server(b, "source")      {                       //   ($SOURCE_PORT,
         bin("target/myapp/bin/server"); port(9430); ready_after_ms(500)
     }                                                        //   $DESTINATION_PORT, …).
@@ -1056,11 +1056,11 @@ aether.driver_test(b) {                    // Aether driver program that
         path("target/app/bin/app")         //   (or whatever), spawns $APP_BIN
     }                                      //   via os.run_capture, asserts
     fixture_seed(b, "primary") {           //   about its output. Same fixture
-        repo("/tmp/app_repo")              //   grammar as bash.test — env vars
+        path("/tmp/app_data")              //   grammar as bash.test — env vars
     }                                      //   exposed to the driver are
-    fixture_server(b, "primary") {         //   $PRIMARY_REPO, $PRIMARY_PORT,
+    fixture_server(b, "primary") {         //   $PRIMARY_PATH, $PRIMARY_PORT,
         bin("$APP_BIN")                    //   $PRIMARY_BIN, $PRIMARY_PID, plus
-        args("demo $PRIMARY_REPO 9540")    //   $<NAME>_BIN (or env_var()
+        args("demo $PRIMARY_PATH 9540")    //   $<NAME>_BIN (or env_var()
         port(9540)                         //   override) for each
         ready_after_ms(1500)               //   binary_under_test. Driver's exit
     }                                      //   code is the PASS/FAIL signal.
