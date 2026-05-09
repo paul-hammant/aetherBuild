@@ -15,6 +15,7 @@ target produces.
 - Matrix metadata for OS/toolchain/package variants.
 - Structured telemetry and test reports.
 - Artifact manifests with names, paths, checksums, and retention hints.
+- Approval check evidence for external systems of record.
 - Trigger/export files for CI systems to consume.
 - CI annotations in formats those systems understand.
 
