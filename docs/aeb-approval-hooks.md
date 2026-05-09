@@ -1,4 +1,4 @@
-# Approval Hooks
+# Approval Hooks and Attestations
 
 Approval gates are usually a CI/CD responsibility: a human reviews a
 release, clicks approve, and the pipeline continues. aeb should not
@@ -7,6 +7,13 @@ become that UI or scheduler.
 But aeb can provide an approval-check hook: a target can ask an
 external system whether it is allowed to continue, then fail fast if
 the answer is no.
+
+That hook can work in two shapes:
+
+- Query native provider JSON and check status, labels, fields, or
+  approvers.
+- Verify a canonical approval claim by hash against an issuer-owned
+  endpoint.
 
 ## Shape
 
@@ -67,10 +74,12 @@ DevOps, or a firm-specific policy service. aeb maps provider JSON into
 a common evidence shape and fails if required approvers or statuses are
 missing.
 
-## Attestation verification
+## Attestation claims
 
 For systems that can emit a plain-text approval claim, aeb can verify
-the claim by hash:
+the claim by hash. The provider or bridge script should emit a canonical
+text claim that includes the release/change ID, approver IDs, timestamps,
+and any audit facts you want in logs.
 
 ```aether
 approval.attestation(b) {
@@ -80,14 +89,48 @@ approval.attestation(b) {
 }
 ```
 
-The script prints the release/change ID, approver IDs, timestamps, and
-other audit facts. aeb canonicalizes the text, computes SHA-256 with
-`std.cryptography`, checks `verify_via/<hash>` with `curl`, and writes
-the canonical claim, hash, and verify URL as evidence.
+Example claim:
+
+```text
+Release: R-2026-05-09
+Change: CHG123456
+person1: approved at 2026-05-09T10:00:00Z
+person2: approved at 2026-05-09T10:05:00Z
+person3: approved at 2026-05-09T10:07:00Z
+```
+
+aeb canonicalizes the text, computes SHA-256 with
+`std.cryptography.sha256_hex`, checks `verify_via/<hash>` with `curl`,
+and writes the canonical claim, hash, and verify URL as evidence.
 
 This is a LiveVerify-style pattern, not a claim that `Live Verify` is a
 CI/CD standard. The important part is the issuer-owned verification
 endpoint for a canonical claim.
+
+## Provider bridges
+
+The approval source stays in the system of record. aeb only needs a
+deterministic claim shape when the provider cannot emit one directly.
+
+Good bridges:
+
+- Jira or Jira Service Management approval state into a canonical claim
+  or native issue JSON.
+- ServiceNow approval rows into approver IDs and approval timestamps.
+- GitHub/GitLab/Azure DevOps deployment approvals into a release claim.
+- Jenkins or TeamCity parameters such as `CHANGE_ID` passed into the
+  bridge script.
+- Firm-specific policy scripts that emit plain JSON or canonical claim
+  text.
+
+The useful claim fields are usually:
+
+- release or change ID
+- approver IDs
+- approval timestamps
+- approval status
+- source system URL or issue key
+- optional artifact digest or deployment ID
 
 ## Boundary
 

@@ -17,8 +17,6 @@ status.
 - Signing hooks for jars, packages, binaries, and OCI images.
 - Verification hooks before publish or deploy.
 - Policy-check results in SARIF or JSON.
-- Approval attestation evidence: canonical claim text, SHA-256, and
-  issuer verification URL.
 
 ## What aeb should not own
 
@@ -48,13 +46,10 @@ supply.sign(b) {
     subject("apps/api/.dist.ae")
     keyless()
 }
-
-approval.attestation(b) {
-    subject_env("CHANGE_ID")
-    attestation_command("scripts/approval-attestation.sh \"$CHANGE_ID\"")
-    verify_via("https://verify.example.com/c")
-}
 ```
+
+Approval attestation lives in
+[aeb-approval-hooks.md](/home/paul/scm/aetherBuild/docs/aeb-approval-hooks.md).
 
 ## Rule of thumb
 
