@@ -1164,6 +1164,11 @@ your pipeline into pre-approval and post-approval stages, each
 calling `aeb` for the relevant target set"; the CI handles the
 human-in-the-loop.
 
+TODO: add integration tests for every approval provider path:
+`approval.jira`, `approval.servicenow`, `approval.github`,
+`approval.gitlab`, `approval.azure_devops`, `approval.http`,
+`approval.command`, and `approval.attestation`.
+
 #### Generic pipeline-as-code language
 
 The temptation: "let users write arbitrary Aether-DSL pipelines
@@ -1401,4 +1406,3 @@ POM emission (10) → Resources (4) → Manifest (5) → Sources/Javadoc
 → Jacoco (9). That sequence unblocks "publishable library" and
 "runnable Spring Boot app" — the two shapes most Java itests in this
 repo actually exercise.
-
