@@ -1,0 +1,860 @@
+// approval — non-interactive go/no-go checks against external systems.
+//
+// The first backend is Jira. It queries one issue over REST and fails the
+// target if required status/labels/fields are not present. It does not
+// pause for a human and does not own approval workflow state.
+
+import build
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.cryptography
+
+// --- DSL setters ---
+
+base_url(_ctx: ptr, url: string) {
+    _e = map.put(_ctx, "base_url", url)
+}
+
+issue(_ctx: ptr, key: string) {
+    _e = map.put(_ctx, "issue", key)
+}
+
+token_env(_ctx: ptr, name: string) {
+    _e = map.put(_ctx, "token_env", name)
+}
+
+require_status(_ctx: ptr, status: string) {
+    _e = map.put(_ctx, "require_status", status)
+}
+
+require_label(_ctx: ptr, label: string) {
+    if map.has(_ctx, "require_labels") == 0 {
+        _e1 = map.put(_ctx, "require_labels", list.new())
+    }
+    labels, _ = map.get(_ctx, "require_labels")
+    _e2 = list.add(labels, label)
+}
+
+require_field(_ctx: ptr, field: string, value: string) {
+    if map.has(_ctx, "require_fields") == 0 {
+        _e1 = map.put(_ctx, "require_fields", list.new())
+    }
+    fields, _ = map.get(_ctx, "require_fields")
+    entry = string.concat(field, "\t")
+    entry = string.concat(entry, value)
+    _e2 = list.add(fields, entry)
+}
+
+evidence(_ctx: ptr, path_value: string) {
+    _e = map.put(_ctx, "evidence", path_value)
+}
+
+timeout(_ctx: ptr, seconds: string) {
+    _e = map.put(_ctx, "timeout", seconds)
+}
+
+subject(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "subject", value)
+}
+
+subject_env(_ctx: ptr, name: string) {
+    _e = map.put(_ctx, "subject_env", name)
+}
+
+issue_env(_ctx: ptr, name: string) {
+    _e = map.put(_ctx, "issue_env", name)
+}
+
+url(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "url", value)
+}
+
+url_env(_ctx: ptr, name: string) {
+    _e = map.put(_ctx, "url_env", name)
+}
+
+bearer_env(_ctx: ptr, name: string) {
+    _e = map.put(_ctx, "token_env", name)
+}
+
+run(_ctx: ptr, cmd: string) {
+    _e = map.put(_ctx, "run", cmd)
+}
+
+arg(_ctx: ptr, value: string) {
+    if map.has(_ctx, "args") == 0 {
+        _e1 = map.put(_ctx, "args", list.new())
+    }
+    args_v, _ = map.get(_ctx, "args")
+    _e2 = list.add(args_v, value)
+}
+
+arg_env(_ctx: ptr, name: string) {
+    if map.has(_ctx, "arg_envs") == 0 {
+        _e1 = map.put(_ctx, "arg_envs", list.new())
+    }
+    args_v, _ = map.get(_ctx, "arg_envs")
+    _e2 = list.add(args_v, name)
+}
+
+require_json(_ctx: ptr, json_path: string, value: string) {
+    if map.has(_ctx, "require_json") == 0 {
+        _e1 = map.put(_ctx, "require_json", list.new())
+    }
+    reqs, _ = map.get(_ctx, "require_json")
+    entry = string.concat(json_path, "\t")
+    entry = string.concat(entry, value)
+    _e2 = list.add(reqs, entry)
+}
+
+require_approver(_ctx: ptr, id: string) {
+    if map.has(_ctx, "require_approvers") == 0 {
+        _e1 = map.put(_ctx, "require_approvers", list.new())
+    }
+    approvers, _ = map.get(_ctx, "require_approvers")
+    _e2 = list.add(approvers, id)
+}
+
+approvals_path(_ctx: ptr, json_path: string) {
+    _e = map.put(_ctx, "approvals_path", json_path)
+}
+
+approver_id_path(_ctx: ptr, json_path: string) {
+    _e = map.put(_ctx, "approver_id_path", json_path)
+}
+
+approved_at_path(_ctx: ptr, json_path: string) {
+    _e = map.put(_ctx, "approved_at_path", json_path)
+}
+
+approval_status_path(_ctx: ptr, json_path: string) {
+    _e = map.put(_ctx, "approval_status_path", json_path)
+}
+
+approval_status(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "approval_status", value)
+}
+
+attestation_text(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "attestation_text", value)
+}
+
+attestation_command(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "attestation_command", value)
+}
+
+verify_via(_ctx: ptr, url_prefix: string) {
+    _e = map.put(_ctx, "verify_via", url_prefix)
+}
+
+owner(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "owner", value)
+}
+
+repo(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "repo", value)
+}
+
+environment(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "environment", value)
+}
+
+project(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "project", value)
+}
+
+deployment(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "deployment", value)
+}
+
+organization(_ctx: ptr, value: string) {
+    _e = map.put(_ctx, "organization", value)
+}
+
+// --- Pure helpers ---
+
+_shell_quote(s: string) {
+    out = "'"
+    n = string.length(s)
+    i = 0
+    while i < n {
+        ch = string.substring(s, i, i + 1)
+        if string.equals(ch, "'") == 1 {
+            out = string.concat(out, "'\\''")
+        } else {
+            out = string.concat(out, ch)
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "'")
+    return out
+}
+
+_list_lines(items: ptr) {
+    out = ""
+    n = list.size(items)
+    i = 0
+    while i < n {
+        item, _ = list.get(items, i)
+        if i > 0 { out = string.concat(out, "\n") }
+        out = string.concat(out, item)
+        i = i + 1
+    }
+    return out
+}
+
+approval_json_check_script(provider_v: string, subject_v: string, fetch_cmd: string,
+                           require_json_v: ptr, require_approvers_v: ptr,
+                           approvals_path_v: string, approver_id_path_v: string,
+                           approved_at_path_v: string, approval_status_path_v: string,
+                           approval_status_v: string, evidence_path: string,
+                           timeout_v: string) {
+    req_json = _list_lines(require_json_v)
+    req_approvers = _list_lines(require_approvers_v)
+    out = "#!/usr/bin/env bash\n"
+    out = string.concat(out, "set -euo pipefail\n")
+    out = string.concat(out, "PROVIDER=")
+    out = string.concat(out, _shell_quote(provider_v))
+    out = string.concat(out, "\nSUBJECT=")
+    out = string.concat(out, _shell_quote(subject_v))
+    out = string.concat(out, "\nREQUIRE_JSON=")
+    out = string.concat(out, _shell_quote(req_json))
+    out = string.concat(out, "\nREQUIRE_APPROVERS=")
+    out = string.concat(out, _shell_quote(req_approvers))
+    out = string.concat(out, "\nAPPROVALS_PATH=")
+    out = string.concat(out, _shell_quote(approvals_path_v))
+    out = string.concat(out, "\nAPPROVER_ID_PATH=")
+    out = string.concat(out, _shell_quote(approver_id_path_v))
+    out = string.concat(out, "\nAPPROVED_AT_PATH=")
+    out = string.concat(out, _shell_quote(approved_at_path_v))
+    out = string.concat(out, "\nAPPROVAL_STATUS_PATH=")
+    out = string.concat(out, _shell_quote(approval_status_path_v))
+    out = string.concat(out, "\nAPPROVAL_STATUS=")
+    out = string.concat(out, _shell_quote(approval_status_v))
+    out = string.concat(out, "\nEVIDENCE=")
+    out = string.concat(out, _shell_quote(evidence_path))
+    out = string.concat(out, "\nTIMEOUT=")
+    out = string.concat(out, _shell_quote(timeout_v))
+    out = string.concat(out, "\nexport PROVIDER SUBJECT REQUIRE_JSON REQUIRE_APPROVERS APPROVALS_PATH APPROVER_ID_PATH APPROVED_AT_PATH APPROVAL_STATUS_PATH APPROVAL_STATUS\n")
+    out = string.concat(out, "tmp=\"$")
+    out = string.concat(out, "{EVIDENCE}.approval-response.$$\"\n")
+    out = string.concat(out, "trap 'rm -f \"$tmp\"' EXIT\n")
+    out = string.concat(out, fetch_cmd)
+    out = string.concat(out, "\npython3 - \"$tmp\" \"$EVIDENCE\" <<'PY'\n")
+    out = string.concat(out, "import json, os, sys\n")
+    out = string.concat(out, "src, evidence = sys.argv[1], sys.argv[2]\n")
+    out = string.concat(out, "data = json.load(open(src, encoding='utf-8'))\n")
+    out = string.concat(out, "def get(obj, path):\n")
+    out = string.concat(out, "    cur = obj\n")
+    out = string.concat(out, "    if not path:\n")
+    out = string.concat(out, "        return cur\n")
+    out = string.concat(out, "    for part in path.split('.'):\n")
+    out = string.concat(out, "        if isinstance(cur, list):\n")
+    out = string.concat(out, "            try: cur = cur[int(part)]\n")
+    out = string.concat(out, "            except Exception: return None\n")
+    out = string.concat(out, "        elif isinstance(cur, dict):\n")
+    out = string.concat(out, "            cur = cur.get(part)\n")
+    out = string.concat(out, "        else:\n")
+    out = string.concat(out, "            return None\n")
+    out = string.concat(out, "    return cur\n")
+    out = string.concat(out, "def norm(v):\n")
+    out = string.concat(out, "    if isinstance(v, dict): return str(v.get('value') or v.get('name') or v.get('id') or v.get('username') or v.get('login') or '')\n")
+    out = string.concat(out, "    if isinstance(v, list): return ','.join(norm(x) for x in v)\n")
+    out = string.concat(out, "    if v is None: return ''\n")
+    out = string.concat(out, "    return str(v)\n")
+    out = string.concat(out, "failures = []\n")
+    out = string.concat(out, "for req in [x for x in os.environ.get('REQUIRE_JSON','').split('\\n') if x]:\n")
+    out = string.concat(out, "    path, _, want = req.partition('\\t')\n")
+    out = string.concat(out, "    got = norm(get(data, path))\n")
+    out = string.concat(out, "    if got != want:\n")
+    out = string.concat(out, "        failures.append(f'json {path!r} expected {want!r}, got {got!r}')\n")
+    out = string.concat(out, "approvals_raw = get(data, os.environ.get('APPROVALS_PATH',''))\n")
+    out = string.concat(out, "if approvals_raw is None: approvals_raw = []\n")
+    out = string.concat(out, "if isinstance(approvals_raw, dict): approvals_raw = [approvals_raw]\n")
+    out = string.concat(out, "approvals = []\n")
+    out = string.concat(out, "id_path = os.environ.get('APPROVER_ID_PATH','')\n")
+    out = string.concat(out, "at_path = os.environ.get('APPROVED_AT_PATH','')\n")
+    out = string.concat(out, "status_path = os.environ.get('APPROVAL_STATUS_PATH','')\n")
+    out = string.concat(out, "want_status = os.environ.get('APPROVAL_STATUS','')\n")
+    out = string.concat(out, "for item in approvals_raw if isinstance(approvals_raw, list) else []:\n")
+    out = string.concat(out, "    aid = norm(get(item, id_path))\n")
+    out = string.concat(out, "    at = norm(get(item, at_path))\n")
+    out = string.concat(out, "    st = norm(get(item, status_path))\n")
+    out = string.concat(out, "    if aid:\n")
+    out = string.concat(out, "        approvals.append({'id': aid, 'approved_at': at, 'status': st})\n")
+    out = string.concat(out, "required = [x for x in os.environ.get('REQUIRE_APPROVERS','').split('\\n') if x]\n")
+    out = string.concat(out, "for rid in required:\n")
+    out = string.concat(out, "    matches = [a for a in approvals if a.get('id') == rid]\n")
+    out = string.concat(out, "    if not matches:\n")
+    out = string.concat(out, "        failures.append(f'missing approval from {rid!r}')\n")
+    out = string.concat(out, "    elif want_status and not any(a.get('status') == want_status for a in matches):\n")
+    out = string.concat(out, "        failures.append(f'approver {rid!r} lacks status {want_status!r}')\n")
+    out = string.concat(out, "result = {'provider': os.environ.get('PROVIDER'), 'subject': os.environ.get('SUBJECT'), 'ok': not failures, 'approvals': approvals, 'failures': failures}\n")
+    out = string.concat(out, "os.makedirs(os.path.dirname(evidence) or '.', exist_ok=True)\n")
+    out = string.concat(out, "with open(evidence, 'w', encoding='utf-8') as f:\n")
+    out = string.concat(out, "    json.dump(result, f, sort_keys=True)\n")
+    out = string.concat(out, "    f.write('\\n')\n")
+    out = string.concat(out, "if failures:\n")
+    out = string.concat(out, "    print(f\"approval.{os.environ.get('PROVIDER')}: NOT APPROVED: \" + '; '.join(failures), file=sys.stderr)\n")
+    out = string.concat(out, "    sys.exit(1)\n")
+    out = string.concat(out, "print(f\"approval.{os.environ.get('PROVIDER')}: approved {os.environ.get('SUBJECT')}\")\n")
+    out = string.concat(out, "PY\n")
+    return out
+}
+
+_rstrip_space_tab(s: string) {
+    n = string.length(s)
+    end = n
+    while end > 0 {
+        ch = string.substring(s, end - 1, end)
+        if string.equals(ch, " ") == 1 || string.equals(ch, "\t") == 1 {
+            end = end - 1
+        } else {
+            return string.substring(s, 0, end)
+        }
+    }
+    return ""
+}
+
+canonicalize_attestation(text: string) {
+    lines = list.new()
+    line = ""
+    last_nonempty = -1
+    n = string.length(text)
+    i = 0
+    idx = 0
+    while i < n {
+        ch = string.substring(text, i, i + 1)
+        if string.equals(ch, "\r") == 1 {
+            trimmed = _rstrip_space_tab(line)
+            _e1 = list.add(lines, trimmed)
+            if string.length(trimmed) > 0 { last_nonempty = idx }
+            idx = idx + 1
+            line = ""
+            if i + 1 < n {
+                next = string.substring(text, i + 1, i + 2)
+                if string.equals(next, "\n") == 1 { i = i + 1 }
+            }
+        } else {
+            if string.equals(ch, "\n") == 1 {
+                trimmed = _rstrip_space_tab(line)
+                _e2 = list.add(lines, trimmed)
+                if string.length(trimmed) > 0 { last_nonempty = idx }
+                idx = idx + 1
+                line = ""
+            } else {
+                line = string.concat(line, ch)
+            }
+        }
+        i = i + 1
+    }
+
+    trimmed_last = _rstrip_space_tab(line)
+    _e3 = list.add(lines, trimmed_last)
+    if string.length(trimmed_last) > 0 { last_nonempty = idx }
+
+    out = ""
+    if last_nonempty >= 0 {
+        j = 0
+        while j <= last_nonempty {
+            if j > 0 { out = string.concat(out, "\n") }
+            item, _ = list.get(lines, j)
+            out = string.concat(out, item)
+            j = j + 1
+        }
+    }
+    out = string.concat(out, "\n")
+    return out
+}
+
+_strip_trailing_slash(s: string) {
+    n = string.length(s)
+    while n > 0 {
+        ch = string.substring(s, n - 1, n)
+        if string.equals(ch, "/") == 1 {
+            n = n - 1
+        } else {
+            return string.substring(s, 0, n)
+        }
+    }
+    return ""
+}
+
+_json_escape(s: string) {
+    out = ""
+    n = string.length(s)
+    i = 0
+    while i < n {
+        ch = string.substring(s, i, i + 1)
+        if string.equals(ch, "\\") == 1 {
+            out = string.concat(out, "\\\\")
+        } else {
+            if string.equals(ch, "\"") == 1 {
+                out = string.concat(out, "\\\"")
+            } else {
+                if string.equals(ch, "\n") == 1 {
+                    out = string.concat(out, "\\n")
+                } else {
+                    if string.equals(ch, "\t") == 1 {
+                        out = string.concat(out, "\\t")
+                    } else {
+                        if string.equals(ch, "\r") == 1 {
+                            out = string.concat(out, "\\r")
+                        } else {
+                            out = string.concat(out, ch)
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+_json_str(s: string) {
+    return string.concat(string.concat("\"", _json_escape(s)), "\"")
+}
+
+attestation_evidence_json(provider: string, subj: string, digest: string, verify_url: string, claim: string) {
+    out = "{"
+    out = string.concat(out, "\"attestation_sha256\":")
+    out = string.concat(out, _json_str(digest))
+    out = string.concat(out, ",\"claim\":")
+    out = string.concat(out, _json_str(claim))
+    out = string.concat(out, ",\"ok\":true")
+    out = string.concat(out, ",\"provider\":")
+    out = string.concat(out, _json_str(provider))
+    out = string.concat(out, ",\"subject\":")
+    out = string.concat(out, _json_str(subj))
+    out = string.concat(out, ",\"verify_url\":")
+    out = string.concat(out, _json_str(verify_url))
+    out = string.concat(out, "}\n")
+    return out
+}
+
+jira_check_script(base_url_v: string, issue_v: string, token_env_v: string,
+                  require_status_v: string, require_labels_v: ptr,
+                  require_fields_v: ptr, evidence_path: string,
+                  timeout_v: string) {
+    labels = _list_lines(require_labels_v)
+    fields = _list_lines(require_fields_v)
+    out = "#!/usr/bin/env bash\n"
+    out = string.concat(out, "set -euo pipefail\n")
+    out = string.concat(out, "BASE_URL=")
+    out = string.concat(out, _shell_quote(base_url_v))
+    out = string.concat(out, "\nISSUE=")
+    out = string.concat(out, _shell_quote(issue_v))
+    out = string.concat(out, "\nTOKEN_ENV=")
+    out = string.concat(out, _shell_quote(token_env_v))
+    out = string.concat(out, "\nREQUIRE_STATUS=")
+    out = string.concat(out, _shell_quote(require_status_v))
+    out = string.concat(out, "\nREQUIRE_LABELS=")
+    out = string.concat(out, _shell_quote(labels))
+    out = string.concat(out, "\nREQUIRE_FIELDS=")
+    out = string.concat(out, _shell_quote(fields))
+    out = string.concat(out, "\nEVIDENCE=")
+    out = string.concat(out, _shell_quote(evidence_path))
+    out = string.concat(out, "\nTIMEOUT=")
+    out = string.concat(out, _shell_quote(timeout_v))
+    out = string.concat(out, "\nexport REQUIRE_STATUS REQUIRE_LABELS REQUIRE_FIELDS\n")
+    out = string.concat(out, "TOKEN=\"$")
+    out = string.concat(out, "{!TOKEN_ENV:-}\"\n")
+    out = string.concat(out, "if [ -z \"$TOKEN\" ]; then echo \"approval.jira: missing token env $TOKEN_ENV\" >&2; exit 2; fi\n")
+    out = string.concat(out, "tmp=\"$")
+    out = string.concat(out, "{EVIDENCE}.jira-response.$$\"\n")
+    out = string.concat(out, "trap 'rm -f \"$tmp\"' EXIT\n")
+    out = string.concat(out, "url=\"$")
+    out = string.concat(out, "{BASE_URL%/}/rest/api/2/issue/$")
+    out = string.concat(out, "{ISSUE}\"\n")
+    out = string.concat(out, "curl -fsS --max-time \"$TIMEOUT\" -H \"Authorization: Bearer $TOKEN\" -H 'Accept: application/json' \"$url\" -o \"$tmp\"\n")
+    out = string.concat(out, "python3 - \"$tmp\" \"$EVIDENCE\" <<'PY'\n")
+    out = string.concat(out, "import json, os, sys\n")
+    out = string.concat(out, "src, evidence = sys.argv[1], sys.argv[2]\n")
+    out = string.concat(out, "data = json.load(open(src, encoding='utf-8'))\n")
+    out = string.concat(out, "fields = data.get('fields') or {}\n")
+    out = string.concat(out, "status = ((fields.get('status') or {}).get('name') or '')\n")
+    out = string.concat(out, "labels = fields.get('labels') or []\n")
+    out = string.concat(out, "req_status = os.environ.get('REQUIRE_STATUS', '')\n")
+    out = string.concat(out, "req_labels = [x for x in os.environ.get('REQUIRE_LABELS', '').split('\\n') if x]\n")
+    out = string.concat(out, "req_fields = [x for x in os.environ.get('REQUIRE_FIELDS', '').split('\\n') if x]\n")
+    out = string.concat(out, "failures = []\n")
+    out = string.concat(out, "if req_status and status != req_status:\n")
+    out = string.concat(out, "    failures.append(f'status expected {req_status!r}, got {status!r}')\n")
+    out = string.concat(out, "for label in req_labels:\n")
+    out = string.concat(out, "    if label not in labels:\n")
+    out = string.concat(out, "        failures.append(f'missing label {label!r}')\n")
+    out = string.concat(out, "def norm(v):\n")
+    out = string.concat(out, "    if isinstance(v, dict):\n")
+    out = string.concat(out, "        return str(v.get('value') or v.get('name') or v.get('key') or '')\n")
+    out = string.concat(out, "    if isinstance(v, list):\n")
+    out = string.concat(out, "        return ','.join(norm(x) for x in v)\n")
+    out = string.concat(out, "    if v is None:\n")
+    out = string.concat(out, "        return ''\n")
+    out = string.concat(out, "    return str(v)\n")
+    out = string.concat(out, "for req in req_fields:\n")
+    out = string.concat(out, "    key, _, want = req.partition('\\t')\n")
+    out = string.concat(out, "    got = norm(fields.get(key))\n")
+    out = string.concat(out, "    if got != want:\n")
+    out = string.concat(out, "        failures.append(f'field {key!r} expected {want!r}, got {got!r}')\n")
+    out = string.concat(out, "result = {'provider':'jira','issue':data.get('key'), 'ok': not failures, 'status': status, 'labels': labels, 'failures': failures}\n")
+    out = string.concat(out, "os.makedirs(os.path.dirname(evidence) or '.', exist_ok=True)\n")
+    out = string.concat(out, "with open(evidence, 'w', encoding='utf-8') as f:\n")
+    out = string.concat(out, "    json.dump(result, f, sort_keys=True)\n")
+    out = string.concat(out, "    f.write('\\n')\n")
+    out = string.concat(out, "if failures:\n")
+    out = string.concat(out, "    print('approval.jira: NOT APPROVED: ' + '; '.join(failures), file=sys.stderr)\n")
+    out = string.concat(out, "    sys.exit(1)\n")
+    out = string.concat(out, "print(f\"approval.jira: approved {data.get('key')}\")\n")
+    out = string.concat(out, "PY\n")
+    return out
+}
+
+// --- Builder entry point ---
+
+builder jira(ctx: ptr) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+
+    base = ""
+    issue_key = ""
+    token = "JIRA_TOKEN"
+    req_status = ""
+    evidence_path = path.join(target_dir, "jira-approval.json")
+    timeout_s = "30"
+    labels = list.new()
+    fields = list.new()
+
+    if _builder != null {
+        if map.has(_builder, "base_url") == 1 { base, _ = map.get(_builder, "base_url") }
+        if map.has(_builder, "issue") == 1 { issue_key, _ = map.get(_builder, "issue") }
+        if map.has(_builder, "token_env") == 1 { token, _ = map.get(_builder, "token_env") }
+        if map.has(_builder, "require_status") == 1 { req_status, _ = map.get(_builder, "require_status") }
+        if map.has(_builder, "evidence") == 1 { evidence_path, _ = map.get(_builder, "evidence") }
+        if map.has(_builder, "timeout") == 1 { timeout_s, _ = map.get(_builder, "timeout") }
+        if map.has(_builder, "require_labels") == 1 { labels, _ = map.get(_builder, "require_labels") }
+        if map.has(_builder, "require_fields") == 1 { fields, _ = map.get(_builder, "require_fields") }
+    }
+
+    if string.length(base) == 0 {
+        println("${mod_dir}: approval.jira requires base_url(\"...\")")
+        return 1
+    }
+    if string.length(issue_key) == 0 {
+        println("${mod_dir}: approval.jira requires issue(\"...\")")
+        return 1
+    }
+
+    script = jira_check_script(base, issue_key, token, req_status, labels, fields, evidence_path, timeout_s)
+    script_path = path.join(target_dir, "jira-approval-check.sh")
+    _e = fs.write_atomic(script_path, script, string.length(script))
+    os.system(string.concat("chmod +x ", script_path))
+    rc = os.system(string.concat("bash ", script_path))
+    if rc != 0 {
+        println("${mod_dir}: approval.jira rejected ${issue_key}")
+        return rc
+    }
+    build._write_artifact(ctx, "approval_jira_evidence", evidence_path)
+    return 0
+}
+
+_opt(bld: ptr, key: string, fallback: string) {
+    if bld != null {
+        if map.has(bld, key) == 1 {
+            v, _ = map.get(bld, key)
+            return v
+        }
+    }
+    return fallback
+}
+
+_opt_list(bld: ptr, key: string) {
+    out = list.new()
+    if bld != null {
+        if map.has(bld, key) == 1 {
+            out, _ = map.get(bld, key)
+        }
+    }
+    return out
+}
+
+_env_or_literal(bld: ptr, literal_key: string, env_key: string, fallback: string) {
+    env_name = _opt(bld, env_key, "")
+    if string.length(env_name) > 0 {
+        val = os.getenv(env_name)
+        if string.length(val) > 0 { return val }
+        return fallback
+    }
+    return _opt(bld, literal_key, fallback)
+}
+
+_command_fetch_cmd(cmd: string, bld: ptr) {
+    out = cmd
+    args_v = _opt_list(bld, "args")
+    n = list.size(args_v)
+    i = 0
+    while i < n {
+        a, _ = list.get(args_v, i)
+        out = string.concat(out, " ")
+        out = string.concat(out, _shell_quote(a))
+        i = i + 1
+    }
+    arg_envs = _opt_list(bld, "arg_envs")
+    en = list.size(arg_envs)
+    j = 0
+    while j < en {
+        env_name, _ = list.get(arg_envs, j)
+        val = os.getenv(env_name)
+        out = string.concat(out, " ")
+        out = string.concat(out, _shell_quote(val))
+        j = j + 1
+    }
+    out = string.concat(out, " > \"$tmp\"")
+    return out
+}
+
+_curl_fetch_cmd(fetch_url: string, token_env_v: string) {
+    out = "TOKEN_ENV="
+    out = string.concat(out, _shell_quote(token_env_v))
+    out = string.concat(out, "\nTOKEN=\"$")
+    out = string.concat(out, "{!TOKEN_ENV:-}\"\n")
+    out = string.concat(out, "if [ -z \"$TOKEN\" ]; then echo \"approval: missing token env $TOKEN_ENV\" >&2; exit 2; fi\n")
+    out = string.concat(out, "curl -fsS --max-time \"$TIMEOUT\" -H \"Authorization: Bearer $TOKEN\" -H 'Accept: application/json' ")
+    out = string.concat(out, _shell_quote(fetch_url))
+    out = string.concat(out, " -o \"$tmp\"")
+    return out
+}
+
+_write_and_run(ctx: ptr, provider: string, script: string, evidence_path: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+    script_path = path.join(target_dir, string.concat(provider, "-approval-check.sh"))
+    _e = fs.write_atomic(script_path, script, string.length(script))
+    os.system(string.concat("chmod +x ", script_path))
+    rc = os.system(string.concat("bash ", script_path))
+    if rc != 0 {
+        println("${mod_dir}: approval.${provider} rejected")
+        return rc
+    }
+    build._write_artifact(ctx, string.concat("approval_", string.concat(provider, "_evidence")), evidence_path)
+    return 0
+}
+
+_run_attestation_check(ctx: ptr, bld: ptr, provider: string, subj: string,
+                       evidence_path: string, verify_prefix: string) {
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+    build._mkdirs(target_dir)
+
+    attest_text = _opt(bld, "attestation_text", "")
+    attest_cmd = _opt(bld, "attestation_command", "")
+    if string.length(attest_text) == 0 && string.length(attest_cmd) == 0 {
+        println("${mod_dir}: approval.${provider} requires attestation_text(...) or attestation_command(...)")
+        return 1
+    }
+
+    raw = attest_text
+    if string.length(attest_cmd) > 0 {
+        raw_path = path.join(target_dir, string.concat(provider, "-attestation.raw"))
+        cmd = string.concat(attest_cmd, " > ")
+        cmd = string.concat(cmd, _shell_quote(raw_path))
+        rc = os.system(cmd)
+        if rc != 0 {
+            println("${mod_dir}: approval.${provider} attestation_command failed")
+            return rc
+        }
+        raw, rerr = fs.read(raw_path)
+        if string.length(rerr) > 0 {
+            println("${mod_dir}: approval.${provider} could not read attestation: ${rerr}")
+            return 1
+        }
+    }
+
+    canon = canonicalize_attestation(raw)
+    digest, derr = cryptography.sha256_hex(canon, string.length(canon))
+    if string.length(derr) > 0 {
+        println("${mod_dir}: approval.${provider} sha256 failed: ${derr}")
+        return 1
+    }
+
+    verify_url = string.concat(string.concat(_strip_trailing_slash(verify_prefix), "/"), digest)
+    timeout_s = _opt(bld, "timeout", "30")
+    verify_cmd = string.concat("curl -fsS --max-time ", _shell_quote(timeout_s))
+    verify_cmd = string.concat(verify_cmd, " ")
+    verify_cmd = string.concat(verify_cmd, _shell_quote(verify_url))
+    verify_cmd = string.concat(verify_cmd, " >/dev/null")
+    vrc = os.system(verify_cmd)
+    if vrc != 0 {
+        println("${mod_dir}: approval.${provider} attestation verification failed ${verify_url}")
+        return vrc
+    }
+
+    parent = path.dirname(evidence_path)
+    merr = fs.mkdir_p(parent)
+    if string.length(merr) > 0 {
+        println("${mod_dir}: approval.${provider} could not create evidence directory: ${merr}")
+        return 1
+    }
+    evidence_body = attestation_evidence_json(provider, subj, digest, verify_url, canon)
+    werr = fs.write_atomic(evidence_path, evidence_body, string.length(evidence_body))
+    if string.length(werr) > 0 {
+        println("${mod_dir}: approval.${provider} could not write evidence: ${werr}")
+        return 1
+    }
+
+    println("approval.${provider}: attestation verified ${digest}")
+    build._write_artifact(ctx, string.concat("approval_", string.concat(provider, "_evidence")), evidence_path)
+    return 0
+}
+
+_generic_builder(ctx: ptr, bld: ptr, provider: string, fetch_cmd: string,
+                 default_approvals_path: string, default_id_path: string,
+                 default_at_path: string, default_status_path: string,
+                 default_status: string) {
+    target_dir = build._get(ctx, "target_dir")
+    build._mkdirs(target_dir)
+    subj = _env_or_literal(bld, "subject", "subject_env", _env_or_literal(bld, "issue", "issue_env", provider))
+    evidence_path = _opt(bld, "evidence", path.join(target_dir, string.concat(provider, "-approval.json")))
+    timeout_s = _opt(bld, "timeout", "30")
+    req_json = _opt_list(bld, "require_json")
+    req_approvers = _opt_list(bld, "require_approvers")
+    approvals_p = _opt(bld, "approvals_path", default_approvals_path)
+    id_p = _opt(bld, "approver_id_path", default_id_path)
+    at_p = _opt(bld, "approved_at_path", default_at_path)
+    status_p = _opt(bld, "approval_status_path", default_status_path)
+    status_v = _opt(bld, "approval_status", default_status)
+    verify_prefix = _opt(bld, "verify_via", "")
+    attest_text = _opt(bld, "attestation_text", "")
+    attest_cmd = _opt(bld, "attestation_command", "")
+    if string.length(verify_prefix) > 0 {
+        if string.length(attest_text) > 0 || string.length(attest_cmd) > 0 {
+            return _run_attestation_check(ctx, bld, provider, subj, evidence_path, verify_prefix)
+        }
+    }
+    script = approval_json_check_script(provider, subj, fetch_cmd,
+                                        req_json, req_approvers,
+                                        approvals_p, id_p, at_p,
+                                        status_p, status_v,
+                                        evidence_path, timeout_s)
+    return _write_and_run(ctx, provider, script, evidence_path)
+}
+
+builder attestation(ctx: ptr) {
+    target_dir = build._get(ctx, "target_dir")
+    build._mkdirs(target_dir)
+    subj = _env_or_literal(_builder, "subject", "subject_env", "attestation")
+    evidence_path = _opt(_builder, "evidence", path.join(target_dir, "attestation-approval.json"))
+    verify_prefix = _opt(_builder, "verify_via", "")
+    if string.length(verify_prefix) == 0 {
+        println("approval.attestation requires verify_via(\"...\")")
+        return 1
+    }
+    attest_text = _opt(_builder, "attestation_text", "")
+    attest_cmd = _opt(_builder, "attestation_command", "")
+    if string.length(attest_text) == 0 && string.length(attest_cmd) == 0 {
+        println("approval.attestation requires attestation_text(...) or attestation_command(...)")
+        return 1
+    }
+    return _run_attestation_check(ctx, _builder, "attestation", subj, evidence_path, verify_prefix)
+}
+
+builder http(ctx: ptr) {
+    fetch_url = _env_or_literal(_builder, "url", "url_env", "")
+    if string.length(fetch_url) == 0 {
+        println("approval.http requires url(\"...\")")
+        return 1
+    }
+    token = _opt(_builder, "token_env", "APPROVAL_TOKEN")
+    fetch_cmd = _curl_fetch_cmd(fetch_url, token)
+    return _generic_builder(ctx, _builder, "http", fetch_cmd, "approvals", "id", "approved_at", "status", "approved")
+}
+
+builder command(ctx: ptr) {
+    cmd = _opt(_builder, "run", "")
+    if string.length(cmd) == 0 {
+        println("approval.command requires run(\"...\")")
+        return 1
+    }
+    fetch_cmd = _command_fetch_cmd(cmd, _builder)
+    return _generic_builder(ctx, _builder, "command", fetch_cmd, "approvals", "id", "approved_at", "status", "approved")
+}
+
+builder servicenow(ctx: ptr) {
+    fetch_url = _opt(_builder, "url", "")
+    if string.length(fetch_url) == 0 {
+        base = _opt(_builder, "base_url", "")
+        change = _env_or_literal(_builder, "issue", "issue_env", "")
+        if string.length(base) == 0 || string.length(change) == 0 {
+            println("approval.servicenow requires url(\"...\") or base_url(\"...\") + issue(\"CHG...\")")
+            return 1
+        }
+        fetch_url = string.concat(base, "/api/now/table/sysapproval_approver?sysparm_display_value=true&sysparm_query=sysapproval.number=")
+        fetch_url = string.concat(fetch_url, change)
+    }
+    token = _opt(_builder, "token_env", "SERVICENOW_TOKEN")
+    fetch_cmd = _curl_fetch_cmd(fetch_url, token)
+    return _generic_builder(ctx, _builder, "servicenow", fetch_cmd, "result", "approver.display_value", "sys_updated_on", "state", "approved")
+}
+
+builder github(ctx: ptr) {
+    fetch_url = _opt(_builder, "url", "")
+    if string.length(fetch_url) == 0 {
+        base = _opt(_builder, "base_url", "https://api.github.com")
+        own = _opt(_builder, "owner", "")
+        repo_v = _opt(_builder, "repo", "")
+        env = _opt(_builder, "environment", "")
+        if string.length(own) == 0 || string.length(repo_v) == 0 || string.length(env) == 0 {
+            println("approval.github requires url(\"...\") or owner(...), repo(...), environment(...)")
+            return 1
+        }
+        fetch_url = string.concat(base, "/repos/")
+        fetch_url = string.concat(fetch_url, own)
+        fetch_url = string.concat(fetch_url, "/")
+        fetch_url = string.concat(fetch_url, repo_v)
+        fetch_url = string.concat(fetch_url, "/environments/")
+        fetch_url = string.concat(fetch_url, env)
+    }
+    token = _opt(_builder, "token_env", "GITHUB_TOKEN")
+    fetch_cmd = _curl_fetch_cmd(fetch_url, token)
+    return _generic_builder(ctx, _builder, "github", fetch_cmd, "approvals", "user.login", "approved_at", "state", "approved")
+}
+
+builder gitlab(ctx: ptr) {
+    fetch_url = _opt(_builder, "url", "")
+    if string.length(fetch_url) == 0 {
+        base = _opt(_builder, "base_url", "https://gitlab.com")
+        project_v = _opt(_builder, "project", "")
+        deployment_v = _opt(_builder, "deployment", "")
+        if string.length(project_v) == 0 || string.length(deployment_v) == 0 {
+            println("approval.gitlab requires url(\"...\") or project(...) + deployment(...)")
+            return 1
+        }
+        fetch_url = string.concat(base, "/api/v4/projects/")
+        fetch_url = string.concat(fetch_url, project_v)
+        fetch_url = string.concat(fetch_url, "/deployments/")
+        fetch_url = string.concat(fetch_url, deployment_v)
+        fetch_url = string.concat(fetch_url, "/approvals")
+    }
+    token = _opt(_builder, "token_env", "GITLAB_TOKEN")
+    fetch_cmd = _curl_fetch_cmd(fetch_url, token)
+    return _generic_builder(ctx, _builder, "gitlab", fetch_cmd, "approvals", "user.username", "created_at", "status", "approved")
+}
+
+builder azure_devops(ctx: ptr) {
+    fetch_url = _opt(_builder, "url", "")
+    if string.length(fetch_url) == 0 {
+        println("approval.azure_devops requires url(\"...\") for the checks/approvals endpoint")
+        return 1
+    }
+    token = _opt(_builder, "token_env", "AZURE_DEVOPS_TOKEN")
+    fetch_cmd = _curl_fetch_cmd(fetch_url, token)
+    return _generic_builder(ctx, _builder, "azure_devops", fetch_cmd, "value", "createdBy.uniqueName", "createdOn", "status", "approved")
+}

@@ -651,6 +651,165 @@ shows them; `aeb --watch` rebuilds them on file edits.
 the same fields, only adding their packaging-specific overrides
 in their own closure.
 
+### Approval checks
+
+Approval checks are non-interactive go/no-go checks against an
+external system of record. They do not pause for a human and aeb does
+not store approval state. CI/CD remains responsible for human approval
+UI; aeb only asks "is this artifact allowed to proceed right now?"
+
+The evidence shape is deliberately common across backends:
+
+```json
+{
+  "provider": "servicenow",
+  "subject": "CHG123456",
+  "ok": true,
+  "approvals": [
+    {"id": "person1", "approved_at": "2026-05-09T10:00:00Z", "status": "approved"},
+    {"id": "person2", "approved_at": "2026-05-09T10:05:00Z", "status": "approved"},
+    {"id": "person3", "approved_at": "2026-05-09T10:07:00Z", "status": "approved"}
+  ],
+  "failures": []
+}
+```
+
+Jira status/label/field checks:
+
+```aether
+// apps/api/.dist.ae
+import build
+import approval
+import approval (base_url, issue, require_status, require_label,
+                 require_field, token_env)
+
+main() {
+    b = build.start()
+    build.dep(b, "apps/api/.tests.ae")
+
+    approval.jira(b) {
+        base_url("https://jira.example.com")
+        issue("REL-1234")
+        require_status("Approved")
+        require_label("release-approved")
+        require_field("Risk", "Accepted")
+        token_env("JIRA_TOKEN")        // default if omitted
+    }
+}
+```
+
+At runtime the builder:
+
+- reads the token from the named environment variable
+- fetches `/rest/api/2/issue/<issue>` with `curl`
+- checks issue status, labels, and requested fields
+- writes evidence JSON to `target/<module>/jira-approval.json`
+- fails the target if any requirement is missing
+
+Optional setters:
+
+- `evidence("path/to/evidence.json")` — override the evidence path.
+- `timeout("30")` — curl max-time in seconds.
+
+Use Jira field IDs such as `customfield_12345` for custom fields when
+Jira's REST payload does not expose a friendly field name.
+
+For systems that expose approval rows, use the common approval grammar:
+
+```aether
+approval.servicenow(b) {
+    base_url("https://instance.service-now.com")
+    issue("CHG123456")
+    require_approver("person1")
+    require_approver("person2")
+    require_approver("person3")
+    approval_status("approved")
+    token_env("SERVICENOW_TOKEN")
+}
+```
+
+The path setters map native JSON to normalized evidence:
+
+```aether
+approval.http(b) {
+    url("https://release.example.com/api/approval/release-1")
+    subject("release-1")
+    bearer_env("RELEASE_TOKEN")
+    require_json("change.status", "approved")
+    approvals_path("approvals")
+    approver_id_path("id")
+    approved_at_path("approved_at")
+    approval_status_path("status")
+    approval_status("approved")
+    require_approver("person1")
+    require_approver("person2")
+    require_approver("person3")
+}
+```
+
+Backend entry points:
+
+- `approval.jira(b)` — Jira/Jira Service Management issue checks.
+- `approval.servicenow(b)` — ServiceNow approval rows for a change.
+- `approval.github(b)` — GitHub approval JSON via `url(...)`, or
+  environment metadata via `owner(...)`, `repo(...)`, `environment(...)`.
+- `approval.gitlab(b)` — GitLab deployment approvals via `url(...)`, or
+  `project(...)` + `deployment(...)`.
+- `approval.azure_devops(b)` — Azure DevOps checks/approvals endpoint
+  via `url(...)`.
+- `approval.http(b)` — generic bearer-token JSON endpoint.
+- `approval.command(b)` — command prints JSON to stdout, then aeb
+  verifies the same paths/approvers:
+
+  ```aether
+approval.command(b) {
+    subject_env("CHANGE_ID")
+    run("scripts/check-release-approval.sh")
+    arg_env("CHANGE_ID")
+    approvals_path("approvals")
+    approver_id_path("id")
+    approved_at_path("approved_at")
+    require_approver("person1")
+    require_approver("person2")
+    require_approver("person3")
+  }
+  ```
+
+CI systems usually provide the change/release identifier as a job
+parameter. Jenkins, TeamCity, GitHub Actions, or GitLab can export
+`CHANGE_ID=CHG123456`; aeb reads it through `subject_env(...)`,
+`issue_env(...)`, `url_env(...)`, or passes it to local scripts with
+`arg_env(...)`.
+
+Approval scripts can also emit a plain-text attestation claim and let
+aeb normalize, hash, and verify it against a Live Verify-style endpoint:
+
+```aether
+approval.attestation(b) {
+    subject_env("CHANGE_ID")
+    attestation_command("scripts/approval-attestation.sh \"$CHANGE_ID\"")
+    verify_via("https://verify.example.com/c")
+}
+```
+
+The attestation claim is ordinary text containing the release/change
+number, approver IDs, approval timestamps, and any other audit facts:
+
+```text
+Release: R-2026-05-09
+Change: CHG123456
+person1: approved at 2026-05-09T10:00:00Z
+person2: approved at 2026-05-09T10:05:00Z
+person3: approved at 2026-05-09T10:07:00Z
+```
+
+aeb canonicalizes the text (line endings, trailing whitespace, final
+newline), computes SHA-256 with `std.cryptography`, verifies
+`verify_via/<hash>` with `curl`, and writes evidence containing the
+canonical claim, hash, and verify URL. Future systems of record can
+emit this canonical approval claim directly; current firms can bridge
+through scripts.
+
 ## Dependencies
 
 Every dependency — local module, third-party library, Maven coordinate, npm
@@ -997,6 +1156,7 @@ aeb/
 │   ├── python/module.ae       # pyproject.toml generation, wheel_vendored, wheel_registry
 │   ├── aether/module.ae       # native Aether programs (program / program_test)
 │   ├── bash/module.ae         # bash test runner (exit 0 = PASS) and non-test script runner
+│   ├── approval/module.ae     # non-interactive external approval checks
 │   ├── maven/module.ae        # BOM parsing, Maven resolution wrapper
 │   ├── pnpm/module.ae         # pnpm-based npm resolution
 │   ├── jest/module.ae
