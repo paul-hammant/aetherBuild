@@ -247,6 +247,35 @@ authoritative DAG. Useful for debugging "why isn't X depending on
 Y", reviewing dep changes in a PR, or onboarding someone to a
 monorepo's structure.
 
+### Build graph queries
+
+`aeb query`, `aeb owners`, `aeb path`, and `aeb why` answer read-only
+questions against the same build-file DAG that `aeb --graph` renders.
+They scan the tree, write `target/_aeb/_edges.txt`, print the answer,
+and exit before compiling or running any target.
+
+```bash
+# Transitive dependencies of a target
+aeb query 'deps(apps/api/.build.ae)'
+
+# Transitive reverse dependencies of a target
+aeb query 'rdeps(libs/core/.build.ae)'
+
+# Owning .ae target(s) for a source path, using the same nearest
+# enclosing-build-file rule as --since / --print-affected.
+aeb owners apps/api/src/main/java/com/acme/Api.java
+
+# One dependency path from a target to another target
+aeb path apps/api/.dist.ae libs/core/.build.ae
+
+# Alias for path, intended for "why does this depend on that?"
+aeb why apps/api/.dist.ae libs/core/.build.ae
+```
+
+The query expression should be quoted in a shell because unquoted
+parentheses are shell syntax. `deps(...)` walks dependency edges
+outward; `rdeps(...)` walks reverse edges to consumers.
+
 ### Affected-target detection (`aeb --since`, `aeb --print-affected`)
 
 `aeb --since <git-ref>` builds only the targets transitively
@@ -315,6 +344,29 @@ agnostic. Build telemetry rolls up across the filtered set in
 one `[telemetry]` block (vs. piping `--print-affected` through
 `xargs aeb`, which would produce N separate blocks and re-scan
 the tree N times).
+
+#### Shard target sets for CI (`aeb --shard`)
+
+`--shard N/M` deterministically partitions the current build set after
+`--since` and `--pattern` filtering. This lets CI fan out the same aeb
+selection across multiple runners while keeping aeb responsible for
+stable target assignment.
+
+```bash
+# Runner 2 of 8: impacted test targets only
+aeb --since main --pattern '.tests*.ae' --shard 2/8
+
+# Four-way split of all test targets under cwd
+aeb --pattern '.tests*.ae' --shard 1/4
+aeb --pattern '.tests*.ae' --shard 2/4
+aeb --pattern '.tests*.ae' --shard 3/4
+aeb --pattern '.tests*.ae' --shard 4/4
+```
+
+The shard key is the sorted target path list. Shard `1/M` receives
+positions `0, M, 2M...`; shard `2/M` receives `1, M+1...`, and so on.
+Empty shards exit 0 with a clear note. CI owns runner allocation and
+parallel job scheduling; aeb owns the deterministic partitioning.
 
 #### Composite targets via `build.scan()`
 
@@ -445,6 +497,31 @@ follow-up.
 The bottom-line summary (`total: 9.65s wall`) is wall-clock for
 the whole build session. `aeb: 2 compile + 0 dist + 2 test` is
 the count of targets that ran (independent of cache outcome).
+
+#### Machine-readable build outputs
+
+CI systems can request JSON sidecar files without changing what aeb
+prints to stdout:
+
+```bash
+aeb \
+  --telemetry-json target/_aeb/telemetry.json \
+  --artifacts-json target/_aeb/artifacts.json \
+  --tests-json target/_aeb/tests.json
+```
+
+- **Telemetry JSON** contains the same per-target records that feed the
+  `[telemetry]` block: label, type, wall time, cache outcome, and test
+  counts when present.
+- **Tests JSON** contains only test rows, with pass/fail counts,
+  verdict, cache outcome, and failed-test detail when an SDK provides it.
+- **Artifacts JSON** lists non-internal files found under each target's
+  `target/<module>/` directory after the run, with target label, type,
+  name, path, and target directory.
+
+These files are intended for GitHub Actions, GitLab CI, Buildkite,
+TeamCity, Jenkins, and other consumers that need structured data while
+keeping aeb itself CI-agnostic.
 
 ### Content-addressed cache
 

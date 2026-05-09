@@ -77,7 +77,11 @@ fi
 # Pattern matches the file's basename, so `.tests.ae` matches
 # both `lib/foo/.tests.ae` and `apps/bar/.tests.ae`.
 #
-# Both flags consumed by position-agnostic strip: their position
+# --shard N/M: after --since/--pattern filtering, deterministically
+# keeps only the Nth shard out of M sorted targets. CI owns runner
+# distribution; aeb owns stable target partitioning.
+#
+# These flags are consumed by position-agnostic strip: their position
 # in argv doesn't matter, and they compose with each other and
 # with --since / target args.
 ARGS=()
@@ -93,6 +97,34 @@ while [[ $i -le $# ]]; do
             exit 1
         fi
         export AEB_PATTERN="${!i}"
+    elif [[ "$a" == "--shard" ]]; then
+        i=$((i + 1))
+        if [[ $i -gt $# ]]; then
+            echo "aeb: --shard requires N/M (e.g. --shard 2/8)" >&2
+            exit 1
+        fi
+        export AEB_SHARD="${!i}"
+    elif [[ "$a" == "--telemetry-json" ]]; then
+        i=$((i + 1))
+        if [[ $i -gt $# ]]; then
+            echo "aeb: --telemetry-json requires an output path" >&2
+            exit 1
+        fi
+        export AEB_TELEMETRY_JSON="${!i}"
+    elif [[ "$a" == "--artifacts-json" ]]; then
+        i=$((i + 1))
+        if [[ $i -gt $# ]]; then
+            echo "aeb: --artifacts-json requires an output path" >&2
+            exit 1
+        fi
+        export AEB_ARTIFACTS_JSON="${!i}"
+    elif [[ "$a" == "--tests-json" ]]; then
+        i=$((i + 1))
+        if [[ $i -gt $# ]]; then
+            echo "aeb: --tests-json requires an output path" >&2
+            exit 1
+        fi
+        export AEB_TESTS_JSON="${!i}"
     else
         ARGS+=("$a")
     fi
@@ -105,4 +137,4 @@ AEB_MAIN_BIN="$AEB_HOME/tools/aeb-main"
 if [[ ! -x "$AEB_MAIN_BIN" ]]; then
     "$AETHER" build "$AEB_HOME/tools/aeb-main.ae" -o "$AEB_MAIN_BIN" 2>/dev/null
 fi
-exec "$AEB_MAIN_BIN" "$AETHER" "$AEB_HOME" "$ROOT" "${1:-}" "${2:-}"
+exec "$AEB_MAIN_BIN" "$AETHER" "$AEB_HOME" "$ROOT" "$@"

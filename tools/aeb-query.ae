@@ -1,0 +1,376 @@
+// aeb-query — read an aeb edges file and answer graph questions.
+//
+// Usage:
+//   aeb-query <edges-file> query 'deps(path/.build.ae)'
+//   aeb-query <edges-file> query 'rdeps(path/.build.ae)'
+//   aeb-query <edges-file> owners path/to/source
+//   aeb-query <edges-file> path from/.build.ae to/.build.ae
+//   aeb-query <edges-file> why  from/.build.ae to/.build.ae
+
+import std.string
+import std.file
+import std.fs
+import std.io
+import std.os
+import std.list
+import std.map
+
+extern println(s: string)
+extern exit(code: int)
+
+_split_lines(buf: string) {
+    lines = list.new()
+    n = string.length(buf)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(buf, i, i + 1)
+        if string.equals(ch, "\n") == 1 {
+            line = string.substring(buf, start, i)
+            list.add(lines, line)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(lines, string.substring(buf, start, n))
+    }
+    return lines
+}
+
+_split_tokens(line: string) {
+    tokens = list.new()
+    n = string.length(line)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(line, i, i + 1)
+        if string.equals(ch, " ") == 1 {
+            if i > start {
+                list.add(tokens, string.substring(line, start, i))
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(tokens, string.substring(line, start, n))
+    }
+    return tokens
+}
+
+_dirname(p: string) {
+    n = string.length(p)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(p, i, i + 1)
+        if string.equals(ch, "/") == 1 {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 { return "" }
+    return string.substring(p, 0, last)
+}
+
+_sort_lines(buf: string) {
+    if string.length(buf) == 0 { return "" }
+    cmd = "printf '%s\\n' '${buf}' | sort -u"
+    out, _err = os.exec(cmd)
+    return string.trim(out)
+}
+
+_build_indices(edges_text: string) {
+    forward = map.new()
+    reverse = map.new()
+    all_targets = map.new()
+    dir_to_targets = map.new()
+
+    lines = _split_lines(edges_text)
+    n = list.size(lines)
+    i = 0
+    while i < n {
+        line, _ = list.get(lines, i)
+        if string.length(line) > 0 {
+            tokens = _split_tokens(line)
+            tn = list.size(tokens)
+            if tn >= 1 {
+                src, _ = list.get(tokens, 0)
+                if map.has(all_targets, src) == 0 {
+                    map.put(all_targets, src, "1")
+                    d = _dirname(src)
+                    if map.has(dir_to_targets, d) == 0 {
+                        map.put(dir_to_targets, d, list.new())
+                    }
+                    bucket, _ = map.get(dir_to_targets, d)
+                    list.add(bucket, src)
+                }
+
+                src_deps = list.new()
+                j = 1
+                while j < tn {
+                    dep, _ = list.get(tokens, j)
+                    list.add(src_deps, dep)
+                    if map.has(reverse, dep) == 0 {
+                        map.put(reverse, dep, list.new())
+                    }
+                    rev_bucket, _ = map.get(reverse, dep)
+                    list.add(rev_bucket, src)
+                    if map.has(all_targets, dep) == 0 {
+                        map.put(all_targets, dep, "1")
+                        dd = _dirname(dep)
+                        if map.has(dir_to_targets, dd) == 0 {
+                            map.put(dir_to_targets, dd, list.new())
+                        }
+                        dep_bucket, _ = map.get(dir_to_targets, dd)
+                        list.add(dep_bucket, dep)
+                    }
+                    j = j + 1
+                }
+                map.put(forward, src, src_deps)
+            }
+        }
+        i = i + 1
+    }
+
+    indices = map.new()
+    map.put(indices, "forward", forward)
+    map.put(indices, "reverse", reverse)
+    map.put(indices, "all_targets", all_targets)
+    map.put(indices, "dir_to_targets", dir_to_targets)
+    return indices
+}
+
+_owners(changed_path: string, indices: ptr) {
+    out = list.new()
+    all_targets, _ = map.get(indices, "all_targets")
+    dir_to_targets, _ = map.get(indices, "dir_to_targets")
+
+    if map.has(all_targets, changed_path) == 1 {
+        list.add(out, changed_path)
+        return out
+    }
+
+    cur = _dirname(changed_path)
+    done = 0
+    while done == 0 {
+        if map.has(dir_to_targets, cur) == 1 {
+            bucket, _ = map.get(dir_to_targets, cur)
+            bn = list.size(bucket)
+            k = 0
+            while k < bn {
+                t, _ = list.get(bucket, k)
+                list.add(out, t)
+                k = k + 1
+            }
+            return out
+        }
+        if string.length(cur) == 0 {
+            done = 1
+        } else {
+            cur = _dirname(cur)
+        }
+    }
+    return out
+}
+
+_print_sorted_list(items: ptr) {
+    buf = ""
+    n = list.size(items)
+    i = 0
+    while i < n {
+        item, _ = list.get(items, i)
+        if string.length(buf) > 0 { buf = string.concat(buf, "\n") }
+        buf = string.concat(buf, item)
+        i = i + 1
+    }
+    sorted = _sort_lines(buf)
+    if string.length(sorted) > 0 { println(sorted) }
+}
+
+_transitive(start: string, adj: ptr) {
+    out = list.new()
+    seen = map.new()
+    queue = list.new()
+    if map.has(adj, start) == 1 {
+        neigh, _ = map.get(adj, start)
+        nn = list.size(neigh)
+        ni = 0
+        while ni < nn {
+            t, _ = list.get(neigh, ni)
+            if map.has(seen, t) == 0 {
+                map.put(seen, t, "1")
+                list.add(queue, t)
+                list.add(out, t)
+            }
+            ni = ni + 1
+        }
+    }
+
+    head = 0
+    while head < list.size(queue) {
+        cur, _ = list.get(queue, head)
+        head = head + 1
+        if map.has(adj, cur) == 1 {
+            neigh2, _ = map.get(adj, cur)
+            nn2 = list.size(neigh2)
+            i = 0
+            while i < nn2 {
+                t2, _ = list.get(neigh2, i)
+                if map.has(seen, t2) == 0 {
+                    map.put(seen, t2, "1")
+                    list.add(queue, t2)
+                    list.add(out, t2)
+                }
+                i = i + 1
+            }
+        }
+    }
+    return out
+}
+
+_find_path(from: string, to: string, adj: ptr) {
+    queue = list.new()
+    seen = map.new()
+    parent = map.new()
+    list.add(queue, from)
+    map.put(seen, from, "1")
+
+    found = 0
+    head = 0
+    while head < list.size(queue) {
+        cur, _ = list.get(queue, head)
+        head = head + 1
+        if string.equals(cur, to) == 1 {
+            found = 1
+            head = list.size(queue)
+        } else {
+            if map.has(adj, cur) == 1 {
+                neigh, _ = map.get(adj, cur)
+                n = list.size(neigh)
+                i = 0
+                while i < n {
+                    next, _ = list.get(neigh, i)
+                    if map.has(seen, next) == 0 {
+                        map.put(seen, next, "1")
+                        map.put(parent, next, cur)
+                        list.add(queue, next)
+                    }
+                    i = i + 1
+                }
+            }
+        }
+    }
+
+    path = list.new()
+    if found == 0 { return path }
+
+    // Reconstruct into reverse list, then print from root to leaf.
+    rev = list.new()
+    cur2 = to
+    done = 0
+    while done == 0 {
+        list.add(rev, cur2)
+        if string.equals(cur2, from) == 1 {
+            done = 1
+        } else {
+            cur2, _ = map.get(parent, cur2)
+        }
+    }
+    ri = list.size(rev) - 1
+    while ri >= 0 {
+        p, _ = list.get(rev, ri)
+        list.add(path, p)
+        ri = ri - 1
+    }
+    return path
+}
+
+_query_kind(expr: string) {
+    if string.starts_with(expr, "deps(") == 1 { return "deps" }
+    if string.starts_with(expr, "rdeps(") == 1 { return "rdeps" }
+    return ""
+}
+
+_query_arg(expr: string) {
+    open = string.index_of(expr, "(")
+    close = string.length(expr) - 1
+    if open < 0 { return "" }
+    if close <= open { return "" }
+    if string.equals(string.substring(expr, close, close + 1), ")") == 0 { return "" }
+    return string.substring(expr, open + 1, close)
+}
+
+main() {
+    argc = aether_args_count()
+    if argc < 3 {
+        println("Usage: aeb-query <edges-file> <query|owners|path|why> ...")
+        exit(1)
+    }
+
+    edges_path = aether_args_get(1)
+    mode = aether_args_get(2)
+    edges_text, _err = fs.read(edges_path)
+    if string.length(edges_text) == 0 {
+        println("aeb-query: no edges to query")
+        exit(1)
+    }
+    indices = _build_indices(edges_text)
+    forward, _ = map.get(indices, "forward")
+    reverse, _ = map.get(indices, "reverse")
+
+    if string.equals(mode, "query") == 1 {
+        if argc < 4 {
+            println("Usage: aeb query 'deps(path/.build.ae)'")
+            exit(1)
+        }
+        expr = aether_args_get(3)
+        kind = _query_kind(expr)
+        arg = _query_arg(expr)
+        if string.length(kind) == 0 {
+            println("aeb-query: supported query forms are deps(<target>) and rdeps(<target>)")
+            exit(1)
+        }
+        if string.equals(kind, "deps") == 1 {
+            _print_sorted_list(_transitive(arg, forward))
+        } else {
+            _print_sorted_list(_transitive(arg, reverse))
+        }
+        return 0
+    }
+
+    if string.equals(mode, "owners") == 1 {
+        if argc < 4 {
+            println("Usage: aeb owners path/to/source")
+            exit(1)
+        }
+        _print_sorted_list(_owners(aether_args_get(3), indices))
+        return 0
+    }
+
+    if string.equals(mode, "path") == 1 || string.equals(mode, "why") == 1 {
+        if argc < 5 {
+            println("Usage: aeb path from/.build.ae to/.build.ae")
+            exit(1)
+        }
+        from = aether_args_get(3)
+        to = aether_args_get(4)
+        p = _find_path(from, to, forward)
+        if list.size(p) == 0 {
+            println(string.concat("aeb-query: no dependency path from ", string.concat(from, string.concat(" to ", to))))
+            exit(1)
+        }
+        pn = list.size(p)
+        i = 0
+        while i < pn {
+            item, _ = list.get(p, i)
+            println(item)
+            i = i + 1
+        }
+        return 0
+    }
+
+    println(string.concat("aeb-query: unknown mode: ", mode))
+    exit(1)
+}

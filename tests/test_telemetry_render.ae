@@ -13,7 +13,7 @@ import std.map
 import std.path
 import std.dir
 
-import build (_format_telemetry_line, render_telemetry)
+import build (_format_telemetry_line, render_telemetry, render_telemetry_json, render_tests_json)
 
 _assert_eq(label: string, actual: string, expected: string) {
     if actual == expected {
@@ -183,6 +183,21 @@ main() {
     expected_single = "[telemetry]\n  test:    ae/x                             1.00s [n/a] 0/1 FAIL\n          - the only test\ntotal: 1.00s wall"
     _assert_eq("render: single failed name, no message",
         render_telemetry(single, 1000), expected_single)
+
+    // --- JSON renderers: telemetry records ---
+    json_records = list.new()
+    json_compile = _record("ae/quote\"slash\\", "compile", 12, "hit")
+    list.add(json_records, json_compile)
+    json_test = _record("test:ae/wc", "test", 3400, "n/a")
+    map.put(json_test, "test_passed", "2")
+    map.put(json_test, "test_failed", "1")
+    map.put(json_test, "test_failed_names", "bad \"case\"\tnope\nnext\\case")
+    list.add(json_records, json_test)
+    expected_json = "{\"total_ms\":3412,\"records\":[{\"label\":\"ae/quote\\\"slash\\\\\",\"type\":\"compile\",\"wall_ms\":12,\"cache\":\"hit\"},{\"label\":\"test:ae/wc\",\"type\":\"test\",\"wall_ms\":3400,\"cache\":\"n/a\",\"test_passed\":2,\"test_failed\":1,\"test_failed_names\":\"bad \\\"case\\\"\\tnope\\nnext\\\\case\"}]}"
+    _assert_eq("render: telemetry json", render_telemetry_json(json_records, 3412), expected_json)
+
+    expected_tests_json = "{\"tests\":[{\"label\":\"test:ae/wc\",\"wall_ms\":3400,\"cache\":\"n/a\",\"has_results\":true,\"passed\":2,\"failed\":1,\"verdict\":\"FAIL\",\"failed_names\":\"bad \\\"case\\\"\\tnope\\nnext\\\\case\"}]}"
+    _assert_eq("render: tests json", render_tests_json(json_records), expected_tests_json)
 
     println("telemetry render tests done")
 }

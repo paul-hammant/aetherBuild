@@ -1281,6 +1281,191 @@ render_telemetry(records: ptr, total_ms: int) {
     return out
 }
 
+_json_escape(s: string) {
+    out = ""
+    n = string.length(s)
+    i = 0
+    while i < n {
+        ch = string.substring(s, i, i + 1)
+        if string.equals(ch, "\\") == 1 {
+            out = string.concat(out, "\\\\")
+        } else {
+            if string.equals(ch, "\"") == 1 {
+                out = string.concat(out, "\\\"")
+            } else {
+                if string.equals(ch, "\n") == 1 {
+                    out = string.concat(out, "\\n")
+                } else {
+                    if string.equals(ch, "\t") == 1 {
+                        out = string.concat(out, "\\t")
+                    } else {
+                        if string.equals(ch, "\r") == 1 {
+                            out = string.concat(out, "\\r")
+                        } else {
+                            out = string.concat(out, ch)
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+_json_str(s: string) {
+    return string.concat(string.concat("\"", _json_escape(s)), "\"")
+}
+
+_record_json(rec: ptr) {
+    label, _ = map.get(rec, "label")
+    type_word, _ = map.get(rec, "type")
+    wm_s, _ = map.get(rec, "wall_ms")
+    cache, _ = map.get(rec, "cache")
+    out = "{"
+    out = string.concat(out, "\"label\":")
+    out = string.concat(out, _json_str(label))
+    out = string.concat(out, ",\"type\":")
+    out = string.concat(out, _json_str(type_word))
+    out = string.concat(out, ",\"wall_ms\":")
+    out = string.concat(out, wm_s)
+    out = string.concat(out, ",\"cache\":")
+    out = string.concat(out, _json_str(cache))
+    if map.has(rec, "test_passed") == 1 {
+        tp, _ = map.get(rec, "test_passed")
+        tf, _ = map.get(rec, "test_failed")
+        out = string.concat(out, ",\"test_passed\":")
+        out = string.concat(out, tp)
+        out = string.concat(out, ",\"test_failed\":")
+        out = string.concat(out, tf)
+        if map.has(rec, "test_failed_names") == 1 {
+            tfn, _ = map.get(rec, "test_failed_names")
+            out = string.concat(out, ",\"test_failed_names\":")
+            out = string.concat(out, _json_str(tfn))
+        }
+    }
+    out = string.concat(out, "}")
+    return out
+}
+
+render_telemetry_json(records: ptr, total_ms: int) {
+    out = "{"
+    out = string.concat(out, "\"total_ms\":")
+    out = string.concat(out, string.from_int(total_ms))
+    out = string.concat(out, ",\"records\":[")
+    n = list.size(records)
+    i = 0
+    while i < n {
+        rec, _ = list.get(records, i)
+        if i > 0 { out = string.concat(out, ",") }
+        out = string.concat(out, _record_json(rec))
+        i = i + 1
+    }
+    out = string.concat(out, "]}")
+    return out
+}
+
+render_tests_json(records: ptr) {
+    out = "{\"tests\":["
+    wrote = 0
+    n = list.size(records)
+    i = 0
+    while i < n {
+        rec, _ = list.get(records, i)
+        type_word, _ = map.get(rec, "type")
+        if string.equals(type_word, "test") == 1 {
+            label, _ = map.get(rec, "label")
+            wm_s, _ = map.get(rec, "wall_ms")
+            cache, _ = map.get(rec, "cache")
+            passed = "0"
+            failed = "0"
+            has_results = "false"
+            verdict = "UNKNOWN"
+            if map.has(rec, "test_passed") == 1 {
+                passed, _ = map.get(rec, "test_passed")
+                failed, _ = map.get(rec, "test_failed")
+                has_results = "true"
+                failed_i, _ = string.to_int(failed)
+                verdict = "PASS"
+                if failed_i > 0 { verdict = "FAIL" }
+            }
+            if wrote > 0 { out = string.concat(out, ",") }
+            out = string.concat(out, "{")
+            out = string.concat(out, "\"label\":")
+            out = string.concat(out, _json_str(label))
+            out = string.concat(out, ",\"wall_ms\":")
+            out = string.concat(out, wm_s)
+            out = string.concat(out, ",\"cache\":")
+            out = string.concat(out, _json_str(cache))
+            out = string.concat(out, ",\"has_results\":")
+            out = string.concat(out, has_results)
+            out = string.concat(out, ",\"passed\":")
+            out = string.concat(out, passed)
+            out = string.concat(out, ",\"failed\":")
+            out = string.concat(out, failed)
+            out = string.concat(out, ",\"verdict\":")
+            out = string.concat(out, _json_str(verdict))
+            if map.has(rec, "test_failed_names") == 1 {
+                tfn, _ = map.get(rec, "test_failed_names")
+                out = string.concat(out, ",\"failed_names\":")
+                out = string.concat(out, _json_str(tfn))
+            }
+            out = string.concat(out, "}")
+            wrote = wrote + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "]}")
+    return out
+}
+
+render_artifacts_json(root: string, records: ptr) {
+    out = "{\"artifacts\":["
+    wrote = 0
+    n = list.size(records)
+    i = 0
+    while i < n {
+        rec, _ = list.get(records, i)
+        label, _ = map.get(rec, "label")
+        type_word, _ = map.get(rec, "type")
+        td = _label_to_target_dir(root, label)
+        pat = path.join(td, "*")
+        files, _gerr = fs.glob(pat)
+        count = dir_list_count(files)
+        j = 0
+        while j < count {
+            f = dir_list_get(files, j)
+            name = path.basename(f)
+            if string.starts_with(name, ".") == 0 {
+                is_internal = 0
+                if string.equals(name, "_aeb") == 1 { is_internal = 1 }
+                if string.equals(name, "_ae_build_all") == 1 { is_internal = 1 }
+                if is_internal == 0 {
+                    if wrote > 0 { out = string.concat(out, ",") }
+                    out = string.concat(out, "{")
+                    out = string.concat(out, "\"label\":")
+                    out = string.concat(out, _json_str(label))
+                    out = string.concat(out, ",\"type\":")
+                    out = string.concat(out, _json_str(type_word))
+                    out = string.concat(out, ",\"target_dir\":")
+                    out = string.concat(out, _json_str(td))
+                    out = string.concat(out, ",\"name\":")
+                    out = string.concat(out, _json_str(name))
+                    out = string.concat(out, ",\"path\":")
+                    out = string.concat(out, _json_str(f))
+                    out = string.concat(out, "}")
+                    wrote = wrote + 1
+                }
+            }
+            j = j + 1
+        }
+        dir_list_free(files)
+        i = i + 1
+    }
+    out = string.concat(out, "]}")
+    return out
+}
+
 _needs_rebuild(source_dir: string, ts_file: string) {
     if file.exists(ts_file) == 0 {
         return 1

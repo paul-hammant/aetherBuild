@@ -1,0 +1,78 @@
+// Tests for aeb's deterministic --shard N/M selection rule.
+//
+// aeb-main applies sharding after --since/--pattern narrowing:
+// sort target paths, then keep entries whose zero-based position
+// modulo M equals N-1.
+
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+extern println(s: string)
+
+_assert_eq(label: string, actual: string, expected: string) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+        println("  expected: '${expected}'")
+        println("  actual:   '${actual}'")
+    }
+}
+
+_parse_shard(spec: string) {
+    slash = string.index_of(spec, "/")
+    if slash <= 0 { return 0, 0, 0 }
+    if slash >= string.length(spec) - 1 { return 0, 0, 0 }
+    left = string.substring(spec, 0, slash)
+    right = string.substring(spec, slash + 1, string.length(spec))
+    idx, _ierr = string.to_int(left)
+    total, _terr = string.to_int(right)
+    if idx < 1 { return 0, 0, 0 }
+    if total < 1 { return 0, 0, 0 }
+    if idx > total { return 0, 0, 0 }
+    return idx, total, 1
+}
+
+_select_from_sorted(items: ptr, spec: string) {
+    idx, total, ok = _parse_shard(spec)
+    if ok == 0 { return "INVALID" }
+    out = ""
+    n = list.size(items)
+    i = 0
+    while i < n {
+        item, _ = list.get(items, i)
+        rem = i - ((i / total) * total)
+        want = idx - 1
+        if rem == want {
+            if string.length(out) > 0 { out = string.concat(out, "\n") }
+            out = string.concat(out, item)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+main() {
+    items = list.new()
+    list.add(items, "a/.tests.ae")
+    list.add(items, "b/.tests.ae")
+    list.add(items, "c/.tests.ae")
+    list.add(items, "d/.tests.ae")
+    list.add(items, "e/.tests.ae")
+
+    _assert_eq("shard 1/2", _select_from_sorted(items, "1/2"), "a/.tests.ae\nc/.tests.ae\ne/.tests.ae")
+    _assert_eq("shard 2/2", _select_from_sorted(items, "2/2"), "b/.tests.ae\nd/.tests.ae")
+    _assert_eq("shard 3/4", _select_from_sorted(items, "3/4"), "c/.tests.ae")
+    _assert_eq("sparse shard valid", _select_from_sorted(items, "4/8"), "d/.tests.ae")
+    _assert_eq("empty shard valid", _select_from_sorted(items, "8/8"), "")
+    _assert_eq("invalid zero", _select_from_sorted(items, "0/2"), "INVALID")
+    _assert_eq("invalid too high", _select_from_sorted(items, "3/2"), "INVALID")
+    _assert_eq("invalid syntax", _select_from_sorted(items, "2"), "INVALID")
+}

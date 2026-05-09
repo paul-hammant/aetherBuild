@@ -62,6 +62,68 @@ run_capture(cmd: string) {
     return string.trim(out)
 }
 
+_split_lines(buf: string) {
+    lines = list.new()
+    n = string.length(buf)
+    start = 0
+    i = 0
+    while i < n {
+        ch = string.substring(buf, i, i + 1)
+        if string.equals(ch, "\n") == 1 {
+            line = string.substring(buf, start, i)
+            list.add(lines, line)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        list.add(lines, string.substring(buf, start, n))
+    }
+    return lines
+}
+
+_sort_file_list(files: ptr) {
+    out = list.new()
+    buf = ""
+    n = list.size(files)
+    i = 0
+    while i < n {
+        f, _ = list.get(files, i)
+        if string.length(buf) > 0 { buf = string.concat(buf, "\n") }
+        buf = string.concat(buf, f)
+        i = i + 1
+    }
+    if string.length(buf) == 0 { return out }
+    sorted_raw, _serr = os.exec("printf '%s\\n' '${buf}' | sort -u")
+    sorted = string.trim(sorted_raw)
+    if string.length(sorted) == 0 { return out }
+    lines = _split_lines(sorted)
+    ln = list.size(lines)
+    j = 0
+    while j < ln {
+        line, _ = list.get(lines, j)
+        if string.length(line) > 0 {
+            list.add(out, line)
+        }
+        j = j + 1
+    }
+    return out
+}
+
+_parse_shard(spec: string) {
+    slash = string.index_of(spec, "/")
+    if slash <= 0 { return 0, 0, 0 }
+    if slash >= string.length(spec) - 1 { return 0, 0, 0 }
+    left = string.substring(spec, 0, slash)
+    right = string.substring(spec, slash + 1, string.length(spec))
+    idx, ierr = string.to_int(left)
+    total, terr = string.to_int(right)
+    if idx < 1 { return 0, 0, 0 }
+    if total < 1 { return 0, 0, 0 }
+    if idx > total { return 0, 0, 0 }
+    return idx, total, 1
+}
+
 main() {
     if aether_args_count() < 4 {
         println("Usage: aeb-main <aether-bin> <aeb-home> <root> [target]")
@@ -71,27 +133,79 @@ main() {
     aebhome    = aether_args_get(2)
     root       = aether_args_get(3)
 
-    // argv[4] is either a target path (compile this and its deps) or
+    // argv[4] is either a target path (compile this and its deps), a
+    // query subcommand (`query`, `owners`, `path`, `why`), or
     // a `--<flag>` (modal action that uses the same scan/extract
     // pipeline as a build but exits before linking). argv[5] is an
-    // optional flag argument (currently only `--graph <format>`).
+    // optional flag/subcommand argument.
     target = string.concat("", "")
     flag = string.concat("", "")
     flag_arg = string.concat("", "")
+    flag_arg2 = string.concat("", "")
     if aether_args_count() >= 5 {
         a4 = aether_args_get(4)
         if string.length(a4) >= 2 {
             if string.equals(string.substring(a4, 0, 2), "--") == 1 {
                 flag = a4
             } else {
-                target = strip_trailing_slash(a4)
+                if string.equals(a4, "query") == 1 {
+                    flag = "--query"
+                } else {
+                    if string.equals(a4, "owners") == 1 {
+                        flag = "--owners"
+                    } else {
+                        if string.equals(a4, "path") == 1 {
+                            flag = "--path"
+                        } else {
+                            if string.equals(a4, "why") == 1 {
+                                flag = "--why"
+                            } else {
+                                target = strip_trailing_slash(a4)
+                            }
+                        }
+                    }
+                }
             }
         } else {
-            target = strip_trailing_slash(a4)
+            if string.equals(a4, "query") == 1 {
+                flag = "--query"
+            } else {
+                if string.equals(a4, "owners") == 1 {
+                    flag = "--owners"
+                } else {
+                    if string.equals(a4, "path") == 1 {
+                        flag = "--path"
+                    } else {
+                        if string.equals(a4, "why") == 1 {
+                            flag = "--why"
+                        } else {
+                            target = strip_trailing_slash(a4)
+                        }
+                    }
+                }
+            }
         }
     }
     if aether_args_count() >= 6 {
         flag_arg = aether_args_get(5)
+    }
+    if aether_args_count() >= 7 {
+        flag_arg2 = aether_args_get(6)
+    }
+
+    // Query-style commands always need the whole scanned graph. They
+    // are read-only; no target-mode dep closure or build/link step.
+    if string.equals(flag, "--query") == 1 {
+        target = ""
+    }
+    if string.equals(flag, "--owners") == 1 {
+        target = ""
+    }
+    if string.equals(flag, "--path") == 1 {
+        target = ""
+    }
+    if string.equals(flag, "--why") == 1 {
+        target = ""
     }
 
     // --- Lazy-build helper tools ---
@@ -114,6 +228,10 @@ main() {
     aeb_graph_bin = string.concat(aebhome, "/tools/aeb-graph")
     if file.exists(aeb_graph_bin) == 0 {
         os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/aeb-graph.ae -o "), string.concat(aeb_graph_bin, " >/dev/null 2>&1"))))
+    }
+    aeb_query_bin = string.concat(aebhome, "/tools/aeb-query")
+    if file.exists(aeb_query_bin) == 0 {
+        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/aeb-query.ae -o "), string.concat(aeb_query_bin, " >/dev/null 2>&1"))))
     }
     affected_bin = string.concat(aebhome, "/tools/affected-targets")
     if file.exists(affected_bin) == 0 {
@@ -253,6 +371,51 @@ main() {
         gcmd = string.concat(gcmd, gfmt)
         os.system(gcmd)
         return 0
+    }
+
+    // --- graph queries: answer from _edges.txt, then exit ---
+    if string.equals(flag, "--query") == 1 {
+        if string.length(flag_arg) == 0 {
+            println("aeb: query requires an expression, e.g. `aeb query 'deps(path/.build.ae)'`")
+            exit(1)
+        }
+        qcmd = string.concat(aeb_query_bin, " ")
+        qcmd = string.concat(qcmd, edges_path)
+        qcmd = string.concat(qcmd, " query '")
+        qcmd = string.concat(qcmd, flag_arg)
+        qcmd = string.concat(qcmd, "'")
+        rc_query = os.system(qcmd)
+        exit(rc_query)
+    }
+    if string.equals(flag, "--owners") == 1 {
+        if string.length(flag_arg) == 0 {
+            println("aeb: owners requires a source path")
+            exit(1)
+        }
+        ocmd = string.concat(aeb_query_bin, " ")
+        ocmd = string.concat(ocmd, edges_path)
+        ocmd = string.concat(ocmd, " owners ")
+        ocmd = string.concat(ocmd, flag_arg)
+        rc_owners = os.system(ocmd)
+        exit(rc_owners)
+    }
+    if string.equals(flag, "--path") == 1 || string.equals(flag, "--why") == 1 {
+        if string.length(flag_arg) == 0 || string.length(flag_arg2) == 0 {
+            println("aeb: path/why require two targets")
+            exit(1)
+        }
+        pcmd = string.concat(aeb_query_bin, " ")
+        pcmd = string.concat(pcmd, edges_path)
+        if string.equals(flag, "--why") == 1 {
+            pcmd = string.concat(pcmd, " why ")
+        } else {
+            pcmd = string.concat(pcmd, " path ")
+        }
+        pcmd = string.concat(pcmd, flag_arg)
+        pcmd = string.concat(pcmd, " ")
+        pcmd = string.concat(pcmd, flag_arg2)
+        rc_q = os.system(pcmd)
+        exit(rc_q)
     }
 
     // --- --since / --affected / --print-affected: filter the build set ---
@@ -466,7 +629,48 @@ main() {
         narrowed = 1
     }
 
-    // --- Rewrite edges file if narrowed (by --since and/or --pattern) ---
+    // --- AEB_SHARD: deterministic target partitioning for CI ---
+    //
+    // Set by the trampoline when the user passes `--shard N/M`.
+    // Applied after --since and --pattern, so a common CI shape is:
+    //   aeb --since main --pattern '.tests*.ae' --shard 2/8
+    //
+    // The partition key is the sorted target path list. Position is
+    // zero-based after sorting; shard 1/M receives positions 0, M,
+    // 2M..., shard 2/M receives 1, M+1, and so on. CI systems own
+    // runner distribution; aeb owns stable target selection.
+    shard_spec = os.getenv("AEB_SHARD")
+    if string.length(shard_spec) > 0 {
+        shard_idx, shard_total, shard_ok = _parse_shard(shard_spec)
+        if shard_ok == 0 {
+            println(string.concat("aeb: invalid --shard value: ", string.concat(shard_spec, " (expected N/M, e.g. 2/8)")))
+            exit(1)
+        }
+        sorted_files = _sort_file_list(files)
+        shard_files = list.new()
+        shard_seen = map.new()
+        sn = list.size(sorted_files)
+        si = 0
+        while si < sn {
+            f, _ = list.get(sorted_files, si)
+            rem = si - ((si / shard_total) * shard_total)
+            want = shard_idx - 1
+            if rem == want {
+                _sf = list.add(shard_files, f)
+                _ss = map.put(shard_seen, f, "1")
+            }
+            si = si + 1
+        }
+        if list.size(shard_files) == 0 {
+            println(string.concat("aeb: no targets in shard ", shard_spec))
+            return 0
+        }
+        files = shard_files
+        seen = shard_seen
+        narrowed = 1
+    }
+
+    // --- Rewrite edges file if narrowed (by --since, --pattern, and/or --shard) ---
     //
     // Topo-sort + aeb-link read the edges file; if we narrowed the
     // file set above, only emit rows whose first column is in the
