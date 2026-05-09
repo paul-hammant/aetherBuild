@@ -96,26 +96,22 @@ done
 
 ## Step 2: Create the BOM File
 
-If your project uses a parent POM that manages dependency versions (like `spring-boot-starter-parent`), create a shared BOM file:
+If your project uses a parent POM that manages dependency versions (like `spring-boot-starter-parent`), create a shared BOM file. **`.bom.ae` files are parsed as text by `aeb-resolve.jar`** — they are not Aether programs. No `import`, no `main()`. Just top-level `maven_bom(...)` / `maven_repo(...)` lines that the resolver greps for:
 
 ```aether
-// spring-boot.bom.ae
-import maven
-import maven (bom, repo)
-
-main() {
-    b = maven.context()
-    bom(b, "org.springframework.boot:spring-boot-dependencies:4.0.4")
-}
+// spring-boot.bom.ae — parsed as text by aeb-resolve.jar
+maven_bom("org.springframework.boot:spring-boot-dependencies:4.0.4")
 ```
 
-This file is referenced by `maven.load_bom_file()` in each module's build file. Different subtrees can use different BOM files.
+This file is referenced by `load_bom_file()` (imported from `maven`) in each module's build file. Different subtrees can use different BOM files.
 
-If your project uses snapshot or milestone repositories, add them:
+If your project uses snapshot or milestone repositories, add `maven_repo(...)` lines to the same file:
 
 ```aether
-    bom(b, "org.springframework.boot:spring-boot-dependencies:4.0.4")
-    repo(b, "https://repo.spring.io/milestone")
+// spring-milestone.bom.ae
+maven_bom("org.springframework.data:spring-data-bom:2026.0.0-M2")
+maven_repo("https://repo.spring.io/milestone")
+maven_repo("https://repo.spring.io/snapshot")
 ```
 
 ## Step 3: Create .build.ae Files
@@ -137,7 +133,8 @@ For each leaf module, create a `.build.ae` using the deps from Step 1.
 ```aether
 // module-name/.build.ae
 import build
-import build (dep, load_bom_file)
+import build (dep)
+import maven (load_bom_file)
 import java
 import java (release, source_layout, enable_preview)
 
@@ -172,11 +169,10 @@ dep(b, "io.vavr:vavr:0.10.3")
 dep(b, "mongodb/util")
 ```
 
-**BOM overrides** — when a module needs a different BOM version:
+**BOM overrides** — when a module needs a different BOM or extra repos, create a second `.bom.ae` next to the module (or anywhere convenient) and `load_bom_file()` it. BOMs and repos compose: every loaded `.bom.ae` contributes its `maven_bom(...)` / `maven_repo(...)` lines to the resolver invocation.
 ```aether
 load_bom_file(b, "../../spring-boot.bom.ae")
-maven.bom(b, "org.springframework.data:spring-data-bom:2026.0.0-M2")
-maven.repo(b, "https://repo.spring.io/milestone")
+load_bom_file(b, "spring-milestone.bom.ae")  // adds the data-bom + milestone repo
 ```
 
 **QueryDSL / annotation processing** — add the APT dep and generated sources dir:
@@ -202,7 +198,8 @@ Each module with `src/test/java` gets a `.tests.ae`. The test file depends on it
 ```aether
 // module-name/.tests.ae
 import build
-import build (dep, load_bom_file)
+import build (dep)
+import maven (load_bom_file)
 import java
 import java (release, source_layout, enable_preview, test_timeout)
 

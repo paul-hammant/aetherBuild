@@ -53,25 +53,30 @@ That shape is convenient, but it hides the module graph. aeb should
 not replace its graph with a root script that manually orders the
 world.
 
-The aeb version should stay target-local:
+The aeb version should stay target-local. Today, that looks like:
 
 ```aether
 java.junit5(b) {
-    timeout("120")
-    on_failure() {
-        run("scripts/capture-test-diagnostics.sh")
-    }
+    test_timeout("120")
+}
+
+bash.test(b) {
+    script("integration_test.sh")
+    on_failure("scripts/capture-test-diagnostics.sh")
 }
 ```
 
-and release-local:
+`on_failure(...)` takes a single shell command (string), not a block — it fires once if any `script(...)` exits non-zero.
+
+The shape we'd want for release flow is the same idea, applied to a `.dist.ae` target. Publish/sign/version-from-git verbs are not yet shipping (`shade()` builds fat jars; the dist-side publish step is roadmap), but the intended shape is target-local:
 
 ```aether
+// sketch — verbs not implemented yet
 nuget.publish(b) {
     package("libs/core/.dist.ae")
     version_from_git()
     sign()
-    repo("internal")
+    feed("internal")
 }
 ```
 
