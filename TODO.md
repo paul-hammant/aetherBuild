@@ -471,6 +471,38 @@ between lock file and resolved deps.
 
 ## Aether compiler issues to fix upstream
 
+- [x] **0.146 regression: `string.substring` return aliased + outer
+      reassign-to-`""` corrupts the alias.** Fixed in 0.147.0
+      (ownership-transfer logic at the reassignment-wrapper, see
+      `../aether/CHANGELOG.md` § [0.147.0]). Cleared three of the
+      four downstream failures (`test_brew`, `test_telemetry_render`,
+      `test_affected_targets`).
+- [ ] **0.147 regression: `list.add` of a heap-string alias doesn't
+      count as escape.** Heap-tracked locals passed to `list.add`
+      inside a split-string loop get freed by the next iteration's
+      reassign-wrapper; the list ends up with dangling pointers.
+      Visible failure: `test_java_cache` (was passing on 0.146).
+      Likely-vulnerable downstream sites that haven't surfaced yet:
+      `_csv_split` and the fixture-line emission loop in
+      `lib/build/module.ae`. Filed upstream as Regression A in
+      `../aether/string_alias_reassign_uaf_followup.md`. Suggested
+      fix: extend `@retain` annotation surface (parallel to 0.146's
+      `@heap`) to the stdlib `list_add` / `map_put` value param.
+- [ ] **0.147 regression: tuple-destructure reassign of a
+      string-interp variable double-frees at function exit.** 8-line
+      repro: `x = "${y}*"; x, _ = map.get(opts, k); // SIGABRT`. The
+      destructure-wrapper appears to inherit `_heap_<lhs>` from the
+      prior interp assignment instead of recomputing from
+      `map.get`'s position-0 borrow classification. Visible failure:
+      `test_pyproject_content` (crashes mid-suite). Filed upstream as
+      Regression B in `../aether/string_alias_reassign_uaf_followup.md`.
+- [ ] **0.146 regression: bare `_` as discard target rejected.**
+      `_ = os.system(...)` now fails codegen with
+      `assignment to ‘const char *’ from ‘int’ makes pointer from
+      integer without a cast`. Workaround: rename to `_status` or
+      similar (any identifier with a trailing non-`_` char). Applied
+      at `tests/test_cache.ae:138`; only one site in the tree.
+      Persists on 0.147.0 — not fixed by the alias-transfer landing.
 - [ ] `module` as a variable name silently breaks codegen — should be
       a reserved word or the codegen should handle it
 - [ ] Module function return type inference fails when first `return`
