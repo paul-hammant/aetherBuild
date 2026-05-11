@@ -251,8 +251,7 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
   + hooks, three-copy `file_to_label`).
 - `Makefile` — `make build` (pre-build tools), `make install`
   (proper copy install to `$PREFIX/share/aeb` + wrapper),
-  `make uninstall`, `make clean`. `gcheckout` excluded from
-  `INSTALL_TOOLS` because of an upstream Aether stdlib link issue.
+  `make uninstall`, `make clean`.
 
 ## Idioms that keep biting
 
@@ -435,11 +434,21 @@ these are absolute, but skipping them tends to produce regrets.
   hides this via `-Wl,--allow-multiple-definition` (currently
   hard-coded in `tools/aeb-link.ae`); macOS ld64 rejects the flag.
   Tracked in TODO.md § Aether compiler issues.
-- **`tools/gcheckout`** doesn't currently link — externs against
-  stdlib symbols don't resolve. Excluded from `INSTALL_TOOLS`.
-  Same upstream class of issue. Lazy-builds at first use of
-  `aeb gcheckout ...`; same failure surfaces there.
 - Most other upstream gaps are documented inline in TODO.md.
+
+Resolved upstream issues that aeb used to work around (kept here
+because the workarounds left traces in commit history / older
+LLM-session notes — if you see one in a diff, it's probably stale):
+
+- ~~`tools/gcheckout` doesn't link~~ — was a manual `extern` block
+  for stdlib symbols (the same anti-pattern aeocha hit, see
+  `../aether/extern_mistake.md`). Migrated to idiomatic
+  `import std.{string,file,os,list,map}` + dot-form calls. Now
+  builds and is in `INSTALL_TOOLS`. The defensive `string.concat(x, "")`
+  copies inside the dep-walk loop are a workaround for
+  aether 0.147 Regression A (filed in
+  `../aether/string_alias_reassign_uaf_followup.md`) — remove once
+  upstream lands `@retain` on stdlib `list_add`.
 
 ## Recent upstream Aether features aeb could lean on
 
