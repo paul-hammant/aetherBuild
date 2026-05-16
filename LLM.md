@@ -217,9 +217,19 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
   docstrings before adding a new caller.
 - `lib/<lang>/module.ae` — language SDKs. Java, Kotlin, Go, Rust,
   TypeScript, Scala, Clojure, .NET, Python, Aether (native programs),
-  Bash (test runner), Maven (resolver), pnpm/jest/webpack/angular,
+  Bash (test runner — note the builder is `bash.run`, not
+  `bash.script`: a builder must not share a name with a function in
+  its module), Maven (resolver), pnpm/jest/webpack/angular,
   Container (OCI/LXC). Each SDK exposes `<lang>.<verb>(b) { ... }`
   builders.
+- `lib/webhook/module.ae` — outbound webhook trigger SDK (core, not
+  language-specific). `webhook.fire(b) { url(...) on(...) }` invokes
+  a URL when a pipeline node is reached — aeb as the producer side
+  of a webhook-centric automation system. `{{...}}` context
+  interpolation, `on()` environment gates, native `std.http`. Hosts
+  the `_detect_ci()` consumer; `_detect_ci` itself lives in
+  `lib/build`. Usage: `docs/webhook-triggers.md`; design:
+  `asks/webhook-outbound-trigger.md`.
 - `lib/aether/module.ae` — the Aether-program SDK.
   `aether.program(b)` shells out to `ae build` by default; declaring
   `extra_source(...)` / `link_flag(...)` / `regen(...)` opts into the

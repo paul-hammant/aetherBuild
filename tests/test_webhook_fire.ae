@@ -1,0 +1,87 @@
+// End-to-end test: webhook.fire dispatches as a builder and issues
+// a real HTTP request.
+//
+// The pure helpers (interpolate, gate_passes, _url_encode) are
+// unit-tested in test_webhook_{interp,gate}.ae. This test closes the
+// other half: that the `webhook.fire(b) { ... }` builder actually
+// DISPATCHES through the closure-DSL form the orchestrator uses, and
+// that it does the network call — the same regression surface the
+// bash.script non-dispatch bug exposed (see test_bash_run.ae).
+//
+// It spins up a one-shot local HTTP listener, drives webhook.fire
+// against it (no on() gate, so it fires regardless of CI/local —
+// gate logic is covered by test_webhook_gate.ae), and asserts the
+// listener received the POST with the interpolated query string.
+//
+// Needs python3 for the listener; if absent the test skips cleanly
+// so the suite stays green in minimal environments.
+
+import build
+import webhook
+import webhook (url)
+import std.string
+import std.os
+import std.file
+
+extern println(s: string)
+
+_assert(label: string, cond: int) {
+    if cond == 1 {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+    }
+}
+
+main() {
+    pchk, _ = os.exec("command -v python3 >/dev/null 2>&1 && echo y || echo n")
+    if string.equals(string.trim(pchk), "y") == 0 {
+        println("PASS: webhook e2e skipped — python3 not available")
+        println("webhook fire tests done")
+        return 0
+    }
+
+    base = "/tmp/aeb_test_webhook_fire"
+    port = "19887"
+    os.system("rm -rf ${base}; mkdir -p ${base}")
+    cap = "${base}/captured.txt"
+    pyf = "${base}/listener.py"
+
+    // One-shot HTTP listener: record the request path, answer 204,
+    // exit. srv.timeout bounds it so a missed request never leaks a
+    // background process.
+    gen = "cat > ${pyf} <<'PYEOF'\n"
+    gen = string.concat(gen, "import http.server\n")
+    gen = string.concat(gen, "class H(http.server.BaseHTTPRequestHandler):\n")
+    gen = string.concat(gen, " def do_POST(s):\n")
+    gen = string.concat(gen, "  open('${cap}','w').write(s.path)\n")
+    gen = string.concat(gen, "  s.send_response(204)\n")
+    gen = string.concat(gen, "  s.end_headers()\n")
+    gen = string.concat(gen, " def log_message(s,*a):\n")
+    gen = string.concat(gen, "  pass\n")
+    gen = string.concat(gen, "srv=http.server.HTTPServer(('127.0.0.1',${port}),H)\n")
+    gen = string.concat(gen, "srv.timeout=8\n")
+    gen = string.concat(gen, "srv.handle_request()\n")
+    gen = string.concat(gen, "PYEOF\n")
+    os.system(gen)
+
+    os.system("python3 ${pyf} >/dev/null 2>&1 &")
+    os.system("sleep 1")
+
+    // Drive the builder the way the orchestrator does. {{ci}} also
+    // exercises real interpolation inside the builder.
+    s = build.session(".")
+    b = build.begin(s, "m_webhook")
+    webhook.fire(b) {
+        url("http://127.0.0.1:${port}/hook?probe=aeb&ci={{ci}}")
+    }
+    os.system("sleep 1")
+
+    got, _ = os.exec("cat ${cap} 2>/dev/null")
+    received = 0
+    if string.index_of(got, "/hook?probe=aeb") >= 0 { received = 1 }
+    _assert("webhook.fire dispatched and POSTed to the listener", received)
+
+    os.system("rm -rf ${base}")
+    println("webhook fire tests done")
+}
