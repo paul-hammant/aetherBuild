@@ -1,0 +1,353 @@
+// webhook — outbound webhook trigger step.
+//
+// A core, language-agnostic builder: declare a `webhook.fire(b)`
+// block and aeb invokes a URL when that node of the DAG is reached.
+// aeb is the *producer* side of a webhook-centric automation system —
+// it pings a general listener and neither knows nor cares what the
+// listener triggers. Outbound only; aeb never serves.
+//
+// Two placements, same builder:
+//
+//   // a dedicated end-of-pipeline ping — name the file anything
+//   import build
+//   import webhook (url, on, header)
+//   main() {
+//       b = build.start()
+//       build.dep(b, "app/.tests.ae")
+//       build.dep(b, "app/.dist.ae")
+//       webhook.fire(b) {
+//           url("https://hooks.example/deploy?sha={{commit}}&br={{branch}}")
+//           header("Authorization", "Bearer {{env:DEPLOY_TOKEN}}")
+//           on("ci")
+//           on("branch:main")
+//       }
+//   }
+//
+//   // ...or in-target: a webhook.fire(b) block inside any .dist.ae /
+//   // .tests.ae / .build.ae, firing when that target finishes.
+//
+// There is no `.webhook.ae` filename suffix: aeb has no magic target
+// names, so the webhook fires from the `webhook.fire(b)` CALL, never
+// the filename. See asks/webhook-outbound-trigger.md for the design.
+//
+// Note the two-import rule: a file using the bare setters needs both
+// `import webhook` (the builder verb) and `import webhook (url, ...)`
+// (the setter names).
+
+import build
+import std.string
+import std.os
+import std.list
+import std.map
+import std.http.client
+
+// --- DSL setters (live on the inner _builder map) ---
+
+// url(STR) — the target URL. Supports {{...}} context interpolation.
+url(_ctx: ptr, u: string) {
+    _e = map.put(_ctx, "url", u)
+}
+
+// method(STR) — "POST" (default) or "GET".
+method(_ctx: ptr, m: string) {
+    _e = map.put(_ctx, "method", m)
+}
+
+// on(STR) — a gate predicate; repeatable, AND semantics. See
+// _gate_passes for the predicate grammar.
+on(_ctx: ptr, predicate: string) {
+    if map.has(_ctx, "on") == 0 {
+        _e1 = map.put(_ctx, "on", list.new())
+    }
+    preds, _ = map.get(_ctx, "on")
+    _e2 = list.add(preds, predicate)
+}
+
+// header(KEY, VAL) — a request header; repeatable. VAL supports
+// {{...}} interpolation. Stored tab-packed ("KEY\tVAL") in one list.
+header(_ctx: ptr, key: string, value: string) {
+    if map.has(_ctx, "headers") == 0 {
+        _e1 = map.put(_ctx, "headers", list.new())
+    }
+    hs, _ = map.get(_ctx, "headers")
+    packed = string.concat(key, string.concat("\t", value))
+    _e2 = list.add(hs, packed)
+}
+
+// --- Pure helpers (I/O-free; unit-tested in tests/test_webhook_*.ae) ---
+
+// _url_encode — percent-encode a string for safe use in a URL query.
+// Keeps the RFC 3986 unreserved set (A-Z a-z 0-9 - . _ ~); every
+// other byte becomes %XX. Bytes >= 128 are handled as their unsigned
+// value so UTF-8 round-trips.
+_url_encode(s: string) {
+    hex = "0123456789ABCDEF"
+    n = string.length(s)
+    out = ""
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        if c < 0 { c = c + 256 }
+        keep = 0
+        if c >= 65 { if c <= 90 { keep = 1 } }
+        if c >= 97 { if c <= 122 { keep = 1 } }
+        if c >= 48 { if c <= 57 { keep = 1 } }
+        if c == 45 { keep = 1 }
+        if c == 46 { keep = 1 }
+        if c == 95 { keep = 1 }
+        if c == 126 { keep = 1 }
+        if keep == 1 {
+            out = string.concat(out, string.substring(s, i, i + 1))
+        } else {
+            hi = c / 16
+            lo = c - (hi * 16)
+            out = string.concat(out, "%")
+            out = string.concat(out, string.substring(hex, hi, hi + 1))
+            out = string.concat(out, string.substring(hex, lo, lo + 1))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// interpolate — substitute {{name}} tokens in `template` from the
+// `ctx` map. When url_encode is 1, substituted values are
+// percent-encoded (use for URLs); when 0, inserted verbatim (use for
+// header values). An unknown token is left literal so the mistake is
+// visible rather than silently emptied.
+interpolate(template: string, ctx: ptr, url_encode: int) {
+    // Locals are pre-declared so their types are pinned before the
+    // loop body — Aether's inference does not always resolve an
+    // imported call's return type for a variable first-assigned
+    // inside a loop (see aeb's "Idioms that keep biting").
+    out = ""
+    rest = template
+    seg = ""
+    name = ""
+    val = ""
+    open = 0
+    close = 0
+    while string.length(rest) > 0 {
+        open = string.index_of(rest, "{{")
+        if open < 0 {
+            out = string.concat(out, rest)
+            rest = ""
+        } else {
+            out = string.concat(out, string.substring(rest, 0, open))
+            seg = string.substring(rest, open + 2, string.length(rest))
+            close = string.index_of(seg, "}}")
+            if close < 0 {
+                out = string.concat(out, "{{")
+                rest = seg
+            } else {
+                name = string.substring(seg, 0, close)
+                rest = string.substring(seg, close + 2, string.length(seg))
+                if map.has(ctx, name) == 1 {
+                    val, _ = map.get(ctx, name)
+                    if url_encode == 1 {
+                        val = _url_encode(val)
+                    }
+                    out = string.concat(out, val)
+                } else {
+                    out = string.concat(out, "{{")
+                    out = string.concat(out, name)
+                    out = string.concat(out, "}}")
+                }
+            }
+        }
+    }
+    return out
+}
+
+// gate_passes — evaluate one on() predicate against environment
+// facts passed as data (so it is pure and unit-testable). Predicate
+// grammar, optionally prefixed with `!` to negate:
+//   "ci"          → running under any CI
+//   "local"       → not under CI
+//   "branch:GLOB" → current branch fnmatch-matches GLOB
+//   "<name>"      → detected CI system equals <name> (github, ...)
+gate_passes(predicate: string, is_ci: int, ci_system: string, branch: string) {
+    p = predicate
+    negate = 0
+    if string.starts_with(p, "!") == 1 {
+        negate = 1
+        p = string.substring(p, 1, string.length(p))
+    }
+    result = 0
+    if string.equals(p, "ci") == 1 {
+        result = is_ci
+    } else {
+        if string.equals(p, "local") == 1 {
+            if is_ci == 0 { result = 1 }
+        } else {
+            if string.starts_with(p, "branch:") == 1 {
+                glob = string.substring(p, 7, string.length(p))
+                if string.glob_match(glob, branch) == 1 { result = 1 }
+            } else {
+                if string.equals(p, ci_system) == 1 { result = 1 }
+            }
+        }
+    }
+    if negate == 1 {
+        if result == 1 { return 0 }
+        return 1
+    }
+    return result
+}
+
+// --- Impure helpers (git / env probes) ---
+
+// _resolve_env_tokens — scan `template` for {{env:NAME}} tokens and
+// populate `ctx` with the resolved environment values, so the pure
+// `interpolate` stays a plain map lookup.
+_resolve_env_tokens(template: string, ctx: ptr) {
+    rest = template
+    seg = ""
+    name = ""
+    varname = ""
+    open = 0
+    close = 0
+    while string.length(rest) > 0 {
+        open = string.index_of(rest, "{{")
+        if open < 0 {
+            rest = ""
+        } else {
+            seg = string.substring(rest, open + 2, string.length(rest))
+            close = string.index_of(seg, "}}")
+            if close < 0 {
+                rest = ""
+            } else {
+                name = string.substring(seg, 0, close)
+                rest = string.substring(seg, close + 2, string.length(seg))
+                if string.starts_with(name, "env:") == 1 {
+                    varname = string.substring(name, 4, string.length(name))
+                    _e = map.put(ctx, name, os.getenv(varname))
+                }
+            }
+        }
+    }
+}
+
+// git-only for v1, matching `aeb --since` (TODO.md tracks the
+// multi-VCS extension). stderr is swallowed so a non-repo just
+// yields "".
+_git_branch() {
+    out, err = os.exec("git rev-parse --abbrev-ref HEAD 2>/dev/null")
+    if err != "" { return "" }
+    return string.trim(out)
+}
+
+_git_commit() {
+    out, err = os.exec("git rev-parse HEAD 2>/dev/null")
+    if err != "" { return "" }
+    return string.trim(out)
+}
+
+_repo_name() {
+    out, err = os.exec("git rev-parse --show-toplevel 2>/dev/null")
+    top = ""
+    if err == "" { top = string.trim(out) }
+    n = string.length(top)
+    if n == 0 { return "" }
+    last = -1
+    i = 0
+    while i < n {
+        if string.equals(string.substring(top, i, i + 1), "/") == 1 { last = i }
+        i = i + 1
+    }
+    if last < 0 { return top }
+    return string.substring(top, last + 1, n)
+}
+
+// --- Builder entry point ---
+
+builder fire(ctx: ptr) {
+    mod_dir = build._get(ctx, "module_dir")
+    if string.length(mod_dir) == 0 { mod_dir = "webhook" }
+
+    url_tmpl = ""
+    method_v = "POST"
+    on_preds = list.new()
+    headers = list.new()
+    if _builder != null {
+        if map.has(_builder, "url") == 1 { url_tmpl, _ = map.get(_builder, "url") }
+        if map.has(_builder, "method") == 1 { method_v, _ = map.get(_builder, "method") }
+        if map.has(_builder, "on") == 1 { on_preds, _ = map.get(_builder, "on") }
+        if map.has(_builder, "headers") == 1 { headers, _ = map.get(_builder, "headers") }
+    }
+    if string.length(url_tmpl) == 0 {
+        println("${mod_dir}: webhook.fire requires url(\"...\")")
+        return 1
+    }
+
+    // Environment facts for the on() gates.
+    ci_system = build._detect_ci()
+    is_ci = 1
+    if string.equals(ci_system, "local") == 1 { is_ci = 0 }
+    branch = _git_branch()
+
+    // on() gates — every predicate must pass (AND).
+    gi = 0
+    gn = list.size(on_preds)
+    pred = ""
+    while gi < gn {
+        pred, _ = list.get(on_preds, gi)
+        if gate_passes(pred, is_ci, ci_system, branch) == 0 {
+            println("${mod_dir}: webhook skipped — on(\"${pred}\") not met")
+            return 0
+        }
+        gi = gi + 1
+    }
+
+    // Interpolation context.
+    commit = _git_commit()
+    cmap = map.new()
+    _c1 = map.put(cmap, "branch", branch)
+    _c2 = map.put(cmap, "commit", commit)
+    cshort = commit
+    if string.length(commit) >= 7 { cshort = string.substring(commit, 0, 7) }
+    _c3 = map.put(cmap, "commit_short", cshort)
+    _c4 = map.put(cmap, "ci", ci_system)
+    _c5 = map.put(cmap, "repo", _repo_name())
+    _c6 = map.put(cmap, "target", mod_dir)
+    _resolve_env_tokens(url_tmpl, cmap)
+
+    full_url = interpolate(url_tmpl, cmap, 1)
+
+    // Issue the request via the native std.http client.
+    req = client.request(method_v, full_url)
+    if req == null {
+        println("${mod_dir}: webhook WARNING — bad method/URL, not fired (build not failed)")
+        return 0
+    }
+    hi = 0
+    hn = list.size(headers)
+    pair = ""
+    hk = ""
+    hv = ""
+    tab = 0
+    while hi < hn {
+        pair, _ = list.get(headers, hi)
+        tab = string.index_of(pair, "\t")
+        if tab >= 0 {
+            hk = string.substring(pair, 0, tab)
+            hv = string.substring(pair, tab + 1, string.length(pair))
+            _resolve_env_tokens(hv, cmap)
+            hv = interpolate(hv, cmap, 0)
+            _sh = client.set_header(req, hk, hv)
+        }
+        hi = hi + 1
+    }
+    _st = client.set_timeout(req, 10)
+    resp, err = client.send_request(req)
+    if err != "" {
+        println("${mod_dir}: webhook WARNING — ${err} (build not failed)")
+        client.request_free(req)
+        return 0
+    }
+    status = client.response_status(resp)
+    println("${mod_dir}: webhook fired → ${full_url} (HTTP ${status})")
+    client.response_free(resp)
+    client.request_free(req)
+    return 0
+}

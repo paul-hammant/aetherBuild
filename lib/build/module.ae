@@ -340,6 +340,26 @@ _get(ctx: ptr, key: string) {
     return v
 }
 
+// _detect_ci — identify the CI system from its well-known env vars.
+// Returns a specific system name ("github" / "gitlab" / "jenkins" /
+// "circleci" / "travis" / "buildkite") when one is detected, the
+// generic "ci" when only the universal `CI` var is set, or "local"
+// when none match. Probed specific-before-generic.
+//
+// Lives in lib/build (core, language-agnostic) so it is reusable:
+// the webhook SDK's on() gate and {{ci}} interpolation consume it
+// today; telemetry and the future .trigger.ae can share it.
+_detect_ci() {
+    if string.length(os.getenv("GITHUB_ACTIONS")) > 0 { return "github" }
+    if string.length(os.getenv("GITLAB_CI")) > 0 { return "gitlab" }
+    if string.length(os.getenv("JENKINS_URL")) > 0 { return "jenkins" }
+    if string.length(os.getenv("CIRCLECI")) > 0 { return "circleci" }
+    if string.length(os.getenv("TRAVIS")) > 0 { return "travis" }
+    if string.length(os.getenv("BUILDKITE")) > 0 { return "buildkite" }
+    if string.length(os.getenv("CI")) > 0 { return "ci" }
+    return "local"
+}
+
 _strip_lang(dep_path: string) {
     // Return the full dep path — target dirs use the full module path
     // to avoid collisions (e.g. mongodb/util vs cassandra/util).

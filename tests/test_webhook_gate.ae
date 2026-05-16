@@ -1,0 +1,45 @@
+// Tests for the webhook SDK's pure on() gate evaluator,
+// webhook.gate_passes. Environment facts (is_ci, ci_system, branch)
+// are passed in as data, so the evaluator is exercised directly with
+// no real environment probing.
+
+import std.string
+import webhook (gate_passes)
+
+extern println(s: string)
+
+// gate_passes returns 1 (fire) / 0 (skip).
+_assert(label: string, actual: int, expected: int) {
+    if actual == expected {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label} expected=${expected} actual=${actual}")
+    }
+}
+
+main() {
+    // ci / local
+    _assert("ci under CI",        gate_passes("ci", 1, "github", "main"), 1)
+    _assert("ci while local",     gate_passes("ci", 0, "local", "main"),  0)
+    _assert("local while local",  gate_passes("local", 0, "local", "x"),  1)
+    _assert("local under CI",     gate_passes("local", 1, "github", "x"), 0)
+
+    // branch globs
+    _assert("branch exact hit",   gate_passes("branch:main", 0, "local", "main"), 1)
+    _assert("branch exact miss",  gate_passes("branch:main", 0, "local", "dev"),  0)
+    _assert("branch glob hit",    gate_passes("branch:rel-*", 0, "local", "rel-9"), 1)
+    _assert("branch glob miss",   gate_passes("branch:rel-*", 0, "local", "main"),  0)
+
+    // CI-system match
+    _assert("ci-system hit",      gate_passes("github", 1, "github", "x"),  1)
+    _assert("ci-system miss",     gate_passes("github", 1, "jenkins", "x"), 0)
+
+    // negation
+    _assert("!system hit",        gate_passes("!jenkins", 1, "github", "x"),  1)
+    _assert("!system miss",       gate_passes("!jenkins", 1, "jenkins", "x"), 0)
+    _assert("!branch excludes",   gate_passes("!branch:wip-*", 0, "local", "wip-7"), 0)
+    _assert("!branch allows",     gate_passes("!branch:wip-*", 0, "local", "main"),  1)
+    _assert("!local under CI",    gate_passes("!local", 1, "github", "x"), 1)
+
+    println("webhook gate tests done")
+}
