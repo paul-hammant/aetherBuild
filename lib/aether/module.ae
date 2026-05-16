@@ -602,6 +602,36 @@ _cache_key_for_aether_link(builder_map: ptr, source_dir: string, src_path: strin
     // Toolchain version
     list.add(parts, string.concat("ae:", _toolchain_version()))
 
+    // Toolchain *content*, not just the version string. `ae --version`
+    // reports the last release tag — unchanged for a toolchain rebuilt
+    // from source between tags — so the version string alone yields a
+    // false cache hit after such a rebuild (filed by the avn project:
+    // a compiler fix landed as a HEAD commit past the release tag).
+    // Hash the compiler binary and the runtime archive so any rebuild,
+    // released or not, busts the key. The file.exists guards never
+    // skip in a real build: the builder resolves aetherc to run it,
+    // and validates lib_dir (a non-existent libaether.a aborts the
+    // build earlier) — they only tolerate synthetic test inputs.
+    // This also makes the import-closure scan's stdlib/contrib skip
+    // correct: a stdlib .ae change ships inside the rebuilt
+    // libaether.a, whose hash now moves the key.
+    aetherc_bin = path.join(_resolve_aether_dir(), "aetherc")
+    if file.exists(aetherc_bin) == 1 {
+        ach, acherr = cache.hash_file(aetherc_bin)
+        if string.length(acherr) > 0 {
+            return "", acherr
+        }
+        list.add(parts, string.concat("aetherc-hash:", ach))
+    }
+    libaether_a = string.concat(lib_dir, "/libaether.a")
+    if file.exists(libaether_a) == 1 {
+        lah, laherr = cache.hash_file(libaether_a)
+        if string.length(laherr) > 0 {
+            return "", laherr
+        }
+        list.add(parts, string.concat("libaether-hash:", lah))
+    }
+
     // Main source content
     src_hash, herr = cache.hash_file(src_path)
     if string.length(herr) > 0 {
@@ -934,11 +964,26 @@ _run_regen_pass(builder_map: ptr, source_dir: string, aetherc: string, mod_dir: 
         }
         c_mtime = file.mtime(c_abs)
         action = _regen_action(ae_mtime, c_mtime)
+        // A toolchain rebuilt between release tags leaves the .ae
+        // mtime untouched, so _regen_action would skip — but the
+        // generated .c is stale codegen from the old compiler.
+        // Regenerate when aetherc is newer than the .c (mtime, to
+        // match regen's existing mtime-skip model; `make install`
+        // bumps the binary's mtime).
+        if string.equals(action, "skip") == 1 {
+            tc_mtime = file.mtime(aetherc)
+            if c_mtime < tc_mtime {
+                action = "toolchain"
+            }
+        }
         if string.equals(action, "missing") == 1 {
             println("${mod_dir}: regen ${rel} → ${c_rel} (missing)")
         }
         if string.equals(action, "stale") == 1 {
             println("${mod_dir}: regen ${rel} → ${c_rel} (stale)")
+        }
+        if string.equals(action, "toolchain") == 1 {
+            println("${mod_dir}: regen ${rel} → ${c_rel} (toolchain newer)")
         }
         needs_regen = 0
         if string.equals(action, "skip") == 0 { needs_regen = 1 }
