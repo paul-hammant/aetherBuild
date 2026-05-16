@@ -164,6 +164,19 @@ runs only the targets affected by the PR's changes. Telemetry
 shows what built; cache integration ensures hits stay hits even
 when the broader CI pipeline rebuilds something else.
 
+**TODO: `--since` is Git-only today.** The changed-files list comes
+from a hard-coded `git diff --name-only <ref>` shell-out in
+`tools/aeb-main.ae` (~line 489). Only that one step is VCS-specific
+— everything downstream (owning-target resolution, reverse-dep DAG
+walk, `--pattern` / `--shard` narrowing) is VCS-agnostic and works
+off a plain changed-paths list. Other VCS could be added by
+detecting the repo type and swapping the diff command:
+`hg status --rev <ref>` / `jj diff --name-only` / `svn diff
+--summarize`, etc. The clean shape is a small `_changed_files(ref)`
+helper that picks the command by repo type (probe for `.git` /
+`.hg` / `.jj` / `.svn`), feeding the same `_changed.txt` the
+affected-targets tool already consumes — no change to the walk.
+
 ### Local content-addressed cache (partially done)
 
 `lib/cache/` ships sha256+zlib content-addressable storage under
