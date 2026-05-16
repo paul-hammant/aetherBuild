@@ -493,15 +493,13 @@ between lock file and resolved deps.
       treating the non-string position as a borrow. See
       `../aether/CHANGELOG.md` § [0.149.0] (Regression B).
       `test_pyproject_content` passes on 0.161.0.
-- [ ] **0.146 regression: bare `_` is a single type-bound variable,
-      not a per-use fresh discard.** Once `_` is bound to a type by
-      its first use (e.g. the error position of `x, _ = os.exec(...)`,
-      typed `const char*`), a later `_ = os.system(...)` assigns an
-      `int` into the same slot and codegen fails with `assignment to
-      ‘const char *’ from ‘int’ makes pointer from integer without a
-      cast`. Workaround: rename the int-typed site to `_status` or
-      similar. Applied at `tests/test_cache.ae:138`; only one site in
-      the tree. Persists on 0.161.0.
+- [x] **0.146 regression: bare `_` is a single type-bound variable,
+      not a per-use fresh discard.** Fixed upstream (aether `[current]`
+      / post-0.162.0) — filed via `aeb-ae-help-and-toolchain-feedback.md`
+      #4. `_` is no longer registered as a symbol; each occurrence is
+      an independent discard and a plain `_ = <expr>` lowers to
+      `(void)(<expr>)`. The `_status` workaround at
+      `tests/test_cache.ae` was reverted to bare `_`.
 - [ ] `module` as a variable name silently breaks codegen — should be
       a reserved word or the codegen should handle it
 - [ ] Module function return type inference fails when first `return`
@@ -541,17 +539,22 @@ between lock file and resolved deps.
       `test_junit_cmd.ae`, `test_kotlinc_cmd.ae` via `./tests/run.sh`.
       Likely a qualified-symbol resolution issue across two levels of
       module imports.
-- [ ] **`ae help` library hint files (`*.help.md`) are stdlib-only.**
-      The 0.150 `ae help` feature loads library-author `<name>.help.md`
-      hint files, but `find_help_md_path` (`aether/tools/ae_help.c`)
-      probes only the stdlib root — explicit `"Stdlib only"` comment,
-      confirmed on 0.161.0. aeb's SDKs are user libs resolved via
-      `--lib lib`, so `ae help` cannot read a `lib/<sdk>/<sdk>.help.md`
-      we ship — the files would be dead weight. Blocks aeb (and any
-      project shipping its own SDKs) from giving `.build.ae` authors
-      targeted setter hints. Upstream fix: have `find_help_md_path`
-      also probe each `--lib` entry's `<name>/` dir. Until then, don't
-      ship aeb-side `.help.md` files.
+- [x] **`ae help` library hint files (`*.help.md`) were stdlib-only.**
+      Fixed upstream (aether `[current]` / post-0.162.0) — filed via
+      `aeb-ae-help-and-toolchain-feedback.md` #1+#2. `ae help` now
+      accepts `--lib` and `find_help_md_path` probes each `--lib`
+      entry's `<name>/` dir. aeb now ships hint files:
+      `lib/bash/bash.help.md`, `lib/aether/aether.help.md`,
+      `lib/build/build.help.md`. They ride inside the module dirs, so
+      `aeb --init`'s `.aeb/lib/<name>` symlinks carry them to consumer
+      repos automatically — no `shipped_modules()` change needed.
+- [ ] **`ae help` still reports project-library calls as undefined.**
+      Even with `--lib lib`, `ae help` on a `.build.ae` flags
+      `build.start` / `bash.script` etc. as `undefined function` —
+      the `*.help.md` hints fire correctly alongside, but the output
+      is signal + noise. Likely the same transitive qualified-symbol
+      resolution gap as the `maven.classpath` item above. Filed as a
+      follow-up in `aeb-ae-help-and-toolchain-feedback.md`.
 
 ## Build environment validation
 

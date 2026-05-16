@@ -135,7 +135,7 @@ main() {
     _assert_eq("get_string miss", miss_serr, "miss")
 
     // --- 7. cleanup ---
-    _status = os.system("rm -rf '${tmp_root}'")
+    _ = os.system("rm -rf '${tmp_root}'")
 
     println("cache tests done")
 }

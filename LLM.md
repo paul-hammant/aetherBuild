@@ -323,6 +323,13 @@ Look at `lib/bash/module.ae` for the simplest complete example.
 4. **Register the module name** in `tools/aeb-init.ae`'s
    `shipped_modules()` list. `aeb --init` reads that list to
    create the `.aeb/lib/<name>` symlinks in consumer repos.
+5. **Optional: ship `lib/<name>/<name>.help.md`** — authoring-mistake
+   hints `ae help` surfaces (``Pattern: literal-name `setter` ``
+   sections fire when `setter(` appears in a `.build.ae`). It lives
+   inside the module dir, so the `.aeb/lib/<name>` symlink carries
+   it for free. Only worth it for genuine footguns — a hint fires on
+   every occurrence of its name, so don't key one to a name whose
+   plain use is fine. See `lib/bash/bash.help.md` for the shape.
 
 The string-builder pattern (the `*_cmd(...)` helpers) is load-bearing
 for testability. Every command that gets `os.system`'d should go
@@ -568,16 +575,22 @@ exists if a need arises."
   0.147 regressions (A and B) are closed — see TODO.md § Aether
   compiler issues. Nothing to consume; rebuilding under 0.161 just
   gets correct memory behaviour.
-- **0.150 `ae help <script>`** — offline closure-DSL diagnostics:
-  Levenshtein typo matches, YAML/HCL→call-form rewrites,
-  missing-import detection, all on-machine with zero network. A
-  library author can ship a `<name>.help.md` whose
-  ``Pattern: `name` `` sections fire when `name(` appears in a
-  script — **but `find_help_md_path` (aether `tools/ae_help.c`)
-  probes only the stdlib root**, so a `lib/<sdk>/<sdk>.help.md` aeb
-  ships would never be read. Not usable for aeb's SDKs until
-  upstream extends hint-file lookup to `--lib` roots — tracked in
-  TODO.md § Aether compiler issues.
+- **0.150 `ae help <script>` + post-0.162 `--lib` support** — offline
+  closure-DSL diagnostics: Levenshtein typo matches, YAML/HCL→call-form
+  rewrites, missing-import detection, plus library-author hint files.
+  A library ships a `<name>.help.md` next to its `module.ae` whose
+  ``Pattern: literal-name `name` `` sections fire when `name(` appears
+  in a script. The 0.150 release was stdlib-only; the `--lib` fix
+  (aether `[current]`, filed by aeb via
+  `../aether/aeb-ae-help-and-toolchain-feedback.md`) made `ae help`
+  accept `--lib` and probe `--lib` roots for hint files. **Now
+  consumed**: aeb ships `lib/bash/bash.help.md`,
+  `lib/aether/aether.help.md`, `lib/build/build.help.md`; they ride
+  inside the module dirs so `aeb --init`'s `.aeb/lib/<name>` symlinks
+  carry them. Two residual `ae help` quirks (still open): namespaced
+  library calls are reported as `undefined function` even with
+  `--lib`, and a hint fires once per `import` of its module — so
+  aeb's mandatory two-import idiom doubles each hint. See TODO.md.
 - **0.150 multi-entry `--lib` search path** — `--lib a --lib b` or
   PATH-style `--lib a:b`; `AETHER_LIB_DIR` takes a list too. **Now
   consumed**: `tests/run.sh` builds with `--lib lib --lib tools`,
@@ -619,6 +632,16 @@ exists if a need arises."
   and may be variadic** — an `@extern`-annotated binding is now part
   of a module's public surface. Same "no aeb consumer today" note as
   the 0.160 FFI cluster.
+- **0.162 + `[current]` — four fixes aeb filed upstream** (see
+  `../aether/aeb-ae-help-and-toolchain-feedback.md`). 0.162: `make
+  install` warns when a stale `$PREFIX/current` symlink would shadow
+  a fresh install (the bug that made `import std.strbuilder` fail at
+  link). `[current]` (post-0.162, dev builds report 0.162.0):
+  `ae help` accepts `--lib`; `*.help.md` hint files read from `--lib`
+  roots; bare `_` is a per-use discard, not one type-bound variable
+  (`_ = os.system(...)` after a string-typed `_` destructure no
+  longer fails codegen); `ae build` warns on a compiler/`libaether.a`
+  version mismatch instead of failing cryptically at link.
 
 A note on resolution order: an `ae` binary installed under
 `~/.local/bin/` will pick up contrib modules from
