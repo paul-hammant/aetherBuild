@@ -863,6 +863,12 @@ aether_link_cmd(opts: ptr) {
 //   "stale"    — .c older than .ae; must regenerate
 //   "skip"     — .c is fresh; no work
 // Pure: just integer comparisons. Tested in tests/test_aether_helpers.ae.
+//
+// This helper is deliberately mtime-only and knows nothing about the
+// toolchain. Toolchain-staleness — regenerating when aetherc itself
+// is newer than the .c — is handled by the *caller* `_run_regen_pass`
+// (it upgrades a "skip" to "toolchain"). Don't read this function in
+// isolation and conclude the regen pass is toolchain-blind; it isn't.
 _regen_action(ae_mtime: int, c_mtime: int) {
     if c_mtime == 0 { return "missing" }
     if c_mtime < ae_mtime { return "stale" }
