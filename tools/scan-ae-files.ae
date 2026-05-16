@@ -14,6 +14,7 @@ import std.file
 import std.fs
 import std.io
 import std.os
+import std.strbuilder
 
 extern println(s: string)
 
@@ -115,20 +116,23 @@ main() {
     // then sort via the system `sort` command (a tiny shell-out for ordering
     // only — no logic). This keeps the tool deterministic on every platform
     // that ships /usr/bin/sort or busybox sort.
-    buf = ""
+    // strbuilder keeps this amortised O(1) per path — the buffer
+    // scales with total .ae-file count across the whole monorepo.
+    sb = strbuilder.new(4096)
     i = 0
     while i < n {
         raw = dir_list_get(files, i)
         clean = strip_dot_slash(raw)
         if is_excluded(clean, excludes) == 0 {
-            if string.length(buf) > 0 {
-                buf = string.concat(buf, "\n")
+            if strbuilder.length(sb) > 0 {
+                strbuilder.append(sb, "\n")
             }
-            buf = string.concat(buf, clean)
+            strbuilder.append(sb, clean)
         }
         i = i + 1
     }
     dir_list_free(files)
+    buf = strbuilder.finish(sb)
 
     if string.length(buf) == 0 {
         return 0

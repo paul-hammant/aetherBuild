@@ -2,94 +2,19 @@
 // derivation that disambiguates multiple .build*.ae / .tests*.ae /
 // .dist*.ae files in the same directory.
 //
-// The logic exists in three places (tools/file-to-label.ae,
-// tools/gen-orchestrator.ae, tools/aeb-link.ae) — this test file
-// exercises tools/file-to-label.ae as the canonical version.
+// This imports the SAME `aeblabel` module that tools/file-to-label.ae,
+// tools/gen-orchestrator.ae and tools/aeb-link.ae import. There is no
+// inlined copy any more — the three former copies were consolidated
+// into tools/aeblabel/module.ae, so this test exercises the exact
+// code the build path runs. Drift is structurally impossible: there
+// is only one implementation. (tests/run.sh builds with `--lib lib
+// --lib tools` so the import resolves — multi-entry --lib, aether
+// 0.150.)
 import std.string
-import std.io
-import std.os
-import std.file
-import std.fs
-import std.list
-import std.map
-import std.path
-import std.dir
 
 extern println(s: string)
 
-// Inline copies of the helpers under test. Tests/run.sh builds
-// each test_*.ae standalone with --lib pointing at the project
-// lib/ — but tools/ isn't on that path, so the helpers can't be
-// imported. Inlining matches the existing test convention (see
-// test_encode_name.ae).
-
-infer_type(file: string) {
-    if string.ends_with(file, ".tests.ae") == 1 { return "test" }
-    if string.ends_with(file, ".dist.ae") == 1 { return "dist" }
-    if string.index_of(file, ".tests-") >= 0 { return "test" }
-    if string.index_of(file, ".dist-") >= 0 { return "dist" }
-    return "build"
-}
-
-dirname_pure(p: string) {
-    n = string.length(p)
-    last = -1
-    i = 0
-    while i < n {
-        ch = string.substring(p, i, i + 1)
-        if string.index_of(ch, "/") == 0 { last = i }
-        i = i + 1
-    }
-    if last < 0 { return "." }
-    if last == 0 { return "/" }
-    return string.substring(p, 0, last)
-}
-
-basename_pure(p: string) {
-    n = string.length(p)
-    last = -1
-    i = 0
-    while i < n {
-        ch = string.substring(p, i, i + 1)
-        if string.index_of(ch, "/") == 0 { last = i }
-        i = i + 1
-    }
-    if last < 0 { return p }
-    return string.substring(p, last + 1, n)
-}
-
-extract_tag(file: string) {
-    base = basename_pure(file)
-    n = string.length(base)
-    if n < 4 { return "" }
-    if string.ends_with(base, ".ae") == 0 { return "" }
-    stem = string.substring(base, 0, n - 3)
-    sn = string.length(stem)
-    if sn == 0 { return "" }
-    if string.equals(string.substring(stem, 0, 1), ".") == 0 { return "" }
-    body = string.substring(stem, 1, sn)
-    bn = string.length(body)
-    j = 0
-    while j < bn {
-        ch = string.substring(body, j, j + 1)
-        if string.equals(ch, "-") == 1 {
-            return string.substring(body, j + 1, bn)
-        }
-        j = j + 1
-    }
-    return ""
-}
-
-file_to_label(file: string) {
-    type = infer_type(file)
-    dir = dirname_pure(file)
-    tag = extract_tag(file)
-    suffix = ""
-    if string.length(tag) > 0 { suffix = string.concat(":", tag) }
-    if type == "test" { return string.concat(string.concat("test:", dir), suffix) }
-    if type == "dist" { return string.concat(string.concat("dist:", dir), suffix) }
-    return string.concat(dir, suffix)
-}
+import aeblabel (extract_tag, file_to_label)
 
 _assert_eq(label: string, actual: string, expected: string) {
     if actual == expected {

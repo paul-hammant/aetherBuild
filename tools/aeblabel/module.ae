@@ -1,0 +1,139 @@
+// aeblabel — the single canonical implementation of build-file
+// label / tag derivation, shared by every tool that needs it.
+//
+// Historically this logic was copy-pasted into three places
+// (tools/file-to-label.ae, tools/gen-orchestrator.ae,
+// tools/aeb-link.ae) with no drift detection — TODO.md § Test
+// coverage gaps tracked the hazard. Multi-entry `--lib` (aether
+// 0.150) made it possible to keep tool sources importable, so the
+// three copies now collapse to this one module. Every consumer
+// does `import aeblabel (...)`; `tests/test_file_to_label.ae`
+// imports the same module, so the test exercises the real code
+// rather than a fourth inlined copy.
+//
+// Label grammar (see tools/file-to-label.ae for the CLI):
+//
+//   path/to/.build.ae          → "path/to"
+//   path/to/.build-seed.ae     → "path/to:seed"
+//   path/to/.tests.ae          → "test:path/to"
+//   path/to/.tests-extra.ae    → "test:path/to:extra"
+//   path/to/.dist.ae           → "dist:path/to"
+//   path/to/.dist-fat.ae       → "dist:path/to:fat"
+//
+// The `:tag` suffix lets multiple .build*.ae / .tests*.ae /
+// .dist*.ae files coexist in one directory without colliding on
+// build.begin's visited-set dedup. Canonical (untagged) names keep
+// today's labels unchanged.
+
+import std.string
+
+// Classify a build file by filename suffix: "test" / "dist" /
+// "build" (the default when no suffix matches).
+infer_type(file: string) {
+    if string.ends_with(file, ".tests.ae") == 1 {
+        return string.concat("test", "")
+    }
+    if string.ends_with(file, ".dist.ae") == 1 {
+        return string.concat("dist", "")
+    }
+    if string.index_of(file, ".tests-") >= 0 {
+        return string.concat("test", "")
+    }
+    if string.index_of(file, ".dist-") >= 0 {
+        return string.concat("dist", "")
+    }
+    return string.concat("build", "")
+}
+
+// dirname: last '/'-bounded prefix, or "." if no slash. Pure — no
+// shell `dirname` call, so it is cross-platform and subprocess-free.
+dirname_pure(path: string) {
+    n = string.length(path)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(path, i, i + 1)
+        if string.index_of(ch, "/") == 0 {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 {
+        return string.concat(".", "")
+    }
+    if last == 0 {
+        return string.concat("/", "")
+    }
+    return string.substring(path, 0, last)
+}
+
+// basename: the final '/'-bounded component, or the whole path if
+// there is no slash.
+basename_pure(path: string) {
+    n = string.length(path)
+    last = -1
+    i = 0
+    while i < n {
+        ch = string.substring(path, i, i + 1)
+        if string.index_of(ch, "/") == 0 {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 { return path }
+    return string.substring(path, last + 1, n)
+}
+
+// Extract the tag suffix from a .build*.ae / .tests*.ae / .dist*.ae
+// filename. Returns "" for the canonical .{type}.ae (no tag), or the
+// tag part otherwise — the tag may itself contain dashes.
+//
+//   .build.ae         → ""
+//   .build-seed.ae    → "seed"
+//   .build-foo-bar.ae → "foo-bar"
+//   .tests-int.ae     → "int"
+//   .dist-fat.ae      → "fat"
+extract_tag(file: string) {
+    base = basename_pure(file)
+    n = string.length(base)
+    // Strip trailing ".ae"
+    if n < 4 { return string.concat("", "") }
+    if string.ends_with(base, ".ae") == 0 { return string.concat("", "") }
+    stem = string.substring(base, 0, n - 3)
+    // Strip leading "."
+    sn = string.length(stem)
+    if sn == 0 { return string.concat("", "") }
+    first = string.substring(stem, 0, 1)
+    if string.equals(first, ".") == 0 { return string.concat("", "") }
+    body = string.substring(stem, 1, sn)
+    // body is now "build" / "build-seed" / "tests-int" / "dist" / etc.
+    // Look for first '-'; everything after it is the tag.
+    bn = string.length(body)
+    j = 0
+    while j < bn {
+        ch = string.substring(body, j, j + 1)
+        if string.equals(ch, "-") == 1 {
+            return string.substring(body, j + 1, bn)
+        }
+        j = j + 1
+    }
+    return string.concat("", "")
+}
+
+// Derive the full build.begin() label for a build file path.
+file_to_label(file: string) {
+    type = infer_type(file)
+    dir = dirname_pure(file)
+    tag = extract_tag(file)
+    suffix = string.concat("", "")
+    if string.length(tag) > 0 {
+        suffix = string.concat(":", tag)
+    }
+    if type == "test" {
+        return string.concat(string.concat("test:", dir), suffix)
+    }
+    if type == "dist" {
+        return string.concat(string.concat("dist:", dir), suffix)
+    }
+    return string.concat(dir, suffix)
+}

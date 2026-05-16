@@ -194,11 +194,17 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
   exporter SDKs (`nix.derivation`, `deb.control`): each is just
   another `builder` that consumes the shared `meta` map. **No
   CLI flag** — distribution is a target type, not a switch.
-- `tools/file-to-label.ae` / `tools/aeb-link.ae` / `tools/gen-orchestrator.ae`
-  — three copies of the `file_to_label` logic that disambiguates
-  multiple `.build*.ae` per directory. **They must stay in sync.**
-  Tracked in `TODO.md` § Test coverage gaps. No drift detection
-  today.
+- `tools/aeblabel/module.ae` — the single canonical implementation
+  of build-file label/tag derivation (`file_to_label`, `extract_tag`,
+  `infer_type`, `dirname_pure`, `basename_pure`) that disambiguates
+  multiple `.build*.ae` per directory. `tools/file-to-label.ae` (a
+  thin CLI), `tools/gen-orchestrator.ae` and `tools/aeb-link.ae` all
+  `import aeblabel`; `tests/test_file_to_label.ae` imports the same
+  module, so the test exercises the real build-path code. Tool
+  builds pass `--lib tools` (Makefile `AEFLAGS`, plus the lazy-build
+  commands in `aeb-main`/`aeb-link`) so the import resolves. This was
+  three drifting copies until the multi-`--lib` (aether 0.150)
+  consolidation — see `TODO.md` § Three-copy `file_to_label`.
 - `lib/build/module.ae` — the core API: `build.start()`,
   `build.begin()`, `build.dep()`, `build._get()`, artifact helpers.
   Every language SDK depends on this. Also hosts shared **fixture
@@ -247,8 +253,9 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
   Ship-or-decline decisions live in commit messages alongside the
   implementation (or absence thereof).
 - `TODO.md` — roadmap + known gaps. Section "Test coverage gaps"
-  documents three deferred items (regen pass integration, parallel
-  + hooks, three-copy `file_to_label`).
+  documents two deferred items (regen pass integration, parallel +
+  hooks); the third — three-copy `file_to_label` — is now resolved
+  by the `tools/aeblabel` consolidation.
 - `Makefile` — `make build` (pre-build tools), `make install`
   (proper copy install to `$PREFIX/share/aeb` + wrapper),
   `make uninstall`, `make clean`.
@@ -416,10 +423,11 @@ these are absolute, but skipping them tends to produce regrets.
   which already parses it.
 - Don't add domain-specific builders to generic SDKs. If three
   downstreams want the same shape, factor; until then, push back.
-- Don't refactor the three-copy `file_to_label` duplication
-  speculatively. The right consolidation needs `tools/` reachable
-  via `--lib`, which is a harness change. Tracked in TODO.md §
-  Test coverage gaps; revisit when there's a concrete reason.
+- Don't re-inline `file_to_label` / `extract_tag` logic into a
+  tool. `tools/aeblabel/module.ae` is the one canonical copy; a tool
+  that needs it does `import aeblabel (...)` and is built with
+  `--lib tools`. The historical three-copy duplication is gone —
+  keep it that way.
 - Don't break the visited-set dedup contract. Two `.build*.ae` in
   the same dir get distinct labels via the `:tag` suffix; strip
   the tag before deriving filesystem paths but keep it in the
@@ -444,11 +452,13 @@ LLM-session notes — if you see one in a diff, it's probably stale):
   for stdlib symbols (the same anti-pattern aeocha hit, see
   `../aether/extern_mistake.md`). Migrated to idiomatic
   `import std.{string,file,os,list,map}` + dot-form calls. Now
-  builds and is in `INSTALL_TOOLS`. The defensive `string.concat(x, "")`
-  copies inside the dep-walk loop are a workaround for
-  aether 0.147 Regression A (filed in
-  `../aether/string_alias_reassign_uaf_followup.md`) — remove once
-  upstream lands `@retain` on stdlib `list_add`.
+  builds and is in `INSTALL_TOOLS`.
+- ~~Defensive `string.concat(x, "")` copies in `gcheckout`'s
+  dep-walk loop~~ — were a workaround for aether 0.147 Regression A
+  (heap-string alias passed to `list.add` not escape-marked, freed
+  by the next reassign-wrapper). Fixed upstream: 0.149.0 +
+  0.151.0 made heap-string alias-into-`list.add` transfer ownership
+  cleanly. Copies removed; `list.add(queue, dword)` is direct now.
 
 ## Recent upstream Aether features aeb could lean on
 
@@ -542,6 +552,73 @@ exists if a need arises."
   e.g. `2/3 FAIL` instead of binary-level `0/1 FAIL`. Hand-rolled
   drivers (no Aeocha) emit no report; aeb falls back to
   exit-code mapping (`0 → 1/0`, non-zero → `0/1`).
+- **0.146 `@heap` on single-value extern returns** —
+  `extern foo(...) -> string @heap` opts a malloc'd-buffer-returning
+  extern into the heap-string tracker so the caller's free fires.
+  aeb has no such externs today (every SDK shells out via
+  `os.system`); flagged for future SDK work that binds a C library
+  directly.
+- **0.147–0.161 heap-string ownership hardening** — a long run of
+  aetherc codegen fixes to the heap-string lifetime tracker (alias
+  ownership transfer, return-escape, cross-fn recursion,
+  interp-as-arg, `bytes.finish` return-value leak). Net effect for
+  aeb: the `string.concat` accumulator loops across the SDKs (e.g.
+  `bash_runner_body`, `_csv_split`, fixture-line emission) are
+  reclaimed correctly and no longer UAF or leak. aeb's two filed
+  0.147 regressions (A and B) are closed — see TODO.md § Aether
+  compiler issues. Nothing to consume; rebuilding under 0.161 just
+  gets correct memory behaviour.
+- **0.150 `ae help <script>`** — offline closure-DSL diagnostics:
+  Levenshtein typo matches, YAML/HCL→call-form rewrites,
+  missing-import detection, all on-machine with zero network. A
+  library author can ship a `<name>.help.md` whose
+  ``Pattern: `name` `` sections fire when `name(` appears in a
+  script — **but `find_help_md_path` (aether `tools/ae_help.c`)
+  probes only the stdlib root**, so a `lib/<sdk>/<sdk>.help.md` aeb
+  ships would never be read. Not usable for aeb's SDKs until
+  upstream extends hint-file lookup to `--lib` roots — tracked in
+  TODO.md § Aether compiler issues.
+- **0.150 multi-entry `--lib` search path** — `--lib a --lib b` or
+  PATH-style `--lib a:b`; `AETHER_LIB_DIR` takes a list too. **Now
+  consumed**: `tests/run.sh` builds with `--lib lib --lib tools`,
+  which let the three-copy `file_to_label` duplication consolidate
+  into the single `tools/aeblabel` module (see § Files/dirs and
+  TODO.md § Three-copy `file_to_label`). Tool builds also thread
+  `--lib tools` via the Makefile `AEFLAGS`.
+- **0.152 `std.lzf`** — one-shot LZF compress/decompress. aeb's
+  `lib/cache` uses sha256 + zlib; LZF is a lighter
+  (size-vs-speed-tilted) alternative if cache-blob compression ever
+  becomes a bottleneck. Not consumed.
+- **0.153 `uint64` + wide prefixed-integer literals** — first-class
+  `uint64`; `0x`/`0o`/`0b` literals no longer truncated by an
+  intermediate `strtol`. Relevant if aeb ever grows 64-bit hashing
+  inline (today sha256 is a shelled-out tool). `-Wstrict-prototypes`-
+  clean codegen also landed — aeb-generated programs compile clean
+  under stricter gcc.
+- **0.159 + 0.161 `std.strbuilder`** — amortised-O(1) string builder
+  (`new` / `append` / `length` / `finish`), the proper fix for the
+  O(N²) `out = string.concat(out, chunk)` loop idiom. v2 (0.161)
+  adds `append_long`, `append_hex`, `append_format`, `truncate`,
+  `clear`, and binary-safe `finish_with_length`. **Partly consumed**:
+  the per-build / per-scan accumulator loops that scale with repo
+  size now use it — `tools/scan-ae-files.ae` (the monorepo-wide
+  `.ae`-file buffer), `tools/aeb-graph.ae` (`dot_render` /
+  `mermaid_render` / `mermaid_id`), and the file-list / object-list
+  loops in `tools/aeb-link.ae`. The fixed-arity per-command builders
+  in `lib/<lang>/` were deliberately left on `string.concat` — N is
+  small and constant there, so strbuilder would add verbosity for no
+  algorithmic gain. Adopt it for a new loop only when N genuinely
+  scales.
+- **0.160 variadic externs, typed C function-pointers,
+  `extern struct`, `std.mem`** — FFI-heavy additions (raw-pointer
+  access, declared C struct layouts, `fn(T) -> R` typed
+  fn-pointers). aeb does no direct C FFI in its SDKs (everything
+  shells out), so these are off aeb's path today; noted for
+  completeness.
+- **0.161 `@extern("sym")` declarations cross the `import` boundary
+  and may be variadic** — an `@extern`-annotated binding is now part
+  of a module's public surface. Same "no aeb consumer today" note as
+  the 0.160 FFI cluster.
 
 A note on resolution order: an `ae` binary installed under
 `~/.local/bin/` will pick up contrib modules from

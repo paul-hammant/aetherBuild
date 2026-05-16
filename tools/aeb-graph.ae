@@ -20,6 +20,7 @@ import std.io
 import std.os
 import std.list
 import std.map
+import std.strbuilder
 
 extern println(s: string)
 extern exit(code: int)
@@ -37,26 +38,26 @@ node_id(path: string) {
 // munged ID is only ever a graph internal.
 mermaid_id(path: string) {
     n = string.length(path)
-    out = ""
+    sb = strbuilder.new(n + 1)
     i = 0
     while i < n {
         ch = string.substring(path, i, i + 1)
         if string.equals(ch, "/") == 1 {
-            out = string.concat(out, "_")
+            strbuilder.append(sb, "_")
         } else {
             if string.equals(ch, ".") == 1 {
-                out = string.concat(out, "_")
+                strbuilder.append(sb, "_")
             } else {
                 if string.equals(ch, "-") == 1 {
-                    out = string.concat(out, "_")
+                    strbuilder.append(sb, "_")
                 } else {
-                    out = string.concat(out, ch)
+                    strbuilder.append(sb, ch)
                 }
             }
         }
         i = i + 1
     }
-    return out
+    return strbuilder.finish(sb)
 }
 
 // Split a buffer on '\n' into a list. Trailing empty line ignored.
@@ -140,18 +141,19 @@ _collect_nodes(edges_text: string) {
 // auto-declare from edge usage, but explicit lines make per-node
 // styling/attribute additions trivial later).
 dot_render(edges_text: string) {
-    out = "digraph aeb {\n"
-    out = string.concat(out, "  rankdir=LR;\n")
-    out = string.concat(out, "  node [shape=box, fontname=\"Helvetica\"];\n")
+    sb = strbuilder.new(1024)
+    strbuilder.append(sb, "digraph aeb {\n")
+    strbuilder.append(sb, "  rankdir=LR;\n")
+    strbuilder.append(sb, "  node [shape=box, fontname=\"Helvetica\"];\n")
 
     nodes = _collect_nodes(edges_text)
     nn = list.size(nodes)
     k = 0
     while k < nn {
         node, _ = list.get(nodes, k)
-        out = string.concat(out, "  ")
-        out = string.concat(out, node_id(node))
-        out = string.concat(out, ";\n")
+        strbuilder.append(sb, "  ")
+        strbuilder.append(sb, node_id(node))
+        strbuilder.append(sb, ";\n")
         k = k + 1
     }
 
@@ -169,19 +171,19 @@ dot_render(edges_text: string) {
                 j = 1
                 while j < tn {
                     dep, _ = list.get(tokens, j)
-                    out = string.concat(out, "  ")
-                    out = string.concat(out, src_id)
-                    out = string.concat(out, " -> ")
-                    out = string.concat(out, node_id(dep))
-                    out = string.concat(out, ";\n")
+                    strbuilder.append(sb, "  ")
+                    strbuilder.append(sb, src_id)
+                    strbuilder.append(sb, " -> ")
+                    strbuilder.append(sb, node_id(dep))
+                    strbuilder.append(sb, ";\n")
                     j = j + 1
                 }
             }
         }
         i = i + 1
     }
-    out = string.concat(out, "}\n")
-    return out
+    strbuilder.append(sb, "}\n")
+    return strbuilder.finish(sb)
 }
 
 // Render the edges text as a Mermaid flowchart. Output is a complete
@@ -189,7 +191,8 @@ dot_render(edges_text: string) {
 // fence. Node IDs are munged (no / or . allowed); display labels
 // preserve the original path via `id["path"]` declarations.
 mermaid_render(edges_text: string) {
-    out = "graph TD\n"
+    sb = strbuilder.new(1024)
+    strbuilder.append(sb, "graph TD\n")
 
     // Emit node declarations with display labels first, so the
     // edges below render against named nodes rather than introducing
@@ -199,11 +202,11 @@ mermaid_render(edges_text: string) {
     k = 0
     while k < nn {
         node, _ = list.get(nodes, k)
-        out = string.concat(out, "    ")
-        out = string.concat(out, mermaid_id(node))
-        out = string.concat(out, "[\"")
-        out = string.concat(out, node)
-        out = string.concat(out, "\"]\n")
+        strbuilder.append(sb, "    ")
+        strbuilder.append(sb, mermaid_id(node))
+        strbuilder.append(sb, "[\"")
+        strbuilder.append(sb, node)
+        strbuilder.append(sb, "\"]\n")
         k = k + 1
     }
 
@@ -221,18 +224,18 @@ mermaid_render(edges_text: string) {
                 j = 1
                 while j < tn {
                     dep, _ = list.get(tokens, j)
-                    out = string.concat(out, "    ")
-                    out = string.concat(out, src_id)
-                    out = string.concat(out, " --> ")
-                    out = string.concat(out, mermaid_id(dep))
-                    out = string.concat(out, "\n")
+                    strbuilder.append(sb, "    ")
+                    strbuilder.append(sb, src_id)
+                    strbuilder.append(sb, " --> ")
+                    strbuilder.append(sb, mermaid_id(dep))
+                    strbuilder.append(sb, "\n")
                     j = j + 1
                 }
             }
         }
         i = i + 1
     }
-    return out
+    return strbuilder.finish(sb)
 }
 
 main() {

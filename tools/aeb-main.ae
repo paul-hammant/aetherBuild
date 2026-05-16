@@ -223,7 +223,8 @@ main() {
     }
     aeb_link_bin = string.concat(aebhome, "/tools/aeb-link")
     if file.exists(aeb_link_bin) == 0 {
-        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/aeb-link.ae -o "), string.concat(aeb_link_bin, " >/dev/null 2>&1"))))
+        // --lib <aebhome>/tools resolves aeb-link's `import aeblabel`.
+        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/aeb-link.ae -o "), string.concat(aeb_link_bin, string.concat(" --lib ", string.concat(aebhome, "/tools >/dev/null 2>&1"))))))
     }
     aeb_graph_bin = string.concat(aebhome, "/tools/aeb-graph")
     if file.exists(aeb_graph_bin) == 0 {

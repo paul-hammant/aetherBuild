@@ -20,6 +20,10 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIB_DIR="$REPO_ROOT/lib"
+# tools/ carries the shared `aeblabel` module (tools/aeblabel/module.ae)
+# that test_file_to_label.ae imports. Multi-entry --lib (aether 0.150)
+# lets every test see both roots; harmless for tests that use neither.
+TOOLS_DIR="$REPO_ROOT/tools"
 
 AETHER="${AETHER:-ae}"
 PATTERN="${1:-}"
@@ -107,7 +111,7 @@ for test_file in $test_files; do
     printf '  %s ' "$(pad_name "$base")"
 
     # Build
-    if ! AETHER_HOME="" "$AETHER" build "$test_file" -o "$bin" --lib "$LIB_DIR" \
+    if ! AETHER_HOME="" "$AETHER" build "$test_file" -o "$bin" --lib "$LIB_DIR" --lib "$TOOLS_DIR" \
             >"$build_log" 2>&1; then
         build_failed=$((build_failed + 1))
         # Extract first meaningful error line for the summary

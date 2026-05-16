@@ -72,12 +72,7 @@ walk(start: string, extract_deps_bin: string) {
     visited = map.new()
     visited_dirs = map.new()
     queue = list.new()
-    // Defensive `string.concat(x, "")` copies on list.add — workaround
-    // for aeb's filed Regression A (heap-string alias passed to list.add
-    // not escape-marked, freed by next reassign-wrapper). See
-    // ../aether/string_alias_reassign_uaf_followup.md. Remove once
-    // upstream lands @retain on stdlib list_add's val param.
-    list.add(queue, string.concat(start, ""))
+    list.add(queue, start)
     map.put(visited, start, "1")
 
     head = 0
@@ -114,9 +109,7 @@ walk(start: string, extract_deps_bin: string) {
                 if map.has(visited, dword) == 0 {
                     if file.exists(dword) == 1 {
                         map.put(visited, dword, "1")
-                        // Defensive copy — see workaround note at the
-                        // list.add(queue, start) call above.
-                        list.add(queue, string.concat(dword, ""))
+                        list.add(queue, dword)
                         qs = qs + 1
                     }
                 }

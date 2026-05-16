@@ -477,32 +477,31 @@ between lock file and resolved deps.
       `../aether/CHANGELOG.md` § [0.147.0]). Cleared three of the
       four downstream failures (`test_brew`, `test_telemetry_render`,
       `test_affected_targets`).
-- [ ] **0.147 regression: `list.add` of a heap-string alias doesn't
-      count as escape.** Heap-tracked locals passed to `list.add`
-      inside a split-string loop get freed by the next iteration's
-      reassign-wrapper; the list ends up with dangling pointers.
-      Visible failure: `test_java_cache` (was passing on 0.146).
-      Likely-vulnerable downstream sites that haven't surfaced yet:
-      `_csv_split` and the fixture-line emission loop in
-      `lib/build/module.ae`. Filed upstream as Regression A in
-      `../aether/string_alias_reassign_uaf_followup.md`. Suggested
-      fix: extend `@retain` annotation surface (parallel to 0.146's
-      `@heap`) to the stdlib `list_add` / `map_put` value param.
-- [ ] **0.147 regression: tuple-destructure reassign of a
-      string-interp variable double-frees at function exit.** 8-line
-      repro: `x = "${y}*"; x, _ = map.get(opts, k); // SIGABRT`. The
-      destructure-wrapper appears to inherit `_heap_<lhs>` from the
-      prior interp assignment instead of recomputing from
-      `map.get`'s position-0 borrow classification. Visible failure:
-      `test_pyproject_content` (crashes mid-suite). Filed upstream as
-      Regression B in `../aether/string_alias_reassign_uaf_followup.md`.
-- [ ] **0.146 regression: bare `_` as discard target rejected.**
-      `_ = os.system(...)` now fails codegen with
-      `assignment to ‘const char *’ from ‘int’ makes pointer from
-      integer without a cast`. Workaround: rename to `_status` or
-      similar (any identifier with a trailing non-`_` char). Applied
-      at `tests/test_cache.ae:138`; only one site in the tree.
-      Persists on 0.147.0 — not fixed by the alias-transfer landing.
+- [x] **0.147 regression: `list.add` of a heap-string alias doesn't
+      count as escape.** Fixed upstream — 0.149.0 cleared the
+      escaped-LHS-alias source flag, and 0.151.0 replaced that with a
+      full ownership transfer (heap flag moves on alias). See
+      `../aether/CHANGELOG.md` §§ [0.149.0] (Regression A) and
+      [0.151.0]. `test_java_cache` passes on 0.161.0; the defensive
+      `string.concat(x, "")` copies in `tools/gcheckout.ae`'s
+      dep-walk loop were removed (verified with a dep-chain run).
+- [x] **0.147 regression: tuple-destructure reassign of a
+      string-interp variable double-frees at function exit.** Fixed
+      upstream in 0.149.0 — the destructure-wrapper-emission gate now
+      fires whenever the LHS is heap-tracked, regardless of the
+      destructure position's type, freeing the prior heap value and
+      treating the non-string position as a borrow. See
+      `../aether/CHANGELOG.md` § [0.149.0] (Regression B).
+      `test_pyproject_content` passes on 0.161.0.
+- [ ] **0.146 regression: bare `_` is a single type-bound variable,
+      not a per-use fresh discard.** Once `_` is bound to a type by
+      its first use (e.g. the error position of `x, _ = os.exec(...)`,
+      typed `const char*`), a later `_ = os.system(...)` assigns an
+      `int` into the same slot and codegen fails with `assignment to
+      ‘const char *’ from ‘int’ makes pointer from integer without a
+      cast`. Workaround: rename the int-typed site to `_status` or
+      similar. Applied at `tests/test_cache.ae:138`; only one site in
+      the tree. Persists on 0.161.0.
 - [ ] `module` as a variable name silently breaks codegen — should be
       a reserved word or the codegen should handle it
 - [ ] Module function return type inference fails when first `return`
@@ -542,6 +541,17 @@ between lock file and resolved deps.
       `test_junit_cmd.ae`, `test_kotlinc_cmd.ae` via `./tests/run.sh`.
       Likely a qualified-symbol resolution issue across two levels of
       module imports.
+- [ ] **`ae help` library hint files (`*.help.md`) are stdlib-only.**
+      The 0.150 `ae help` feature loads library-author `<name>.help.md`
+      hint files, but `find_help_md_path` (`aether/tools/ae_help.c`)
+      probes only the stdlib root — explicit `"Stdlib only"` comment,
+      confirmed on 0.161.0. aeb's SDKs are user libs resolved via
+      `--lib lib`, so `ae help` cannot read a `lib/<sdk>/<sdk>.help.md`
+      we ship — the files would be dead weight. Blocks aeb (and any
+      project shipping its own SDKs) from giving `.build.ae` authors
+      targeted setter hints. Upstream fix: have `find_help_md_path`
+      also probe each `--lib` entry's `<name>/` dir. Until then, don't
+      ship aeb-side `.help.md` files.
 
 ## Build environment validation
 
@@ -636,32 +646,25 @@ a way to assert the resulting parallel runtime ordering, which is
 non-deterministic. End-to-end smoke (`/tmp/aeb-bash-smoke`) covers
 this today.
 
-### Three-copy `file_to_label` drift detection
+### Three-copy `file_to_label` drift detection — RESOLVED
 
-The label-derivation logic exists in three places that must stay in
-sync: `tools/file-to-label.ae`, `tools/gen-orchestrator.ae`,
-`tools/aeb-link.ae`. Round-218 commit `41d5ffa` updated all three
-together; nothing today catches drift if a future change touches
-one but not the others.
+~~The label-derivation logic exists in three places that must stay
+in sync.~~ Consolidated. The three former copies
+(`tools/file-to-label.ae`, `tools/gen-orchestrator.ae`,
+`tools/aeb-link.ae`) now all `import aeblabel` from the single
+canonical module `tools/aeblabel/module.ae`. `tests/run.sh` builds
+with `--lib lib --lib tools` (multi-entry `--lib`, aether 0.150) so
+`tests/test_file_to_label.ae` imports the *same* module the build
+path runs — no fourth inlined copy. Drift is now structurally
+impossible: there is one implementation. Tool builds thread
+`--lib tools` through the Makefile (`AEFLAGS`), `aeb-main`'s
+aeb-link build, and `aeb-link`'s gen-orchestrator build.
 
-A drift-detection test would `import` all three `file_to_label`
-implementations and assert they produce identical output for a
-representative input set — but `tests/run.sh` builds each test
-with `--lib lib`, and `tools/` isn't on that path. Two options:
-
-- Make `tests/run.sh` add `tools/` to `--lib` for tests that
-  import from there. Touches the harness.
-- Consolidate the three copies into one shared library function
-  (probably under `lib/build/` or a new `lib/aeb_internal/`).
-  Harder — `gen-orchestrator` and `aeb-link` are standalone tools
-  built independently, so the shared helper has to be a pure-Aether
-  source-import, not a runtime dependency. This is the right
-  long-term fix.
-
-Until either lands, the test_file_to_label.ae file pins the
-canonical implementation's behaviour, and a future drift in
-`gen-orchestrator.ae` or `aeb-link.ae` would only surface as a
-runtime bug, not a test failure.
+Consolidation also closed three latent inconsistencies the copies
+had drifted into: `gen-orchestrator` classified types with
+`string.contains` (vs `ends_with`) and computed dirname via a
+`os.exec("dirname ...")` subprocess (vs the pure `dirname_pure`);
+`aeb-link` open-coded suffix slicing in `infer_type`.
 
 ## Container SDK — Proxmox support
 

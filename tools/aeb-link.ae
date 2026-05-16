@@ -31,6 +31,11 @@ import std.fs
 import std.io
 import std.os
 import std.list
+import std.strbuilder
+
+// Label / tag derivation is shared via the aeblabel module (built
+// with `--lib tools`) — one canonical copy, no drift across tools.
+import aeblabel (infer_type, dirname_pure, extract_tag, file_to_label)
 
 extern println(s: string)
 extern exit(code: int)
@@ -119,101 +124,6 @@ encode_name(input: string) {
     return string.concat(s, "")
 }
 
-infer_type(file: string) {
-    n = string.length(file)
-    if n >= 9 {
-        suf = string.substring(file, n - 9, n)
-        if suf == ".tests.ae" {
-            return string.concat("test", "")
-        }
-    }
-    if n >= 8 {
-        suf = string.substring(file, n - 8, n)
-        if suf == ".dist.ae" {
-            return string.concat("dist", "")
-        }
-    }
-    if string.index_of(file, ".tests-") >= 0 {
-        return string.concat("test", "")
-    }
-    if string.index_of(file, ".dist-") >= 0 {
-        return string.concat("dist", "")
-    }
-    return string.concat("build", "")
-}
-
-dirname_pure(path: string) {
-    n = string.length(path)
-    last = -1
-    i = 0
-    while i < n {
-        ch = string.substring(path, i, i + 1)
-        if ch == "/" {
-            last = i
-        }
-        i = i + 1
-    }
-    if last < 0 { return string.concat(".", "") }
-    if last == 0 { return string.concat("/", "") }
-    return string.substring(path, 0, last)
-}
-
-basename_pure(path: string) {
-    n = string.length(path)
-    last = -1
-    i = 0
-    while i < n {
-        ch = string.substring(path, i, i + 1)
-        if ch == "/" {
-            last = i
-        }
-        i = i + 1
-    }
-    if last < 0 { return path }
-    return string.substring(path, last + 1, n)
-}
-
-// Tag suffix for .{build,tests,dist}-<tag>.ae filenames. Returns "" for
-// canonical names. See tools/file-to-label.ae for the full spec.
-extract_tag(file: string) {
-    base = basename_pure(file)
-    n = string.length(base)
-    if n < 4 { return string.concat("", "") }
-    if string.ends_with(base, ".ae") == 0 { return string.concat("", "") }
-    stem = string.substring(base, 0, n - 3)
-    sn = string.length(stem)
-    if sn == 0 { return string.concat("", "") }
-    if string.equals(string.substring(stem, 0, 1), ".") == 0 { return string.concat("", "") }
-    body = string.substring(stem, 1, sn)
-    bn = string.length(body)
-    j = 0
-    while j < bn {
-        ch = string.substring(body, j, j + 1)
-        if ch == "-" {
-            return string.substring(body, j + 1, bn)
-        }
-        j = j + 1
-    }
-    return string.concat("", "")
-}
-
-file_to_label(file: string) {
-    type = infer_type(file)
-    dir = dirname_pure(file)
-    tag = extract_tag(file)
-    suffix = string.concat("", "")
-    if string.length(tag) > 0 {
-        suffix = string.concat(":", tag)
-    }
-    if type == "test" {
-        return string.concat(string.concat("test:", dir), suffix)
-    }
-    if type == "dist" {
-        return string.concat(string.concat("dist:", dir), suffix)
-    }
-    return string.concat(dir, suffix)
-}
-
 // First word of a space-separated string
 first_word(s: string) {
     sp = string.index_of(s, " ")
@@ -277,7 +187,8 @@ main() {
         os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/transform-ae.ae -o "), string.concat(transform_ae, " 2>/dev/null"))))
     }
     if file.exists(gen_orchestrator) == 0 {
-        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/gen-orchestrator.ae -o "), string.concat(gen_orchestrator, " 2>/dev/null"))))
+        // --lib <aebhome>/tools resolves gen-orchestrator's `import aeblabel`.
+        os.system(string.concat(string.concat(aether_bin, " build "), string.concat(string.concat(aebhome, "/tools/gen-orchestrator.ae -o "), string.concat(gen_orchestrator, string.concat(" --lib ", string.concat(aebhome, "/tools 2>/dev/null"))))))
     }
 
     os.system(string.concat("mkdir -p ", build_dir))
@@ -355,14 +266,18 @@ main() {
     orch_c    = string.concat(build_dir, "/_orchestrator.c")
 
     // gen-orchestrator file1 file2 ... > orch_file
+    // The file list scales with the build's module count; strbuilder
+    // keeps the accumulation amortised O(1) per file.
     go_cmd = string.concat(gen_orchestrator, " ")
+    gofiles = strbuilder.new(512)
     j = 0
     while j < n {
-        if j > 0 { go_cmd = string.concat(go_cmd, " ") }
+        if j > 0 { strbuilder.append(gofiles, " ") }
         _f, _ = list.get(files, j)
-        go_cmd = string.concat(go_cmd, _f)
+        strbuilder.append(gofiles, _f)
         j = j + 1
     }
+    go_cmd = string.concat(go_cmd, strbuilder.finish(gofiles))
     go_cmd = string.concat(go_cmd, " > ")
     go_cmd = string.concat(go_cmd, orch_file)
     os.system(go_cmd)
@@ -380,13 +295,17 @@ main() {
     // --- Link with gcc ---
     cc = "gcc -O2 -pipe -w "
     cc = string.concat(cc, orch_c)
+    // The per-module object list scales with the build's module
+    // count; strbuilder keeps the link-line accumulation O(1)/file.
+    objs = strbuilder.new(1024)
     k = 0
     while k < n {
-        cc = string.concat(cc, " ")
+        strbuilder.append(objs, " ")
         _cf, _ = list.get(c_files, k)
-        cc = string.concat(cc, _cf)
+        strbuilder.append(objs, _cf)
         k = k + 1
     }
+    cc = string.concat(cc, strbuilder.finish(objs))
     // Include path: generated C files use bare #include names but
     // real installs nest headers under include/aether/{runtime,std}/...
     // Add -I for every dir under the include root.

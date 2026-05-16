@@ -11,8 +11,15 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 SHAREDIR ?= $(PREFIX)/share/aeb
 
-TOOLS := tools/aeb-main tools/aeb-init tools/aeb-link tools/aeb-graph tools/affected-targets tools/gcheckout
+TOOLS := tools/aeb-main tools/aeb-init tools/aeb-link tools/aeb-graph tools/affected-targets tools/gcheckout tools/gen-orchestrator tools/file-to-label
 INSTALL_TOOLS := tools/aeb-main tools/aeb-init tools/aeb-link tools/aeb-graph tools/affected-targets tools/gcheckout
+
+# --lib tools makes the shared `aeblabel` module (tools/aeblabel/
+# module.ae) importable by the tools that consume it (aeb-link,
+# gen-orchestrator, file-to-label). Harmless for tools that don't —
+# a flat tools/*.ae file is not a `name/module.ae` module, so the
+# extra search root never picks one up by accident.
+AEFLAGS ?= --lib tools
 
 .PHONY: all build install uninstall clean
 
@@ -20,23 +27,10 @@ all: build
 
 build: $(TOOLS)
 
-tools/aeb-main: tools/aeb-main.ae
-	$(AETHER) build $< -o $@
-
-tools/aeb-init: tools/aeb-init.ae
-	$(AETHER) build $< -o $@
-
-tools/aeb-link: tools/aeb-link.ae
-	$(AETHER) build $< -o $@
-
-tools/aeb-graph: tools/aeb-graph.ae
-	$(AETHER) build $< -o $@
-
-tools/affected-targets: tools/affected-targets.ae
-	$(AETHER) build $< -o $@
-
-tools/gcheckout: tools/gcheckout.ae
-	$(AETHER) build $< -o $@
+# One pattern rule for every tool — each tools/<name> is built from
+# tools/<name>.ae. Replaces six near-identical explicit rules.
+tools/%: tools/%.ae
+	$(AETHER) build $< -o $@ $(AEFLAGS)
 
 # install — copy the runtime tree to $(SHAREDIR) and drop a wrapper
 # at $(BINDIR)/aeb that pins AEB_HOME at the installed copy. The
