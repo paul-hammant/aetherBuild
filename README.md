@@ -999,7 +999,7 @@ bash.test(b) {                                       // multi-fixture: declare e
     script("test_replication.sh")                            //   then-go (no real probe).
 }
 
-bash.script(b) {            // non-test runner: codegen, asset prep, etc.
+bash.run(b) {               // non-test runner: codegen, asset prep, etc.
     script("gen.sh")
 }
 ```

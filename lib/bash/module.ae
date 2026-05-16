@@ -4,7 +4,7 @@
 // `bash.test(b)` runs each declared script, prints a per-test
 // PASS/FAIL line, and a summary. Exits non-zero if any test failed.
 //
-// `bash.script(b)` is the non-test variant — runs a shell script as
+// `bash.run(b)` is the non-test variant — runs a shell script as
 // part of the build (codegen, asset prep, etc.) without
 // PASS/FAIL counting.
 //
@@ -24,7 +24,7 @@ import std.path
 // --- DSL setters ---
 
 // Append a script path to the builder's script list. Used inside both
-// `bash.test(b) { script(...) }` and `bash.script(b) { script(...) }`.
+// `bash.test(b) { script(...) }` and `bash.run(b) { script(...) }`.
 script(_ctx: ptr, script_path: string) {
     if map.has(_ctx, "scripts") == 0 {
         _e1 = map.put(_ctx, "scripts", list.new())
@@ -415,9 +415,22 @@ _resolve_script_path(source_dir: string, script_ref: string) {
 
 // --- SDK builders ---
 
-// bash.script(b) — non-test runner. Runs each declared script as
+// bash.run(b) — non-test runner. Runs each declared script as
 // part of the build. Exits non-zero on the first failure.
-builder script(ctx: ptr) {
+// The builder is `run`, not `script` or `scripts`. Aether's name
+// resolution for a `builder` is fragile on collisions, in two ways
+// both hit here:
+//   - builder named `script` is shadowed by the `script(_ctx, path)`
+//     setter above (same module) — `bash.script(b){}` dispatches
+//     nothing;
+//   - builder named `scripts` collides with the body-local variable
+//     `scripts` below — codegen resolves that variable to the
+//     builder's own function symbol (`list.size(scripts)` →
+//     `list_size(bash_scripts)`), reading a function pointer as a
+//     list.
+// `run` collides with neither a function nor a body local, so it
+// dispatches cleanly. See asks/ for the filed Aether bug.
+builder run(ctx: ptr) {
     source_dir = build._get(ctx, "source_dir")
     mod_dir = build._get(ctx, "module_dir")
 
