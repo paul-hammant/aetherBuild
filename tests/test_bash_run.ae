@@ -1,0 +1,66 @@
+// Regression test: the bash SDK builders actually DISPATCH and run
+// their bodies.
+//
+// `bash.script` (the builder) silently never ran for a long time —
+// its name collided with the `script(...)` setter in the same
+// module, and Aether's builder name-resolution miscompiled the
+// dispatch (see lib/bash/module.ae and asks/ for the Aether bug).
+// It went unnoticed because every other test here only exercises
+// pure `*_cmd` string-builders — nothing invoked a real builder
+// through the closure-DSL form. This test closes that gap.
+//
+// It drives `bash.run(b) { ... }` and `bash.test(b) { ... }` the
+// way the orchestrator does (build.session → build.begin → builder)
+// and asserts a side effect: the declared script actually executed.
+// If a builder stops dispatching — a renamed-into-a-collision
+// builder, a codegen regression — the marker file is absent and
+// this fails loudly.
+
+import build
+import bash
+import bash (script)
+import std.string
+import std.os
+import std.file
+
+extern println(s: string)
+
+_assert(label: string, cond: int) {
+    if cond == 1 {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+    }
+}
+
+main() {
+    base = "/tmp/aeb_test_bash_run"
+    os.system("rm -rf ${base}; mkdir -p ${base}")
+
+    marker = "${base}/marker"
+    scr = "${base}/probe.sh"
+    // probe.sh just touches the marker — an absolute path, so
+    // bash's _resolve_script_path uses it verbatim.
+    os.system("printf 'touch ${marker}\\n' > ${scr}")
+
+    // --- bash.run dispatches ---
+    os.system("rm -f ${marker}")
+    s1 = build.session(".")
+    b1 = build.begin(s1, "m_run")
+    bash.run(b1) {
+        script("${scr}")
+    }
+    _assert("bash.run dispatched and ran its script", file.exists(marker))
+
+    // --- bash.test dispatches ---
+    os.system("rm -f ${marker}")
+    s2 = build.session(".")
+    b2 = build.begin(s2, "m_test")
+    bash.test(b2) {
+        script("${scr}")
+    }
+    _assert("bash.test dispatched and ran its script", file.exists(marker))
+
+    os.system("rm -rf ${base}")
+    println("bash builder dispatch tests done")
+}
