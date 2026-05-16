@@ -442,6 +442,143 @@ _toolchain_version() {
     return string.trim(raw)
 }
 
+// --- Transitive Aether import-closure scan -------------------------
+//
+// aeb's DAG models build.dep() target edges only; the Aether `import`
+// graph inside a target's source is invisible to it. Without the scan
+// below, a target's cache key hashes just its entry .ae (+ declared
+// extra_sources) — so editing a widely-imported module never busts a
+// consumer's key, and the consumer silently keeps a stale binary.
+// These helpers walk the entry's transitive `import` closure so every
+// reachable project .ae is hashed into the key.
+
+// All ancestor directories of `dir` (nearest first, `dir` included) —
+// the candidate roots an `import X` is resolved against. `import X`
+// typically lives at <root>/X/module.ae for some ancestor root.
+_ancestor_dirs(dir: string) {
+    out = list.new()
+    cur = dir
+    if string.length(cur) == 0 { cur = "." }
+    _a0 = list.add(out, cur)
+    parent = ""
+    limit = 0
+    while limit < 40 {
+        parent = path.dirname(cur)
+        if string.equals(parent, cur) == 1 { return out }
+        if string.length(parent) == 0 { return out }
+        _ax = list.add(out, parent)
+        cur = parent
+        limit = limit + 1
+    }
+    return out
+}
+
+// Module name from an `import ...` line (already trimmed). Handles
+// `import foo`, `import foo (a, b)`, `import a.b.c`.
+_import_module_name(line: string) {
+    rest = string.substring(line, 7, string.length(line))
+    rest = string.trim(rest)
+    n = string.length(rest)
+    i = 0
+    while i < n {
+        ch = string.substring(rest, i, i + 1)
+        if string.equals(ch, " ") == 1 { return string.substring(rest, 0, i) }
+        if string.equals(ch, "(") == 1 { return string.substring(rest, 0, i) }
+        i = i + 1
+    }
+    return rest
+}
+
+// Resolve an import module name to its .ae file, or "" when it is a
+// stdlib / contrib module (toolchain-resolved — covered by the
+// toolchain-version part of the key) or simply unresolvable.
+_resolve_import_ae(modname: string, roots: ptr) {
+    if string.starts_with(modname, "std.") == 1 { return "" }
+    if string.starts_with(modname, "contrib.") == 1 { return "" }
+    if string.equals(modname, "std") == 1 { return "" }
+    rel = ""
+    n = string.length(modname)
+    i = 0
+    while i < n {
+        ch = string.substring(modname, i, i + 1)
+        if string.equals(ch, ".") == 1 {
+            rel = string.concat(rel, "/")
+        } else {
+            rel = string.concat(rel, ch)
+        }
+        i = i + 1
+    }
+    nr = list.size(roots)
+    ri = 0
+    rdir = ""
+    c1 = ""
+    c2 = ""
+    while ri < nr {
+        rdir, _ = list.get(roots, ri)
+        c1 = path.join(rdir, string.concat(rel, "/module.ae"))
+        if file.exists(c1) == 1 { return c1 }
+        c2 = path.join(rdir, string.concat(rel, ".ae"))
+        if file.exists(c2) == 1 { return c2 }
+        ri = ri + 1
+    }
+    return ""
+}
+
+// Every project .ae transitively imported by `entry` (entry itself
+// excluded — it is hashed separately). BFS over `import` lines.
+_transitive_import_aes(entry: string, roots: ptr) {
+    found = list.new()
+    seen = map.new()
+    queue = list.new()
+    _q0 = list.add(queue, entry)
+    _s0 = map.put(seen, entry, "1")
+    head = 0
+    qs = 1
+    f = ""
+    content = ""
+    rerr = ""
+    rest = ""
+    line = ""
+    t = ""
+    modname = ""
+    resolved = ""
+    nl = 0
+    while head < qs {
+        f, _ = list.get(queue, head)
+        head = head + 1
+        content, rerr = io.read_file(f)
+        if string.equals(rerr, "") == 1 {
+            rest = content
+            while string.length(rest) > 0 {
+                nl = string.index_of(rest, "\n")
+                if nl < 0 {
+                    line = rest
+                    rest = ""
+                } else {
+                    line = string.substring(rest, 0, nl)
+                    rest = string.substring(rest, nl + 1, string.length(rest))
+                }
+                t = string.trim(line)
+                if string.starts_with(t, "import ") == 1 {
+                    modname = _import_module_name(t)
+                    if string.length(modname) > 0 {
+                        resolved = _resolve_import_ae(modname, roots)
+                        if string.length(resolved) > 0 {
+                            if map.has(seen, resolved) == 0 {
+                                _sm = map.put(seen, resolved, "1")
+                                _fm = list.add(found, resolved)
+                                _qm = list.add(queue, resolved)
+                                qs = qs + 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return found
+}
+
 // Compute the cache key for an aether.program manual-path link.
 // Inputs in canonical order; each part length-prefixed via
 // cache.hash_inputs so distinct concatenations can't collide.
@@ -472,6 +609,29 @@ _cache_key_for_aether_link(builder_map: ptr, source_dir: string, src_path: strin
     }
     list.add(parts, string.concat("src:", src_path))
     list.add(parts, string.concat("src-hash:", src_hash))
+
+    // Transitive Aether import closure — every project .ae the entry
+    // pulls in via `import`, directly or indirectly. Without this a
+    // change to a widely-imported module (avn's repo_storage was the
+    // motivating case) never busts a consumer's key. `import` modules
+    // are resolved against source_dir and its ancestor directories.
+    imp_roots = _ancestor_dirs(source_dir)
+    imps = _transitive_import_aes(src_path, imp_roots)
+    nimp = list.size(imps)
+    iidx = 0
+    impf = ""
+    imph = ""
+    impe = ""
+    while iidx < nimp {
+        impf, _ = list.get(imps, iidx)
+        imph, impe = cache.hash_file(impf)
+        if string.length(impe) > 0 {
+            return "", impe
+        }
+        list.add(parts, string.concat("import:", impf))
+        list.add(parts, string.concat("import-hash:", imph))
+        iidx = iidx + 1
+    }
 
     // Extra sources (final post-regen list). Each entry: path + hash.
     if builder_map != null {
