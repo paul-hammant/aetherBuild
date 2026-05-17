@@ -209,6 +209,50 @@ hash inputs → check remote store (S3, GCS, local server) → download
 artifacts or build locally → upload result. The cache primitives in
 `lib/cache/` are the substrate; needs a backend protocol and auth.
 
+#### Content-Defined Chunking (CDC) — a later layer, but it shapes the format now
+
+Prior art: BuildBuddy's "Remote Cache CDC: Reusing Bytes" (May 2026)
+— Bazel 8.7 / 9.1+ `--experimental_remote_cache_chunking`. The idea:
+don't cache a large output as one indivisible blob. Run a rolling
+hash over it (FastCDC), cut at content-defined boundaries, store each
+chunk as its own content-addressed entry plus a small reconstruction
+record keyed by the whole-blob digest. A small source change then
+re-transfers/-stores only the chunk(s) it perturbed. BuildBuddy
+reports ~85% byte dedup on chunk-eligible writes (blobs > 2 MiB;
+20–40% across all traffic). Read/write split: `SplitBlob` (fetch the
+chunk layout, pull only missing chunks) / `SpliceBlob` (push missing
+chunks + the reconstruction record).
+
+Why it matters for aeb specifically:
+
+- **It is the byte-level partner of the `c889f25` import-closure
+  key.** That key (correctly) busts every consumer's cache entry
+  when a widely-imported module changes — so a `repo_storage`-shaped
+  edit re-caches N near-identical consumer binaries. Correct
+  invalidation + CDC = consumers still rebuild, but the restoring
+  near-identical artifacts cost only their changed chunks. The
+  big-transitive-output actions CDC targets (linking, packaging) are
+  exactly aeb's `aether.program`, `java.shade`, driver-test binaries,
+  container images.
+
+- **One design constraint binds NOW, before any CDC work: chunk the
+  *uncompressed* bytes.** CDC needs byte-level similarity across
+  revisions; a compressed stream loses it — a small input change
+  rewrites much of a `.gz`. aeb's `lib/cache` is sha256 **+ zlib**
+  whole-blob, and `lib/java` caches the classes-tree as **tar+zlib**.
+  Compress-then-store is the CDC anti-pattern. If CDC is ever wanted,
+  the cache format must be chunk-first, then compress per chunk (or
+  not at all) — never chunk a `.tar.gz`. Worth keeping the door open
+  even though CDC itself is far off.
+
+Sequencing: CDC is a *layer on* the remote cache, not step 1. Order
+is (a) remote CAS + backend protocol + auth, (b) CDC on top —
+`lib/cache` is already a local content-addressed store, so chunks
+slot in as ordinary CAS entries. Honest status: aeb is ~6 months in;
+remote cache itself is unstarted. CDC is recorded here as prior art
+and as the one constraint (uncompressed chunking) that affects cache
+format decisions made before then.
+
 ### ~~Build graph visualization~~ (done)
 
 Shipped in commit `be2d97c`. `aeb --graph` (DOT default) /
