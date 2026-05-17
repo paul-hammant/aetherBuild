@@ -81,6 +81,18 @@ lxc_name(_ctx: ptr, n: string) {
     _e = map.put(_ctx, "lxc_name", n)
 }
 
+// --- container.run DSL setters ---
+// First slice of the container-as-step grammar: run a one-shot
+// container and capture its pid-1 stdout back into aeb.
+
+image_ref(_ctx: ptr, r: string) {
+    _e = map.put(_ctx, "image_ref", r)
+}
+
+command(_ctx: ptr, c: string) {
+    _e = map.put(_ctx, "command", c)
+}
+
 // --- Command builders (public, testable) ---
 
 // Generate a Dockerfile string from options
@@ -218,6 +230,32 @@ lxc_create_cmd(name: string, opts: ptr) {
     return cmd
 }
 
+// Build the one-shot `<engine> run` command. `--rm` makes the
+// container ephemeral; a `command` from opts is appended as the
+// container's argv, overriding the image's default CMD. Pure string
+// assembly — unit-tested in tests/test_container_run_cmd.ae.
+container_run_cmd(img: string, opts: ptr) {
+    eng = "podman"
+    if opts != null {
+        if map.has(opts, "engine") == 1 {
+            eng, _ = map.get(opts, "engine")
+        }
+    }
+    cmd_str = ""
+    if opts != null {
+        if map.has(opts, "command") == 1 {
+            cmd_str, _ = map.get(opts, "command")
+        }
+    }
+    out = string.concat(eng, " run --rm ")
+    out = string.concat(out, img)
+    if string.length(cmd_str) > 0 {
+        out = string.concat(out, " ")
+        out = string.concat(out, cmd_str)
+    }
+    return out
+}
+
 // --- SDK functions ---
 
 builder image(ctx: ptr) {
@@ -302,5 +340,41 @@ builder lxc(ctx: ptr) {
         return exit_code
     }
     println("${mod_dir}: created LXC container ${name}")
+    return 0
+}
+
+// container.run — run a one-shot container and capture its pid-1
+// stdout. `<engine> run` in the foreground attaches the container's
+// pid-1 stdout to ours, so os.exec hands the bytes straight back.
+// The capture is both printed and written to a target-dir artifact
+// (container-stdout.txt) so downstream steps and tests can read what
+// the container produced. First slice of the container-as-step
+// grammar; setters so far: image_ref(), command().
+builder run(ctx: ptr) {
+    mod_dir, _ = map.get(ctx, "module_dir")
+    target_dir, _ = map.get(ctx, "target_dir")
+
+    img = ""
+    if _builder != null {
+        if map.has(_builder, "image_ref") == 1 {
+            img, _ = map.get(_builder, "image_ref")
+        }
+    }
+    if string.length(img) == 0 {
+        println("${mod_dir}: container.run requires image_ref(\"<image>\")")
+        return 1
+    }
+
+    run_cmd = container_run_cmd(img, _builder)
+    println("${mod_dir}: container.run ${run_cmd}")
+
+    out, _ = os.exec(run_cmd)
+    captured = string.trim(out)
+
+    _mk = os.system("mkdir -p ${target_dir}")
+    outfile = path.join(target_dir, "container-stdout.txt")
+    _w = io.write_file(outfile, captured)
+
+    println("${mod_dir}: container stdout [${captured}] -> ${outfile}")
     return 0
 }

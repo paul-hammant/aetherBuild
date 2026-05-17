@@ -1,0 +1,58 @@
+// End-to-end test: container.run dispatches as a builder, runs a
+// real container, and captures the container's pid-1 stdout.
+//
+// The pure command builder (container_run_cmd) is unit-tested in
+// test_container_run_cmd.ae. This closes the other half: that the
+// `container.run(b) { ... }` builder DISPATCHES through the
+// closure-DSL form the orchestrator uses (the same regression
+// surface the bash.script non-dispatch bug exposed — see
+// test_bash_run.ae), and that aeb actually captures what the
+// container's pid 1 printed.
+//
+// Needs podman + the ruby:alpine image; if podman is absent the test
+// skips cleanly so the suite stays green in minimal environments.
+
+import build
+import container
+import container (image_ref, command)
+import std.string
+import std.os
+import std.file
+
+extern println(s: string)
+
+_assert(label: string, cond: int) {
+    if cond == 1 {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+    }
+}
+
+main() {
+    pchk, _ = os.exec("command -v podman >/dev/null 2>&1 && echo y || echo n")
+    if string.equals(string.trim(pchk), "y") == 0 {
+        println("PASS: container.run e2e skipped — podman not available")
+        println("container run tests done")
+        return 0
+    }
+
+    os.system("rm -rf ./target/m_container_run")
+
+    // Drive the builder the way the orchestrator does — alpine ruby
+    // prints a marker on pid-1 stdout; container.run captures it.
+    s = build.session(".")
+    b = build.begin(s, "m_container_run")
+    container.run(b) {
+        image_ref("docker.io/library/ruby:alpine")
+        command("ruby -e 'puts \"hello-from-aeb-container\"'")
+    }
+
+    got, _ = os.exec("cat ./target/m_container_run/container-stdout.txt 2>/dev/null")
+    captured = 0
+    if string.index_of(got, "hello-from-aeb-container") >= 0 { captured = 1 }
+    _assert("container.run captured pid-1 stdout", captured)
+
+    os.system("rm -rf ./target/m_container_run")
+    println("container run tests done")
+}
