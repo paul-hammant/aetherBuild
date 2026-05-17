@@ -346,23 +346,39 @@ builder lxc(ctx: ptr) {
 // container.run — run a one-shot container and capture its pid-1
 // stdout. `<engine> run` in the foreground attaches the container's
 // pid-1 stdout to ours, so os.exec hands the bytes straight back.
-// The capture is both printed and written to a target-dir artifact
-// (container-stdout.txt) so downstream steps and tests can read what
-// the container produced. First slice of the container-as-step
-// grammar; setters so far: image_ref(), command().
+//
+// RETURNS the captured (trimmed) stdout as a string. A .build.ae
+// looks declarative, but its body is ordinary imperative Aether — so
+// an author can bind the result and branch on it:
+//
+//     out = container.run(b) { image_ref("alpine") command("uname") }
+//     if string.index_of(out, "Linux") >= 0 { ... }
+//
+// The capture is also mirrored to a target-dir artifact
+// (container-stdout.txt) and printed. On misconfiguration (no
+// image_ref) it returns "" after printing the error.
+//
+// First slice of the container-as-step grammar; setters so far:
+// image_ref(), command().
 builder run(ctx: ptr) {
     mod_dir, _ = map.get(ctx, "module_dir")
     target_dir, _ = map.get(ctx, "target_dir")
 
+    // When a builder-with-block is used as an expression
+    // (out = container.run(b) { ... }), the closure-DSL invokes the
+    // builder once with _builder still null, before the block has
+    // populated it. Guard that pre-call: return "" with no side
+    // effects so only the real, populated invocation runs anything.
+    if _builder == null {
+        return ""
+    }
     img = ""
-    if _builder != null {
-        if map.has(_builder, "image_ref") == 1 {
-            img, _ = map.get(_builder, "image_ref")
-        }
+    if map.has(_builder, "image_ref") == 1 {
+        img, _ = map.get(_builder, "image_ref")
     }
     if string.length(img) == 0 {
         println("${mod_dir}: container.run requires image_ref(\"<image>\")")
-        return 1
+        return ""
     }
 
     run_cmd = container_run_cmd(img, _builder)
@@ -376,5 +392,5 @@ builder run(ctx: ptr) {
     _w = io.write_file(outfile, captured)
 
     println("${mod_dir}: container stdout [${captured}] -> ${outfile}")
-    return 0
+    return captured
 }

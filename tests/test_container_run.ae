@@ -40,18 +40,24 @@ main() {
     os.system("rm -rf ./target/m_container_run")
 
     // Drive the builder the way the orchestrator does — alpine ruby
-    // prints a marker on pid-1 stdout; container.run captures it.
+    // prints a marker on pid-1 stdout. container.run RETURNS that
+    // capture, so bind it to a var and use it imperatively.
     s = build.session(".")
     b = build.begin(s, "m_container_run")
-    container.run(b) {
+    out = container.run(b) {
         image_ref("docker.io/library/ruby:alpine")
         command("ruby -e 'puts \"hello-from-aeb-container\"'")
     }
 
+    ret_ok = 0
+    if string.index_of(out, "hello-from-aeb-container") >= 0 { ret_ok = 1 }
+    _assert("container.run returns the captured pid-1 stdout", ret_ok)
+
+    // The capture is still mirrored to a target-dir artifact.
     got, _ = os.exec("cat ./target/m_container_run/container-stdout.txt 2>/dev/null")
-    captured = 0
-    if string.index_of(got, "hello-from-aeb-container") >= 0 { captured = 1 }
-    _assert("container.run captured pid-1 stdout", captured)
+    art_ok = 0
+    if string.index_of(got, "hello-from-aeb-container") >= 0 { art_ok = 1 }
+    _assert("container.run also writes the container-stdout.txt artifact", art_ok)
 
     os.system("rm -rf ./target/m_container_run")
     println("container run tests done")
