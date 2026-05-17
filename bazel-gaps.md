@@ -28,7 +28,7 @@ AetherBuild already has the polyglot core (18 SDKs, explicit DAG, topo-sort, mul
 - **Remote cache** — none. `TODO.md:189-202` is the explicit roadmap; `lib/cache/` is local-only phase 1.
 - **Remote execution** — none. Local sequential execution only.
 - **Parallelism** — none. `TODO.md:177-181` mentions actor-based parallel execution; current runner walks topo order serially.
-- **Daemon / server model** — none. Bazel keeps the loaded graph hot in a JVM server; aeb regenerates and recompiles its orchestrator binary every invocation (`tools/aeb-main.ae`, `tools/aeb-link.ae`).
+- **Daemon / server model** — none. Bazel keeps the loaded graph hot in a JVM server; aeb regenerates and recompiles its orchestrator binary (`target/_ae_build_all` — the per-run driver that calls each module's function in topo order; *not* the `tools/` helper binaries, which `make install` prebuilds and which are reused unchanged across invocations) every invocation. The regen+compile is driven by `tools/aeb-main.ae` → `tools/aeb-link.ae`.
 - **Lazy loading of build files** — partial. aeb scans `.build.ae` files transitively from a target, which is the right shape, but there's no three-phase loading/analysis/execution pipeline.
 
 ### Query / introspection
