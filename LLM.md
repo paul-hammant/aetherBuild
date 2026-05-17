@@ -230,6 +230,17 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
   the `_detect_ci()` consumer; `_detect_ci` itself lives in
   `lib/build`. Usage: `docs/webhook-triggers.md`; design:
   `asks/webhook-outbound-trigger.md`.
+- `lib/container/module.ae` — container SDK. `container.image` builds
+  OCI images; `container.run(b) { image_ref(...) command(...) }` runs
+  a one-shot container and RETURNS its captured pid-1 stdout — the
+  first slice of a container-as-step grammar. aeb's two ways to run a
+  guest language — `container.run` (a separate process) vs Aether's
+  in-process `contrib.host.<lang>` hosting — and the isolation/cost
+  tradeoff between them are written up in `docs/guest-languages.md`.
+  In-process hosting from a `.build.ae` is not wired yet: `aeb-link`
+  would need to link the `contrib.host.<lang>` C bridge into the
+  orchestrator (the `tests/test_host_lua.build.sh` sidecar does this
+  for the test).
 - `lib/aether/module.ae` — the Aether-program SDK.
   `aether.program(b)` shells out to `ae build` by default; declaring
   `extra_source(...)` / `link_flag(...)` / `regen(...)` opts into the
