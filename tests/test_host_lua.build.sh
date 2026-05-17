@@ -73,16 +73,38 @@ for v in lua5.4 lua-5.4 lua5.3 lua-5.3 lua; do
         LUA_CFLAGS="$(pkg-config --cflags "$v")"
         LUA_LIBS="$(pkg-config --libs "$v")"
         LUA_DEF="-DAETHER_HAS_LUA"
-        echo "host-lua: liblua dev '$v' found — linked mode"
+        echo "host-lua: liblua dev '$v' found"
         break
     fi
 done
-[ -z "$LUA_DEF" ] && echo "host-lua: no liblua dev — stub mode"
+[ -z "$LUA_DEF" ] && echo "host-lua: no liblua dev present"
 
 # One cc step: generated C + the bridge + libaether (+ liblua when
 # linked). `ae cflags` subsets give the runtime -I / -L -laether.
-# shellcheck disable=SC2046,SC2086
-"$CC" $("$AETHER" cflags --cflags) $LUA_DEF $LUA_CFLAGS \
-    "$TMP/host_lua.c" "$BRIDGE" \
-    $("$AETHER" cflags --libs) $LUA_LIBS \
-    -o "$BIN"
+# -DAETHER_HAS_SANDBOX matches Aether's own host-demo build
+# (contrib_host_demos.sh): the bridge's run_sandboxed path uses the
+# sandbox typedefs the runtime header gates behind that define.
+SANDBOX_DEF="-DAETHER_HAS_SANDBOX"
+link_ok=0
+if [ -n "$LUA_DEF" ]; then
+    # shellcheck disable=SC2046,SC2086
+    if "$CC" $("$AETHER" cflags --cflags) $SANDBOX_DEF $LUA_DEF $LUA_CFLAGS \
+            "$TMP/host_lua.c" "$BRIDGE" \
+            $("$AETHER" cflags --libs) $LUA_LIBS -o "$BIN" 2>"$TMP/cc.log"; then
+        link_ok=1
+        echo "host-lua: linked mode — liblua compiled into the binary"
+    else
+        echo "host-lua: linked-mode compile failed — falling back to stub" >&2
+        sed 's/^/  /' "$TMP/cc.log" >&2
+    fi
+fi
+if [ "$link_ok" -ne 1 ]; then
+    # Stub mode: the bridge built without -DAETHER_HAS_LUA resolves
+    # to no-op stubs; no liblua needed. A linked-mode breakage in the
+    # Aether bridge thus degrades to a clean skip, never a red suite.
+    # shellcheck disable=SC2046,SC2086
+    "$CC" $("$AETHER" cflags --cflags) $SANDBOX_DEF \
+        "$TMP/host_lua.c" "$BRIDGE" \
+        $("$AETHER" cflags --libs) -o "$BIN"
+    echo "host-lua: stub mode — bridge linked, Lua not embedded"
+fi
