@@ -1,0 +1,56 @@
+// End-to-end test: container.run with an Alpine/Lua image — the
+// CONTAINER half of the container-vs-hosted comparison.
+//
+// A Lua hello-world runs as the container's pid 1; aeb captures its
+// stdout. Lua executes in a separate process, in a container — the
+// aeb binary itself contains and links nothing Lua.
+//
+// Sibling: test_host_lua.ae runs the SAME hello-world via Aether's
+// in-process Lua host (contrib.host.lua) — no container, no
+// subprocess, liblua linked straight into the binary. The pair shows
+// the two ways aeb/Aether can run a guest language.
+//
+// Needs podman + the nickblah/lua image; skips cleanly without podman.
+
+import build
+import container
+import container (image_ref, command)
+import std.string
+import std.os
+import std.file
+
+extern println(s: string)
+
+_assert(label: string, cond: int) {
+    if cond == 1 {
+        println("PASS: ${label}")
+    } else {
+        println("FAIL: ${label}")
+    }
+}
+
+main() {
+    pchk, _ = os.exec("command -v podman >/dev/null 2>&1 && echo y || echo n")
+    if string.equals(string.trim(pchk), "y") == 0 {
+        println("PASS: container.run/lua e2e skipped — podman not available")
+        println("container lua tests done")
+        return 0
+    }
+
+    os.system("rm -rf ./target/m_container_lua")
+
+    s = build.session(".")
+    b = build.begin(s, "m_container_lua")
+    out = container.run(b) {
+        image_ref("docker.io/nickblah/lua:5.4-alpine")
+        command("lua -e 'print(\"hello-from-container-lua\")'")
+    }
+
+    ok = 0
+    if string.index_of(out, "hello-from-container-lua") >= 0 { ok = 1 }
+    _assert("container.run captured Lua pid-1 stdout", ok)
+
+    os.system("rm -rf ./target/m_container_lua")
+    println("container lua tests done")
+    return 0
+}

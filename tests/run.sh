@@ -110,9 +110,22 @@ for test_file in $test_files; do
 
     printf '  %s ' "$(pad_name "$base")"
 
-    # Build
-    if ! AETHER_HOME="" "$AETHER" build "$test_file" -o "$bin" --lib "$LIB_DIR" --lib "$TOOLS_DIR" \
-            >"$build_log" 2>&1; then
+    # Build. A test may ship a sidecar build script — test_X.build.sh
+    # beside test_X.ae — for non-uniform builds (e.g. linking a
+    # contrib host-language bridge that needs -D defines + pkg-config
+    # flags the uniform `ae build` line can't carry). The script gets
+    # AETHER, the output bin, LIB_DIR and TOOLS_DIR, and must produce
+    # $bin. Tests with no sidecar use the standard `ae build`.
+    build_script="${test_file%.ae}.build.sh"
+    build_ok=1
+    if [ -f "$build_script" ]; then
+        AETHER_HOME="" bash "$build_script" "$AETHER" "$bin" "$LIB_DIR" "$TOOLS_DIR" \
+            >"$build_log" 2>&1 || build_ok=0
+    else
+        AETHER_HOME="" "$AETHER" build "$test_file" -o "$bin" --lib "$LIB_DIR" --lib "$TOOLS_DIR" \
+            >"$build_log" 2>&1 || build_ok=0
+    fi
+    if [ "$build_ok" -ne 1 ]; then
         build_failed=$((build_failed + 1))
         # Extract first meaningful error line for the summary
         first_err="$(grep -E '^error\[|^error:' "$build_log" 2>/dev/null | head -1 | sed -E 's/^error[^:]*: *//')"
