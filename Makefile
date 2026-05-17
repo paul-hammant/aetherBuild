@@ -21,11 +21,24 @@ INSTALL_TOOLS := tools/aeb-main tools/aeb-init tools/aeb-link tools/aeb-graph to
 # extra search root never picks one up by accident.
 AEFLAGS ?= --lib tools
 
-.PHONY: all build install uninstall clean
+# Source-content hash of the aeb tree — a stable identity surfaced by
+# `aeb --version` (AEB_STAMP) and the stale-install check. `git
+# ls-files` covers every tracked source under aeb/lib/tools and
+# excludes the gitignored prebuilt binaries; `find` is the
+# outside-a-checkout fallback. Content, not mtime: a revert restores
+# the prior hash, identical sources always hash the same.
+SRCHASH_CMD = { git ls-files aeb lib tools 2>/dev/null | grep . || find aeb lib tools -type f; } | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | cut -c1-12
+
+.PHONY: all build install uninstall clean check-install
 
 all: build
 
 build: $(TOOLS)
+	@if [ -f "$(SHAREDIR)/AEB_STAMP" ]; then \
+	    dev=$$( $(SRCHASH_CMD) ); \
+	    inst=$$(awk '$$1=="src"{print $$2}' "$(SHAREDIR)/AEB_STAMP"); \
+	    [ "$$dev" = "$$inst" ] || echo "note: installed aeb at $(SHAREDIR) is stale vs this tree ($$inst -> $$dev) — run 'make install'"; \
+	fi
 
 # One pattern rule for every tool — each tools/<name> is built from
 # tools/<name>.ae. Replaces six near-identical explicit rules.
@@ -50,9 +63,15 @@ install: $(INSTALL_TOOLS)
 	    'exec "$(SHAREDIR)/aeb" "$$@"' \
 	    > $(BINDIR)/aeb
 	chmod +x $(BINDIR)/aeb
-	@echo "installed:"
-	@echo "  wrapper:  $(BINDIR)/aeb"
-	@echo "  runtime:  $(SHAREDIR)/"
+	@SRCH=$$( $(SRCHASH_CMD) ); \
+	 GITD=$$(git describe --always --dirty 2>/dev/null || echo unknown); \
+	 printf 'src %s\ncommit %s\ninstalled %s\ntoolchain %s\n' \
+	    "$$SRCH" "$$GITD" "$$(date '+%Y-%m-%d %H:%M:%S')" "$$($(AETHER) --version 2>/dev/null | head -1)" \
+	    > $(SHAREDIR)/AEB_STAMP; \
+	 echo "installed:"; \
+	 echo "  wrapper:  $(BINDIR)/aeb"; \
+	 echo "  runtime:  $(SHAREDIR)/"; \
+	 echo "  version:  aeb 0.0.0-dev+$$SRCH (git $$GITD)"
 
 uninstall:
 	rm -f $(BINDIR)/aeb
@@ -60,3 +79,20 @@ uninstall:
 
 clean:
 	rm -f $(TOOLS)
+
+# check-install — is the installed aeb current with this source tree?
+# Compares the dev tree's source-content hash against the installed
+# AEB_STAMP. Catches the "accidentally running an older install"
+# trap without any version-manager machinery.
+check-install:
+	@if [ ! -f "$(SHAREDIR)/AEB_STAMP" ]; then \
+	    echo "aeb: not installed at $(SHAREDIR) — run 'make install'"; \
+	else \
+	    dev=$$( $(SRCHASH_CMD) ); \
+	    inst=$$(awk '$$1=="src"{print $$2}' "$(SHAREDIR)/AEB_STAMP"); \
+	    if [ "$$dev" = "$$inst" ]; then \
+	        echo "aeb: installed tree is current (src $$inst)"; \
+	    else \
+	        echo "aeb: installed tree is STALE — installed src $$inst, this tree $$dev — run 'make install'"; \
+	    fi; \
+	fi
