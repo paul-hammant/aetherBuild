@@ -53,6 +53,19 @@ _append(_ctx: ptr, key: string, val: string) {
     }
 }
 
+// Like _append but joins with a newline — for values that may
+// themselves contain spaces (e.g. a tool's argument list).
+_append_nl(_ctx: ptr, key: string, val: string) {
+    if map.has(_ctx, key) == 1 {
+        prev, _ = map.get(_ctx, key)
+        combined = string.concat(prev, "\n")
+        combined = string.concat(combined, val)
+        _e1 = map.put(_ctx, key, combined)
+    } else {
+        _e2 = map.put(_ctx, key, val)
+    }
+}
+
 // Source files. Accepts a literal name, or a glob ("*.c", "src/*.c")
 // expanded at build time relative to source_dir. Call multiple times
 // to accumulate.
@@ -101,6 +114,32 @@ output_file(_ctx: ptr, f: string) {
 // leaf logic.
 aether_source(_ctx: ptr, pat: string) {
     _append(_ctx, "c_aether_sources", pat)
+}
+
+// --- c.generated_header DSL ------------------------------------------
+//
+// The bootstrap-tool pattern: compile+link a small C tool, then RUN
+// it and capture its stdout into a generated header file. The header
+// becomes a source input to a dependent c.program (which adds the
+// header's directory to its include path via build.dep).
+//
+// emit(args, header) declares one run: invoke the tool with `args`,
+// redirect stdout to `header`. Call it more than once to produce
+// several headers from the same tool (e.g. a `-a` mode and a default
+// mode — exactly the mquickjs mqjs_stdlib shape).
+
+// One emit pair. args and header are accumulated into two parallel
+// newline-separated lists (c_emit_args / c_emit_headers) read back
+// index-by-index — avoids encoding a delimiter into one string.
+// An empty `args` is stored as a single space so the empty-line /
+// empty-field cases don't collapse; the runner trims it back.
+emit(_ctx: ptr, args: string, header: string) {
+    a = args
+    if string.length(a) == 0 {
+        a = " "
+    }
+    _append_nl(_ctx, "c_emit_args", a)
+    _append_nl(_ctx, "c_emit_headers", header)
 }
 
 // --- Internal accessors ----------------------------------------------
@@ -348,6 +387,187 @@ builder aether_objects(ctx: ptr) {
     return 0
 }
 
+// Compile + emit-codegen + link a C tool binary from a builder's
+// c_sources / c_aether_sources, into `bin_path`. Shared by
+// generated_header (and a candidate refactor target for program).
+// Returns 0 on success, non-zero on failure.
+_build_tool_binary(source_dir: string, target_dir: string, mod_dir: string,
+                    opts: ptr, bin_path: string) {
+    compiler = _cc_of(opts)
+    cflags = _opt_str(opts, "c_cflags")
+    inc_flags = _include_flags(opts)
+    link_flags = _opt_str(opts, "c_link_flags")
+    obj_dir = path.join(target_dir, "tool_obj")
+    build._mkdirs(obj_dir)
+
+    // C sources -> objects.
+    srcs = _expand_sources(source_dir, _opt_str(opts, "c_sources"))
+    own_objs = ""
+    i = 0
+    sn = list.size(srcs)
+    while i < sn {
+        src, _ = list.get(srcs, i)
+        i = i + 1
+        obj = path.join(obj_dir, string.concat(_strip_ext(path.basename(src)), ".o"))
+        cc1 = "cd '${source_dir}' && ${compiler} ${cflags}${inc_flags} -c -o '${obj}' '${src}'"
+        e1 = os.system(cc1)
+        if e1 != 0 {
+            println("${mod_dir}: tool C compile failed on ${src}")
+            return e1
+        }
+        own_objs = string.concat(own_objs, " '")
+        own_objs = string.concat(own_objs, obj)
+        own_objs = string.concat(own_objs, "'")
+    }
+
+    // Aether sources -> generated C -> objects; needs libaether.a.
+    ae_srcs = _expand_sources(source_dir, _opt_str(opts, "c_aether_sources"))
+    ae_objs = ""
+    aether_link = ""
+    aen = list.size(ae_srcs)
+    if aen > 0 {
+        adir = build._resolve_aether_dir()
+        ldir = build._resolve_libaether_dir(adir)
+        if string.length(ldir) == 0 {
+            println("${mod_dir}: c.generated_header: cannot locate libaether.a")
+            return 1
+        }
+        ainc = build._aether_include_flags(adir)
+        aetherc = path.join(adir, "aetherc")
+        gen_dir = path.join(target_dir, "tool_gen")
+        build._mkdirs(gen_dir)
+        k = 0
+        while k < aen {
+            ae_rel, _ = list.get(ae_srcs, k)
+            k = k + 1
+            ae_full = path.join(source_dir, ae_rel)
+            stem = _strip_ext(path.basename(ae_rel))
+            gen_c = path.join(gen_dir, string.concat(stem, "_gen.c"))
+            gen_o = path.join(gen_dir, string.concat(stem, "_gen.o"))
+            eg = os.system("${aetherc} --emit=lib '${ae_full}' '${gen_c}'")
+            if eg != 0 {
+                println("${mod_dir}: aetherc --emit=lib failed for ${ae_rel}")
+                return eg
+            }
+            eo = os.system("${compiler} ${cflags}${ainc} -c -o '${gen_o}' '${gen_c}'")
+            if eo != 0 {
+                println("${mod_dir}: C compile of generated ${gen_c} failed")
+                return eo
+            }
+            ae_objs = string.concat(ae_objs, " '")
+            ae_objs = string.concat(ae_objs, gen_o)
+            ae_objs = string.concat(ae_objs, "'")
+        }
+        aether_link = " -L'${ldir}' -laether -lpthread -lm"
+    }
+
+    link = "${compiler} ${own_objs}${ae_objs} ${link_flags}${aether_link} -o '${bin_path}'"
+    el = os.system(link)
+    if el != 0 {
+        println("${mod_dir}: tool link failed")
+        return el
+    }
+    return 0
+}
+
+// --- builder: generated_header ---------------------------------------
+//
+// The bootstrap-tool pattern. Build a small C tool (from c_sources +
+// any aether_source), then RUN it once per emit(args, header) pair,
+// redirecting stdout into the named header file. Publishes the header
+// directory as the "c_header_dirs" artifact; a dependent c.program
+// adds it to the include path via build.dep.
+//
+// This is how a codegen tool that emits a header — mquickjs's
+// mqjs_stdlib being the motivating case — becomes a DAG node whose
+// output feeds the main build.
+//
+// Known limitation: a dependent c.program's rebuild check looks at
+// its own c_sources, not at the generated headers. If the tool's
+// *output* changes but the consumer's own sources don't, the
+// consumer won't relink until it (or aeb's DAG-level dep tracking)
+// also keys off the generated header. Fine when the tool's inputs
+// and the consumer's sources move together; revisit with build-level
+// dep-output change propagation.
+
+builder generated_header(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    args_raw = _opt_str(_builder, "c_emit_args")
+    headers_raw = _opt_str(_builder, "c_emit_headers")
+    if string.length(headers_raw) == 0 {
+        println("${mod_dir}: c.generated_header: no emit() declared")
+        return 1
+    }
+
+    // Header outputs live under target_dir/include so the dir can be
+    // published verbatim as an -I path.
+    inc_out = path.join(target_dir, "include")
+    build._mkdirs(inc_out)
+
+    // Rebuild check: tool sources (C + Aether) drive it.
+    all_srcs = _expand_sources(source_dir, _opt_str(_builder, "c_sources"))
+    ae_chk = _expand_sources(source_dir, _opt_str(_builder, "c_aether_sources"))
+    aci = 0
+    acn = list.size(ae_chk)
+    while aci < acn {
+        ap, _ = list.get(ae_chk, aci)
+        aci = aci + 1
+        list.add(all_srcs, ap)
+    }
+    ts_file = path.join(inc_out, ".timestamp")
+    if _sources_changed(source_dir, all_srcs, ts_file) == 0 {
+        println("${mod_dir}: skipping generated header (tool unchanged)")
+        return 0
+    }
+
+    // Build the tool.
+    tool_bin = path.join(target_dir, "tool")
+    tool_bin = string.concat(tool_bin, build._exe_suffix())
+    rc = _build_tool_binary(source_dir, target_dir, mod_dir, _builder, tool_bin)
+    if rc != 0 {
+        return rc
+    }
+
+    // Run the tool once per emit pair: tool <args> > <inc_out>/<header>.
+    // args and headers are read from the two parallel newline lists,
+    // index by index.
+    arg_arr = string.split(args_raw, "\n")
+    hdr_arr = string.split(headers_raw, "\n")
+    pn = string.array_size(hdr_arr)
+    header_count = 0
+    p = 0
+    while p < pn {
+        header = string.array_get(hdr_arr, p)
+        args = string.array_get(arg_arr, p)
+        p = p + 1
+        if string.length(header) == 0 {
+            continue
+        }
+        // An all-space args sentinel (emit() with empty args) trims
+        // back to nothing.
+        run_args = string.trim(args)
+        hdr_path = path.join(inc_out, header)
+        run = "'${tool_bin}' ${run_args} > '${hdr_path}'"
+        er = os.system(run)
+        if er != 0 {
+            println("${mod_dir}: generator tool failed for header ${header}")
+            return er
+        }
+        println("${mod_dir}: generated ${header}")
+        header_count = header_count + 1
+    }
+    string.array_free(arg_arr)
+    string.array_free(hdr_arr)
+
+    // Publish the include dir so a dependent c.program can -I it.
+    build._write_artifact(ctx, "c_header_dirs", inc_out)
+    _ets = io.write_file(ts_file, "")
+    return 0
+}
+
 // --- builder: program ------------------------------------------------
 //
 // Compile all sources and link a standalone native binary. Pulls in
@@ -375,6 +595,9 @@ builder program(ctx: ptr) {
     compiler = _cc_of(_builder)
     cflags = _opt_str(_builder, "c_cflags")
     inc_flags = _include_flags(_builder)
+    // Add -I for every include dir a dependency published via
+    // c.generated_header — so #include of a generated header resolves.
+    inc_flags = string.concat(inc_flags, _collect_dep_header_dirs(ctx))
     link_flags = _opt_str(_builder, "c_link_flags")
     srcs = _expand_sources(source_dir, _opt_str(_builder, "c_sources"))
 
@@ -557,6 +780,39 @@ _deps_need_aether_runtime(ctx: ptr) {
         }
     }
     return 0
+}
+
+// Leading-space-prefixed "-Idir" block for every include dir a
+// dependency published via c.generated_header (artifact
+// "c_header_dirs", newline-separated).
+_collect_dep_header_dirs(ctx: ptr) {
+    deps, _ = map.get(ctx, "deps")
+    out = ""
+    dep_count = list.size(deps)
+    n = 0
+    while n < dep_count {
+        dp, _ = list.get(deps, n)
+        n = n + 1
+        dm = build._strip_lang(dp)
+        dirs = build._read_dep_artifact(ctx, dm, "c_header_dirs")
+        if string.length(dirs) > 0 {
+            lines = string.split(dirs, "\n")
+            m = string.array_size(lines)
+            j = 0
+            while j < m {
+                d = string.array_get(lines, j)
+                j = j + 1
+                t = string.trim(d)
+                if string.length(t) > 0 {
+                    out = string.concat(out, " -I'")
+                    out = string.concat(out, t)
+                    out = string.concat(out, "'")
+                }
+            }
+            string.array_free(lines)
+        }
+    }
+    return out
 }
 
 // Strip the final extension from a filename ("foo.c" -> "foo",

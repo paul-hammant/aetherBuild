@@ -1,0 +1,20 @@
+// Step-3 itest — the program node.
+//
+// Depends on gen/.build.ae, which built a codegen tool, ran it, and
+// published two generated headers. lib/c adds the published header
+// directory to this program's include path, so main.c can #include
+// the generated gen_values.h / gen_names.h.
+
+import build
+import build (dep)
+import c
+import c (sources, output_file)
+
+main() {
+    b = build.start()
+    dep(b, "gen/.build.ae")
+    c.program(b) {
+        sources("src/main.c")
+        output_file("c-bootstrap-tool")
+    }
+}

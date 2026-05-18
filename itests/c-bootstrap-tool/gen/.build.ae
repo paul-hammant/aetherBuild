@@ -1,0 +1,20 @@
+// Step-3 itest — the bootstrap-tool / codegen node.
+//
+// c.generated_header builds the gen tool (gen.c), then RUNS it twice:
+//   no args   -> gen_values.h   (#defines)
+//   -names    -> gen_names.h    (a names table)
+// Both headers are published (c_header_dirs artifact). The program
+// node depends on this and #includes them.
+
+import build
+import c
+import c (sources, emit)
+
+main() {
+    b = build.start()
+    c.generated_header(b) {
+        sources("src/gen.c")
+        emit("", "gen_values.h")
+        emit("-names", "gen_names.h")
+    }
+}
