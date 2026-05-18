@@ -801,6 +801,39 @@ cover most deployment use cases.
 Same as other SDKs: test the command string builders (`pct_create_cmd`,
 `pct_api_cmd`) in isolation. No Proxmox host needed for tests.
 
+## In-process language hosting via `aeb-link`
+
+`container.run` runs a guest language as a *separate process* (a
+container). Aether's other option — `contrib.host.<lang>` (Lua,
+Python, Perl, Ruby, Tcl, JS) — embeds the interpreter *in-process*:
+the bridge is linked into the binary and the guest runs in its
+address space. For aeb that means the guest would run inside the
+orchestrator (`target/_ae_build_all`), which is the purest fit for
+the one-process model. The container-vs-hosted tradeoff is written
+up in `docs/guest-languages.md`.
+
+It does **not** work from a real `.build.ae` yet. The orchestrator
+linker (`tools/aeb-link`) doesn't link foreign-language bridges, so
+`import contrib.host.lua` resolves but `lua.run(...)` fails to link.
+The work:
+
+- `aeb-link` detects `import contrib.host.<lang>` anywhere in the
+  module closure.
+- For each, it adds the bridge `.c`, `-DAETHER_HAS_<LANG>`,
+  `-DAETHER_HAS_SANDBOX`, and `pkg-config` cflags/libs to the
+  orchestrator's gcc invocation — exactly what
+  `tests/test_host_lua.build.sh` does for the test today. That
+  sidecar is the working reference; promote its logic into `aeb-link`.
+- Degrade gracefully: no dev library → stub mode (the bridge's
+  `#else` no-ops), so a missing `liblua` never fails the build.
+
+Blocked-ish upstream: the installed Aether tree ships
+`contrib/host/<lang>/` with `.ae`/`.h`/`README` but not
+`aether_host_<lang>.c`, so the bridge source is currently only
+locatable from a sibling Aether checkout. A clean fix wants Aether to
+ship the bridge `.c` (or fold the stubs into `libaether`) — flagged
+for the Aether side.
+
 ## ~~Build environment validation~~ (not doing)
 
 Decided against `aeb --check`. The build already fails fast with a clear
