@@ -3,6 +3,3 @@
 
 # Build artifacts
 target/
-
-# aeb modules
-.aeb/

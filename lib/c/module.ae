@@ -109,11 +109,38 @@ output_file(_ctx: ptr, f: string) {
 // top-level functions surface as C symbols a hand-written .c can
 // call. c.program then auto-links libaether.a (the Aether runtime).
 //
-// Only c.program consumes this. The .ae must not import capability-
-// gated std modules (std.http/tcp/net/fs/os) — keep emitted code to
-// leaf logic.
+// If the .ae (directly or transitively) imports a capability-gated
+// std module — std.os / std.fs / std.net / std.tcp / std.http —
+// declare the capabilities with c.aether_caps(); aetherc --emit=lib
+// rejects gated imports otherwise.
 aether_source(_ctx: ptr, pat: string) {
     _append(_ctx, "c_aether_sources", pat)
+}
+
+// Capabilities passed to `aetherc --emit=lib --with=<caps>` for every
+// aether_source in this builder. `caps` is a comma-separated list:
+// os, fs, net. Required when an Aether source imports a gated std
+// module — including transitively, which an import scan can't see, so
+// this is declared rather than auto-detected. A program linking
+// handwritten C + Aether IS the capability owner, so granting them
+// here is the intended use (see aetherc's --emit=lib gating message).
+aether_caps(_ctx: ptr, caps: string) {
+    _e = map.put(_ctx, "c_aether_caps", caps)
+}
+
+// Point Aether compilation at a dev-tree checkout instead of the
+// installed toolchain. `root` is the Aether source-tree root — the
+// one with build/libaether.a + build/aetherc. When set, aetherc, its
+// libaether.a, and the runtime/std include dirs all come from that
+// tree, kept consistent, and AETHER_HOME=<root> is set per aetherc
+// invocation (scoped to that command — it does not leak into aeb's
+// own module resolution).
+//
+// Use when a project depends on bleeding-edge std that the installed
+// Aether predates (mquickjs's std.os additions are the motivating
+// case). Omit it to use the installed toolchain.
+aether_home(_ctx: ptr, root: string) {
+    _e = map.put(_ctx, "c_aether_home", root)
 }
 
 // --- c.generated_header DSL ------------------------------------------
@@ -142,6 +169,25 @@ emit(_ctx: ptr, args: string, header: string) {
     _append_nl(_ctx, "c_emit_headers", header)
 }
 
+// --- c.tests DSL -----------------------------------------------------
+//
+// c.tests runs built binaries and records pass/fail. Each run(...)
+// declares one check: invoke a binary with arguments, expect exit 0.
+//
+// The binary is identified by the .build.ae module path of the
+// c.program that produced it — the same path used in build.dep — so a
+// .tests.ae deps the program target(s) and then names them in run().
+// run accumulates into two parallel newline lists (prog / args).
+
+run(_ctx: ptr, prog: string, args: string) {
+    a = args
+    if string.length(a) == 0 {
+        a = " "
+    }
+    _append_nl(_ctx, "c_run_progs", prog)
+    _append_nl(_ctx, "c_run_args", a)
+}
+
 // --- Internal accessors ----------------------------------------------
 
 _cc_of(opts: ptr) {
@@ -162,6 +208,63 @@ _opt_str(opts: ptr, key: string) {
         }
     }
     return ""
+}
+
+// " --with=<caps>" for the aetherc --emit=lib command, or "" when no
+// c.aether_caps() was declared.
+_with_flag(opts: ptr) {
+    caps = _opt_str(opts, "c_aether_caps")
+    if string.length(caps) == 0 {
+        return ""
+    }
+    return " --with=${caps}"
+}
+
+// --- Aether toolchain location, honouring c.aether_home() -----------
+//
+// When the builder declared a dev-tree root (c.aether_home), all four
+// of these resolve against that tree; otherwise against the installed
+// toolchain.
+
+// Validated dev-tree root, or "" for the installed toolchain.
+_dev_root(opts: ptr) {
+    return build._aether_dev_root(_opt_str(opts, "c_aether_home"))
+}
+
+// Full path to the aetherc binary to invoke.
+_aetherc_bin(opts: ptr) {
+    dev = build._aether_dev_bin_dir(_opt_str(opts, "c_aether_home"))
+    if string.length(dev) > 0 {
+        return path.join(dev, "aetherc")
+    }
+    return path.join(build._resolve_aether_dir(), "aetherc")
+}
+
+// Directory containing libaether.a (gcc -L).
+_libaether_dir(opts: ptr) {
+    dev = build._aether_dev_bin_dir(_opt_str(opts, "c_aether_home"))
+    if string.length(dev) > 0 {
+        return dev
+    }
+    return build._resolve_libaether_dir(build._resolve_aether_dir())
+}
+
+// -I block the aetherc-generated C needs.
+_aether_incs(opts: ptr) {
+    return build._aether_include_flags(build._resolve_aether_dir(),
+                                       _opt_str(opts, "c_aether_home"))
+}
+
+// "AETHER_HOME=<root> " command prefix when a dev tree is in use, so
+// the aetherc sub-process resolves std/runtime from that tree —
+// scoped to the command, never the ambient aeb environment. "" for
+// the installed toolchain.
+_aetherc_env(opts: ptr) {
+    dev = _dev_root(opts)
+    if string.length(dev) == 0 {
+        return ""
+    }
+    return "AETHER_HOME='${dev}' "
 }
 
 // Expand the accumulated source patterns (space-separated, may be
@@ -343,14 +446,15 @@ builder aether_objects(ctx: ptr) {
         return 0
     }
 
-    aether_dir = build._resolve_aether_dir()
-    lib_dir = build._resolve_libaether_dir(aether_dir)
+    lib_dir = _libaether_dir(_builder)
     if string.length(lib_dir) == 0 {
         println("${mod_dir}: c.aether_objects: cannot locate libaether.a")
         return 1
     }
-    ae_inc = build._aether_include_flags(aether_dir)
-    aetherc = path.join(aether_dir, "aetherc")
+    ae_inc = _aether_incs(_builder)
+    aetherc = _aetherc_bin(_builder)
+    aenv = _aetherc_env(_builder)
+    with_flag = _with_flag(_builder)
 
     println("${mod_dir}: Aether codegen — ${n} source(s)")
 
@@ -363,7 +467,7 @@ builder aether_objects(ctx: ptr) {
         stem = _strip_ext(path.basename(ae_rel))
         gen_c = path.join(gen_dir, string.concat(stem, "_gen.c"))
         gen_o = path.join(gen_dir, string.concat(stem, "_gen.o"))
-        emit_cmd = "${aetherc} --emit=lib '${ae_full}' '${gen_c}'"
+        emit_cmd = "${aenv}${aetherc} --emit=lib${with_flag} '${ae_full}' '${gen_c}'"
         ecg = os.system(emit_cmd)
         if ecg != 0 {
             println("${mod_dir}: aetherc --emit=lib failed for ${ae_rel}")
@@ -426,14 +530,15 @@ _build_tool_binary(source_dir: string, target_dir: string, mod_dir: string,
     aether_link = ""
     aen = list.size(ae_srcs)
     if aen > 0 {
-        adir = build._resolve_aether_dir()
-        ldir = build._resolve_libaether_dir(adir)
+        ldir = _libaether_dir(opts)
         if string.length(ldir) == 0 {
             println("${mod_dir}: c.generated_header: cannot locate libaether.a")
             return 1
         }
-        ainc = build._aether_include_flags(adir)
-        aetherc = path.join(adir, "aetherc")
+        ainc = _aether_incs(opts)
+        aetherc = _aetherc_bin(opts)
+        aenv = _aetherc_env(opts)
+        twith = _with_flag(opts)
         gen_dir = path.join(target_dir, "tool_gen")
         build._mkdirs(gen_dir)
         k = 0
@@ -444,7 +549,7 @@ _build_tool_binary(source_dir: string, target_dir: string, mod_dir: string,
             stem = _strip_ext(path.basename(ae_rel))
             gen_c = path.join(gen_dir, string.concat(stem, "_gen.c"))
             gen_o = path.join(gen_dir, string.concat(stem, "_gen.o"))
-            eg = os.system("${aetherc} --emit=lib '${ae_full}' '${gen_c}'")
+            eg = os.system("${aenv}${aetherc} --emit=lib${twith} '${ae_full}' '${gen_c}'")
             if eg != 0 {
                 println("${mod_dir}: aetherc --emit=lib failed for ${ae_rel}")
                 return eg
@@ -458,7 +563,12 @@ _build_tool_binary(source_dir: string, target_dir: string, mod_dir: string,
             ae_objs = string.concat(ae_objs, gen_o)
             ae_objs = string.concat(ae_objs, "'")
         }
-        aether_link = " -L'${ldir}' -laether -lpthread -lm"
+        // Aether codegen emits imported-module functions into every
+        // translation unit, so multi-file Aether builds have the same
+        // symbol defined many times. The dup-symbol linker flag (GNU
+        // ld --allow-multiple-definition) lets the link dedupe.
+        dup = build._dup_symbol_link_flag()
+        aether_link = " -L'${ldir}' -laether -lpthread -lm ${dup}"
     }
 
     link = "${compiler} ${own_objs}${ae_objs} ${link_flags}${aether_link} -o '${bin_path}'"
@@ -523,13 +633,18 @@ builder generated_header(ctx: ptr) {
         return 0
     }
 
-    // Build the tool.
-    tool_bin = path.join(target_dir, "tool")
-    tool_bin = string.concat(tool_bin, build._exe_suffix())
+    // Build the tool. The path is recomputed fresh after the call —
+    // _build_tool_binary's internal string handling can leave a
+    // passed-in string aliased/stale, so we do not reuse the value
+    // handed to it.
+    tool_name = "tool"
+    tool_bin = path.join(target_dir, tool_name)
     rc = _build_tool_binary(source_dir, target_dir, mod_dir, _builder, tool_bin)
     if rc != 0 {
         return rc
     }
+    // Fresh handle to the tool path for the run loop below.
+    tool_path = path.join(target_dir, tool_name)
 
     // Run the tool once per emit pair: tool <args> > <inc_out>/<header>.
     // args and headers are read from the two parallel newline lists,
@@ -550,10 +665,21 @@ builder generated_header(ctx: ptr) {
         // back to nothing.
         run_args = string.trim(args)
         hdr_path = path.join(inc_out, header)
-        run = "'${tool_bin}' ${run_args} > '${hdr_path}'"
-        er = os.system(run)
+        // NB: local must NOT be named `run` — that collides with the
+        // module-level run() DSL function and the assignment then
+        // targets the function reference (an integer address).
+        run_cmd = string.concat("'", tool_path)
+        run_cmd = string.concat(run_cmd, "'")
+        if string.length(run_args) > 0 {
+            run_cmd = string.concat(run_cmd, " ")
+            run_cmd = string.concat(run_cmd, run_args)
+        }
+        run_cmd = string.concat(run_cmd, " > '")
+        run_cmd = string.concat(run_cmd, hdr_path)
+        run_cmd = string.concat(run_cmd, "'")
+        er = os.system(run_cmd)
         if er != 0 {
-            println("${mod_dir}: generator tool failed for header ${header}")
+            println("${mod_dir}: generator tool failed for header ${header} (rc=${er})")
             return er
         }
         println("${mod_dir}: generated ${header}")
@@ -665,14 +791,15 @@ builder program(ctx: ptr) {
     aether_link = ""
     ae_n = list.size(ae_srcs)
     if ae_n > 0 {
-        aether_dir = build._resolve_aether_dir()
-        lib_dir = build._resolve_libaether_dir(aether_dir)
+        lib_dir = _libaether_dir(_builder)
         if string.length(lib_dir) == 0 {
             println("${mod_dir}: c.program: cannot locate libaether.a — is Aether installed?")
             return 1
         }
-        ae_inc = build._aether_include_flags(aether_dir)
-        aetherc = path.join(aether_dir, "aetherc")
+        ae_inc = _aether_incs(_builder)
+        aetherc = _aetherc_bin(_builder)
+        aenv = _aetherc_env(_builder)
+        pwith = _with_flag(_builder)
         gen_dir = path.join(target_dir, "gen")
         build._mkdirs(gen_dir)
         k = 0
@@ -683,7 +810,7 @@ builder program(ctx: ptr) {
             stem = _strip_ext(path.basename(ae_rel))
             gen_c = path.join(gen_dir, string.concat(stem, "_gen.c"))
             gen_o = path.join(gen_dir, string.concat(stem, "_gen.o"))
-            emit_cmd = "${aetherc} --emit=lib '${ae_full}' '${gen_c}'"
+            emit_cmd = "${aenv}${aetherc} --emit=lib${pwith} '${ae_full}' '${gen_c}'"
             ecg = os.system(emit_cmd)
             if ecg != 0 {
                 println("${mod_dir}: aetherc --emit=lib failed for ${ae_rel}")
@@ -699,7 +826,10 @@ builder program(ctx: ptr) {
             ae_objs = string.concat(ae_objs, gen_o)
             ae_objs = string.concat(ae_objs, "'")
         }
-        aether_link = " -L'${lib_dir}' -laether -lpthread -lm"
+        // See _build_tool_binary: multi-file Aether builds need the
+        // dup-symbol linker flag.
+        dup = build._dup_symbol_link_flag()
+        aether_link = " -L'${lib_dir}' -laether -lpthread -lm ${dup}"
     }
 
     // A dependency module's c.aether_objects may have published
@@ -714,7 +844,8 @@ builder program(ctx: ptr) {
                 println("${mod_dir}: c.program: a dep needs libaether.a but it cannot be located")
                 return 1
             }
-            aether_link = " -L'${ldir}' -laether -lpthread -lm"
+            dup2 = build._dup_symbol_link_flag()
+            aether_link = " -L'${ldir}' -laether -lpthread -lm ${dup2}"
         }
     }
 
@@ -728,6 +859,80 @@ builder program(ctx: ptr) {
 
     build._write_artifact(ctx, "c_binary", out_path)
     _ets = io.write_file(ts_file, "")
+    return 0
+}
+
+// --- builder: tests --------------------------------------------------
+//
+// Run built binaries and record pass/fail. Each run(prog, args)
+// declared on the builder is one check: invoke the binary that the
+// c.program at module path `prog` produced, with `args`, and expect
+// exit code 0. `prog` is resolved through the dependency graph — the
+// .tests.ae must build.dep the program target(s) it names.
+//
+// Reports the aggregate pass/fail count via build._record_test_result
+// so aeb's summary picks it up. Returns non-zero if any check failed.
+
+builder tests(ctx: ptr) {
+    mod_dir = build._get(ctx, "module_dir")
+
+    progs_raw = _opt_str(_builder, "c_run_progs")
+    args_raw = _opt_str(_builder, "c_run_args")
+    if string.length(progs_raw) == 0 {
+        println("${mod_dir}: c.tests: no run() declared")
+        return 1
+    }
+
+    prog_arr = string.split(progs_raw, "\n")
+    args_arr = string.split(args_raw, "\n")
+    pn = string.array_size(prog_arr)
+
+    passed = 0
+    failed = 0
+    p = 0
+    while p < pn {
+        prog = string.array_get(prog_arr, p)
+        args = string.trim(string.array_get(args_arr, p))
+        p = p + 1
+        if string.length(prog) == 0 {
+            continue
+        }
+        // Resolve the binary: the c.program at .build.ae path `prog`
+        // published its path as the c_binary artifact, keyed by its
+        // module DIRECTORY. Derive that dir from the .build.ae path.
+        dep_mod = _module_dir_of(prog)
+        bin = build._read_dep_artifact(ctx, dep_mod, "c_binary")
+        bin = string.trim(bin)
+        if string.length(bin) == 0 {
+            println("${mod_dir}: c.tests: no c_binary from '${prog}' — did you build.dep it?")
+            failed = failed + 1
+            continue
+        }
+        // Build the command without interpolating a possibly-empty
+        // args slot.
+        cmd = string.concat("'", bin)
+        cmd = string.concat(cmd, "'")
+        if string.length(args) > 0 {
+            cmd = string.concat(cmd, " ")
+            cmd = string.concat(cmd, args)
+        }
+        rc = os.system(cmd)
+        if rc == 0 {
+            println("  PASS  ${prog} ${args}")
+            passed = passed + 1
+        } else {
+            println("  FAIL  ${prog} ${args}  (exit ${rc})")
+            failed = failed + 1
+        }
+    }
+    string.array_free(prog_arr)
+    string.array_free(args_arr)
+
+    build._record_test_result(ctx, passed, failed)
+    println("${mod_dir}: c.tests — ${passed} passed, ${failed} failed")
+    if failed > 0 {
+        return 1
+    }
     return 0
 }
 
@@ -832,4 +1037,15 @@ _strip_ext(name: string) {
         return name
     }
     return string.substring(name, 0, last_dot)
+}
+
+// Module directory of a .build.ae path, as aeb keys target dirs and
+// artifacts. "example-app/.build.ae" -> "example-app";
+// ".build.ae" (repo root) -> ".".
+_module_dir_of(build_ae_path: string) {
+    d = path.dirname(build_ae_path)
+    if string.length(d) == 0 {
+        return "."
+    }
+    return d
 }

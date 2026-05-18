@@ -406,7 +406,30 @@ _exe_suffix() {
 // Aether-generated C). Probe order matches aeb-link and the Aether
 // compiler's own tools/ae.c.
 
-// Directory containing the `ae` binary (honours $AETHER).
+// Validate an Aether *dev tree* root — an in-place source checkout,
+// identified by <root>/build/libaether.a existing. Returns `root` if
+// it is one, "" otherwise.
+//
+// A dev tree must be used as one consistent set: its aetherc, its
+// libaether.a, and its std/runtime headers all move together. A
+// project on bleeding-edge std (mquickjs uses std.os additions) can
+// only build against the dev tree it was written for; mixing a dev
+// aetherc with an installed, older libaether.a gives link errors.
+// The dev-root path is supplied explicitly by the language SDK (via
+// a setter such as lib/c's c.aether_home) — NOT read from the ambient
+// environment, since an env var would also redirect aeb's own module
+// resolution.
+_aether_dev_root(root: string) {
+    if string.length(root) == 0 {
+        return ""
+    }
+    if fs.exists(string.concat(root, "/build/libaether.a")) == 1 {
+        return root
+    }
+    return ""
+}
+
+// Directory containing the `ae`/`aetherc` binary (honours $AETHER).
 _resolve_aether_dir() {
     ae = os.getenv("AETHER")
     if string.length(ae) == 0 {
@@ -416,8 +439,19 @@ _resolve_aether_dir() {
     return string.trim(raw)
 }
 
+// build/ dir of a validated dev tree — where its aetherc and
+// libaether.a live. Caller passes the dev root (or "" for none).
+_aether_dev_bin_dir(dev_root: string) {
+    dev = _aether_dev_root(dev_root)
+    if string.length(dev) == 0 {
+        return ""
+    }
+    return string.concat(dev, "/build")
+}
+
 // Directory containing libaether.a, for gcc's -L. "" if not found
-// (caller treats that as a misconfigured Aether install).
+// (caller treats that as a misconfigured Aether install). When a dev
+// root is supplied, its build/ dir wins.
 _resolve_libaether_dir(aether_dir: string) {
     cand1 = string.concat(aether_dir, "/../lib/aether/libaether.a")
     if fs.exists(cand1) == 1 {
@@ -451,12 +485,19 @@ _resolve_aether_include(aether_dir: string) {
     return ""
 }
 
-// Leading-space-prefixed -I block covering every directory under the
-// Aether include root, or "" if there is no nested include tree.
-// aetherc --emit=lib output uses bare #include names (aether_panic.h,
-// aether_stringseq.h, ...) that live in nested subdirs, so each dir
-// needs its own -I.
-_aether_include_flags(aether_dir: string) {
+// Leading-space-prefixed -I block covering every directory the
+// aetherc --emit=lib generated C needs (its #includes use bare
+// names — aether_panic.h, aether_stringseq.h — that live in nested
+// subdirs, so each dir needs its own -I).
+//
+// dev_root non-empty: the headers are scattered under runtime/ and
+// std/ of the checkout, so -I every dir below those. Otherwise: -I
+// every dir under the installed nested include root.
+_aether_include_flags(aether_dir: string, dev_root: string) {
+    dev = _aether_dev_root(dev_root)
+    if string.length(dev) > 0 {
+        return " $(find ${dev}/runtime ${dev}/std -type d -print | sed 's|^|-I|')"
+    }
     inc_root = _resolve_aether_include(aether_dir)
     if string.length(inc_root) == 0 {
         return ""
