@@ -21,10 +21,11 @@ import std.list
 extern println(s: string)
 extern exit(code: int)
 
-// Shipped SDK modules — must match the SHIPPED_MODULES array in aeb.
+// Shipped SDK modules — the lib/<sdk> trees aeb ships and symlinks
+// into a project's .aeb/lib/ on `aeb --init`.
 // Space-separated so we don't need an array literal in Aether.
 shipped_modules() {
-    return string.concat("build java kotlin go rust ts scala clojure dotnet python aether bash brew cache container maven meta pnpm jest webpack angular approval webhook", "")
+    return string.concat("build java kotlin go rust c ts scala clojure dotnet python aether bash brew cache container maven meta pnpm jest webpack angular approval webhook", "")
 }
 
 // Returns 1 if `path` is a symlink (regardless of validity), 0 otherwise.

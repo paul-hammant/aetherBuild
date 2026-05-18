@@ -331,6 +331,75 @@ _dyld_env_var() {
     return "LD_LIBRARY_PATH"
 }
 
+// Normalised host-OS token, derived from `uname -s`. One of:
+//   "linux"   — Linux
+//   "macos"   — Darwin
+//   "freebsd" — FreeBSD
+//   "windows" — MinGW / MSYS / Cygwin (uname -s starts with one of
+//               MINGW / MSYS / CYGWIN), or anything else as a last
+//               resort if it looks Windows-ish
+//   "linux"   — fallback for anything unrecognised (Linux-ish flags
+//               are the safest default for an unknown POSIX system)
+// Language SDKs use this to pick compilers, flags, and suffixes.
+_host_os() {
+    s = _uname_s()
+    if s == "Darwin" {
+        return "macos"
+    }
+    if s == "Linux" {
+        return "linux"
+    }
+    if s == "FreeBSD" {
+        return "freebsd"
+    }
+    // MinGW/MSYS/Cygwin report e.g. "MINGW64_NT-10.0", "MSYS_NT-10.0",
+    // "CYGWIN_NT-10.0" — match on the prefix.
+    if string.starts_with(s, "MINGW") == 1 {
+        return "windows"
+    }
+    if string.starts_with(s, "MSYS") == 1 {
+        return "windows"
+    }
+    if string.starts_with(s, "CYGWIN") == 1 {
+        return "windows"
+    }
+    return "linux"
+}
+
+_is_freebsd() {
+    return _host_os() == "freebsd"
+}
+
+_is_windows() {
+    return _host_os() == "windows"
+}
+
+// Default C compiler for the host OS. FreeBSD's base system ships
+// clang as `cc` (no gcc by default); Linux distros ship gcc as both
+// `cc` and `gcc`; MinGW provides `gcc`. Always overridable by the
+// language SDK (e.g. lib/c's cc("...") setter) — this is only the
+// fallback when the build file names no compiler.
+_default_cc() {
+    os_tok = _host_os()
+    if os_tok == "freebsd" {
+        return "cc"
+    }
+    if os_tok == "macos" {
+        return "cc"
+    }
+    return "gcc"
+}
+
+// Executable-file suffix for the host OS (".exe" on Windows, ""
+// elsewhere). Append to binary output names so Windows builds
+// produce runnable artifacts.
+_exe_suffix() {
+    if _is_windows() == 1 {
+        return ".exe"
+    }
+    return ""
+}
+
 _mkdirs(dir_path: string) {
     os.system("mkdir -p ${dir_path}")
 }

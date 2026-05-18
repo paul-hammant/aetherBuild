@@ -1,0 +1,392 @@
+// c — C SDK for aether.build
+//
+// Compiles C sources with the host C compiler. Two output modes:
+//
+//   c.compile(b)  — compile each .c to a .o, emit an object set.
+//                   Use when the objects are linked later alongside
+//                   objects from another SDK (e.g. lib/aether's
+//                   --emit=lib .gen.c output).
+//   c.program(b)  — compile + link a standalone native binary.
+//
+// Cross-platform: the compiler defaults per host OS via
+// build._default_cc() (gcc on Linux/MinGW, cc on FreeBSD/macOS) and
+// is overridable with cc("..."). Binary output gets build._exe_suffix()
+// (".exe" on Windows). Adaptive for linux / mingw / freebsd.
+//
+// A .build.ae using it:
+//
+//     import build
+//     import c
+//     main() {
+//         b = build.start()
+//         c.sources(b, "*.c")
+//         c.include(b, "include")
+//         c.cflag(b, "-O2")
+//         c.output_file(b, "myprog")
+//         c.program(b)
+//     }
+
+import build
+import std.string
+import std.io
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.map
+import std.path
+import std.dir
+
+// --- C DSL setters ---------------------------------------------------
+//
+// Each appends to (or sets) a key in the builder map; the builder
+// functions below read them back.
+
+_append(_ctx: ptr, key: string, val: string) {
+    if map.has(_ctx, key) == 1 {
+        prev, _ = map.get(_ctx, key)
+        combined = string.concat(prev, " ")
+        combined = string.concat(combined, val)
+        _e1 = map.put(_ctx, key, combined)
+    } else {
+        _e2 = map.put(_ctx, key, val)
+    }
+}
+
+// Source files. Accepts a literal name, or a glob ("*.c", "src/*.c")
+// expanded at build time relative to source_dir. Call multiple times
+// to accumulate.
+sources(_ctx: ptr, pat: string) {
+    _append(_ctx, "c_sources", pat)
+}
+
+// Add an include directory (-I). Relative paths resolve against
+// source_dir at compile time.
+include(_ctx: ptr, dir: string) {
+    _append(_ctx, "c_includes", dir)
+}
+
+// Append one compile flag (-O2, -g, -DFOO, -fno-math-errno, ...).
+cflag(_ctx: ptr, flag: string) {
+    _append(_ctx, "c_cflags", flag)
+}
+
+// Append one link flag / library (-lpthread, -lm, -L/path, ...).
+// Only consulted by c.program (the linking mode).
+link_flag(_ctx: ptr, flag: string) {
+    _append(_ctx, "c_link_flags", flag)
+}
+
+// Override the C compiler. Without this, build._default_cc() picks
+// per host OS. Use for an explicit toolchain or a mingw cross-prefix
+// (e.g. cc("x86_64-w64-mingw32-gcc")).
+cc(_ctx: ptr, compiler: string) {
+    _e = map.put(_ctx, "c_cc", compiler)
+}
+
+// Output file name (binary for c.program; ignored by c.compile,
+// which names each object after its source).
+output_file(_ctx: ptr, f: string) {
+    _e = map.put(_ctx, "c_output", f)
+}
+
+// --- Internal accessors ----------------------------------------------
+
+_cc_of(opts: ptr) {
+    if opts != null {
+        if map.has(opts, "c_cc") == 1 {
+            v, _ = map.get(opts, "c_cc")
+            return v
+        }
+    }
+    return build._default_cc()
+}
+
+_opt_str(opts: ptr, key: string) {
+    if opts != null {
+        if map.has(opts, key) == 1 {
+            v, _ = map.get(opts, key)
+            return v
+        }
+    }
+    return ""
+}
+
+// Expand the accumulated source patterns (space-separated, may be
+// globs) into a concrete list of paths under source_dir. Globs are
+// expanded by the shell via `ls`; literal names pass through.
+_expand_sources(source_dir: string, pats: string) {
+    out = list.new()
+    parts = string.split(pats, " ")
+    n = string.array_size(parts)
+    i = 0
+    while i < n {
+        p = string.array_get(parts, i)
+        i = i + 1
+        if string.length(p) == 0 {
+            continue
+        }
+        // Let the shell expand globs relative to source_dir. `ls -1`
+        // on a literal name just echoes it; on a glob it lists
+        // matches. Missing files surface as a compile error later.
+        raw, _e = os.exec("cd '${source_dir}' && ls -1 ${p} 2>/dev/null")
+        lines = string.split(string.trim(raw), "\n")
+        m = string.array_size(lines)
+        j = 0
+        while j < m {
+            ln = string.array_get(lines, j)
+            j = j + 1
+            t = string.trim(ln)
+            if string.length(t) > 0 {
+                list.add(out, t)
+            }
+        }
+        string.array_free(lines)
+    }
+    string.array_free(parts)
+    return out
+}
+
+// Build the "-Idir -Idir ..." fragment from the c_includes list.
+_include_flags(opts: ptr) {
+    inc = _opt_str(opts, "c_includes")
+    if string.length(inc) == 0 {
+        return ""
+    }
+    out = ""
+    parts = string.split(inc, " ")
+    n = string.array_size(parts)
+    i = 0
+    while i < n {
+        d = string.array_get(parts, i)
+        i = i + 1
+        if string.length(d) > 0 {
+            out = string.concat(out, " -I")
+            out = string.concat(out, d)
+        }
+    }
+    string.array_free(parts)
+    return out
+}
+
+// --- builder: compile ------------------------------------------------
+//
+// Compile each source to an object file under target_dir/obj.
+// Records the object set as the "c_objects" artifact (newline-
+// separated absolute paths) so a later link step — in this module
+// or another — can consume it.
+
+// Has any source in `srcs` (paths relative to source_dir) been
+// modified since `ts_file` was written? Returns 1 if a rebuild is
+// needed (ts_file missing, or any source newer). Unlike
+// build._needs_rebuild this checks the *actual resolved sources*,
+// so it sees files in subdirectories (src/foo.c), which a shallow
+// source_dir/* glob would miss.
+_sources_changed(source_dir: string, srcs: ptr, ts_file: string) {
+    if file.exists(ts_file) == 0 {
+        return 1
+    }
+    ts = file.mtime(ts_file)
+    n = list.size(srcs)
+    i = 0
+    while i < n {
+        rel, _ = list.get(srcs, i)
+        i = i + 1
+        full = path.join(source_dir, rel)
+        if file.mtime(full) > ts {
+            return 1
+        }
+    }
+    return 0
+}
+
+builder compile(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    obj_dir = path.join(target_dir, "obj")
+    build._mkdirs(obj_dir)
+
+    compiler = _cc_of(_builder)
+    cflags = _opt_str(_builder, "c_cflags")
+    inc_flags = _include_flags(_builder)
+    srcs = _expand_sources(source_dir, _opt_str(_builder, "c_sources"))
+
+    n = list.size(srcs)
+    if n == 0 {
+        println("${mod_dir}: c.compile: no sources — call c.sources(b, \"*.c\")")
+        return 1
+    }
+
+    ts_file = path.join(obj_dir, ".timestamp")
+    if _sources_changed(source_dir, srcs, ts_file) == 0 {
+        println("${mod_dir}: skipping C compile (not changed)")
+        return 0
+    }
+
+    println("${mod_dir}: compiling ${n} C source(s)")
+
+    objects = ""
+    i = 0
+    while i < n {
+        src, _ = list.get(srcs, i)
+        i = i + 1
+        // object name: src path basename with .o
+        base = path.basename(src)
+        obj = path.join(obj_dir, string.concat(_strip_ext(base), ".o"))
+        cmd = "cd '${source_dir}' && ${compiler} ${cflags}${inc_flags} -c -o '${obj}' '${src}'"
+        exit_code = os.system(cmd)
+        if exit_code != 0 {
+            println("${mod_dir}: C compile failed on ${src}")
+            return exit_code
+        }
+        if string.length(objects) > 0 {
+            objects = string.concat(objects, "\n")
+        }
+        objects = string.concat(objects, obj)
+    }
+
+    build._write_artifact(ctx, "c_objects", objects)
+    _ets = io.write_file(ts_file, "")
+    return 0
+}
+
+// --- builder: program ------------------------------------------------
+//
+// Compile all sources and link a standalone native binary. Pulls in
+// any c_objects artifacts published by dependency modules so a
+// program can link against objects compiled elsewhere (including
+// lib/aether --emit=lib output, once that publishes the same
+// artifact key).
+
+builder program(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    bin_dir = path.join(target_dir, "bin")
+    build._mkdirs(bin_dir)
+
+    out_name = _opt_str(_builder, "c_output")
+    if string.length(out_name) == 0 {
+        println("${mod_dir}: c.program: output_file() is required")
+        return 1
+    }
+    out_name = string.concat(out_name, build._exe_suffix())
+    out_path = path.join(bin_dir, out_name)
+
+    compiler = _cc_of(_builder)
+    cflags = _opt_str(_builder, "c_cflags")
+    inc_flags = _include_flags(_builder)
+    link_flags = _opt_str(_builder, "c_link_flags")
+    srcs = _expand_sources(source_dir, _opt_str(_builder, "c_sources"))
+
+    // Objects contributed by dependency modules (e.g. a sibling
+    // c.compile target, or lib/aether codegen output).
+    dep_objs = _collect_dep_objects(ctx)
+
+    // Rebuild when any resolved source changed, or the binary is
+    // missing. (dep-object changes are caught by the depended-on
+    // module's own rebuild check re-running its c.compile.)
+    ts_file = path.join(bin_dir, ".timestamp")
+    if file.exists(out_path) == 1 {
+        if _sources_changed(source_dir, srcs, ts_file) == 0 {
+            println("${mod_dir}: skipping C program link (not changed)")
+            return 0
+        }
+    }
+
+    n = list.size(srcs)
+    if n == 0 {
+        if string.length(dep_objs) == 0 {
+            println("${mod_dir}: c.program: no sources and no dep objects")
+            return 1
+        }
+    }
+    println("${mod_dir}: building C program ${out_name}")
+
+    // Compile this module's own sources to objects first.
+    obj_dir = path.join(target_dir, "obj")
+    build._mkdirs(obj_dir)
+    own_objs = ""
+    i = 0
+    while i < n {
+        src, _ = list.get(srcs, i)
+        i = i + 1
+        base = path.basename(src)
+        obj = path.join(obj_dir, string.concat(_strip_ext(base), ".o"))
+        ccmd = "cd '${source_dir}' && ${compiler} ${cflags}${inc_flags} -c -o '${obj}' '${src}'"
+        ec = os.system(ccmd)
+        if ec != 0 {
+            println("${mod_dir}: C compile failed on ${src}")
+            return ec
+        }
+        own_objs = string.concat(own_objs, " '")
+        own_objs = string.concat(own_objs, obj)
+        own_objs = string.concat(own_objs, "'")
+    }
+
+    // Link.
+    link_cmd = "${compiler} ${own_objs}${dep_objs} ${link_flags} -o '${out_path}'"
+    ec2 = os.system(link_cmd)
+    if ec2 != 0 {
+        println("${mod_dir}: C link failed")
+        return ec2
+    }
+
+    build._write_artifact(ctx, "c_binary", out_path)
+    _ets = io.write_file(ts_file, "")
+    return 0
+}
+
+// Gather c_objects artifacts from all dependency modules into a
+// space-separated, shell-quoted fragment for the link line.
+_collect_dep_objects(ctx: ptr) {
+    deps, _ = map.get(ctx, "deps")
+    out = ""
+    dep_count = list.size(deps)
+    n = 0
+    while n < dep_count {
+        dp, _ = list.get(deps, n)
+        n = n + 1
+        dm = build._strip_lang(dp)
+        objs = build._read_dep_artifact(ctx, dm, "c_objects")
+        if string.length(objs) > 0 {
+            lines = string.split(objs, "\n")
+            m = string.array_size(lines)
+            j = 0
+            while j < m {
+                o = string.array_get(lines, j)
+                j = j + 1
+                t = string.trim(o)
+                if string.length(t) > 0 {
+                    out = string.concat(out, " '")
+                    out = string.concat(out, t)
+                    out = string.concat(out, "'")
+                }
+            }
+            string.array_free(lines)
+        }
+    }
+    return out
+}
+
+// Strip the final extension from a filename ("foo.c" -> "foo",
+// "a.b.c" -> "a.b"). Used to derive object names from sources.
+// std.string has no last_index_of, so scan for the last '.'.
+_strip_ext(name: string) {
+    n = string.length(name)
+    last_dot = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(name, i) == 46 {   // '.'
+            last_dot = i
+        }
+        i = i + 1
+    }
+    if last_dot < 0 {
+        return name
+    }
+    return string.substring(name, 0, last_dot)
+}
