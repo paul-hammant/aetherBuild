@@ -327,6 +327,18 @@ runtime tree to `$PREFIX/share/aeb/`, with a wrapper at
   list.get(l, i)` works; declaring a function `-> (string, int)`
   doesn't ergonomically chain. Use a map or split-accessor pattern
   for >1 return value.
+- **`E0301 Undefined function 'x.y'` often means a failed `import`,
+  not a typo.** aetherc silently tolerates an `import` that resolves
+  to nothing and only errors at each *use* site. A wall of E0301
+  across `target/_aeb/*.ae` after a build is almost always the SDK
+  `--lib` path being wrong, not the SDK being broken. aeb resolves
+  the SDK as `<root>/.aeb/lib` (the per-project `aeb --init`
+  symlink), falling back to `$AEB_HOME/lib` when that is absent or a
+  dangling symlink — so `aeb --init` is effectively optional now
+  (`aeb-main.ae`, fix `9689862`, originally an avn-reported blocker).
+  If you touch the orchestrator `--lib` handoff, an `itests/c-*` run
+  is the fast check: those itests have no `.aeb/lib`, so they
+  exercise the fallback path directly.
 
 ## SDK extension shape
 
