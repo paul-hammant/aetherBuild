@@ -335,7 +335,21 @@ main() {
     }
 
     // --- Write edges file for topo-sort ---
+    // .aeb/lib is a per-project SDK pin — a symlink set by `aeb
+    // --init`. When it is absent (project never init'd, or aeb run
+    // from a subdir below where .aeb lives) or a dangling symlink,
+    // fall back to the SDK tree of the running aeb itself: AEB_HOME
+    // is always exported by the aeb trampoline and $AEB_HOME/lib is
+    // the canonical runtime SDK. Without this fallback the generated
+    // orchestrator nodes get `--lib <nonexistent>` and every
+    // `import build` / `import <sdk>` silently resolves to nothing —
+    // surfacing only as E0301 "Undefined function" at each call
+    // site. Probe a concrete file under the dir so a dangling
+    // symlink is treated as absent too.
     aeb_lib_dir = string.concat(root, "/.aeb/lib")
+    if fs.exists(string.concat(aeb_lib_dir, "/build/module.ae")) == 0 {
+        aeb_lib_dir = string.concat(aebhome, "/lib")
+    }
     build_dir = string.concat(root, "/target/_aeb")
     out_bin = string.concat(root, "/target/_ae_build_all")
     os.system(string.concat("mkdir -p ", build_dir))
