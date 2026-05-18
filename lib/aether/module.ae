@@ -293,50 +293,19 @@ _regen_append(_ctx: ptr, ae_path: string, caps: string) {
 
 // --- Helpers ---
 
+// Aether toolchain resolution now lives in lib/build (shared with
+// lib/c). These thin forwarders keep lib/aether's existing internal
+// call sites unchanged.
 _resolve_aether_dir() {
-    ae = os.getenv("AETHER")
-    if string.length(ae) == 0 {
-        ae = "ae"
-    }
-    raw, _eerr = os.exec("dirname $(command -v ${ae})")
-    return string.trim(raw)
+    return build._resolve_aether_dir()
 }
 
-// Resolve the directory containing libaether.a — same probe order as
-// aeb-link's _resolve_libaether_dir (and Aether's tools/ae.c). Returns
-// the dir to pass to gcc's -L, or "" if no libaether.a found — caller
-// treats that as a misconfigured Aether install.
 _resolve_libaether_dir(aether_dir: string) {
-    cand1 = string.concat(aether_dir, "/../lib/aether/libaether.a")
-    if fs.exists(cand1) == 1 {
-        return string.concat(aether_dir, "/../lib/aether")
-    }
-    cand2 = string.concat(aether_dir, "/../lib/libaether.a")
-    if fs.exists(cand2) == 1 {
-        return string.concat(aether_dir, "/../lib")
-    }
-    cand3 = string.concat(aether_dir, "/libaether.a")
-    if fs.exists(cand3) == 1 {
-        return aether_dir
-    }
-    return ""
+    return build._resolve_libaether_dir(aether_dir)
 }
 
-// Resolve the Aether include root for nested-header installs. Same
-// shape as aeb-link's _resolve_aether_include. Returns "" if no
-// nested include tree (dev-tree layout) — caller skips the -I block.
 _resolve_aether_include(aether_dir: string) {
-    env_inc = os.getenv("AETHER_INCLUDE")
-    if string.length(env_inc) > 0 {
-        if dir.exists(env_inc) == 1 {
-            return env_inc
-        }
-    }
-    cand = string.concat(aether_dir, "/../include/aether")
-    if dir.exists(cand) == 1 {
-        return cand
-    }
-    return ""
+    return build._resolve_aether_include(aether_dir)
 }
 
 _collect_shared_libs(ctx: ptr) {

@@ -1,0 +1,8 @@
+# aeb modules
+.aeb/
+
+# Build artifacts
+target/
+
+# aeb modules
+.aeb/

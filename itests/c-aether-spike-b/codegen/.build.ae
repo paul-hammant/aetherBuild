@@ -1,0 +1,17 @@
+// Spike B — the codegen node.
+//
+// A standalone target that runs aetherc --emit=lib on add.ae and
+// publishes the resulting object as the "c_objects" artifact (plus
+// "c_needs_aether_runtime"). The program node depends on this via
+// build.dep and links the published object.
+
+import build
+import c
+import c (aether_source)
+
+main() {
+    b = build.start()
+    c.aether_objects(b) {
+        aether_source("add.ae")
+    }
+}

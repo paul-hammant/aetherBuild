@@ -1,0 +1,6 @@
+// A leaf Aether function, compiled via `aetherc --emit=lib` into a
+// C object and linked into a C program. No imports — keeps the
+// emitted .c free of capability gating.
+add_two(a: int, b: int) -> int {
+    return a + b
+}

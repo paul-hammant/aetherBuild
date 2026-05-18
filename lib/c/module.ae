@@ -90,6 +90,19 @@ output_file(_ctx: ptr, f: string) {
     _e = map.put(_ctx, "c_output", f)
 }
 
+// Declare an Aether source to compile (via `aetherc --emit=lib`) into
+// a C object and link into this program. Path is module-relative,
+// like c.sources. The .ae becomes a plain C compilation unit — its
+// top-level functions surface as C symbols a hand-written .c can
+// call. c.program then auto-links libaether.a (the Aether runtime).
+//
+// Only c.program consumes this. The .ae must not import capability-
+// gated std modules (std.http/tcp/net/fs/os) — keep emitted code to
+// leaf logic.
+aether_source(_ctx: ptr, pat: string) {
+    _append(_ctx, "c_aether_sources", pat)
+}
+
 // --- Internal accessors ----------------------------------------------
 
 _cc_of(opts: ptr) {
@@ -252,6 +265,89 @@ builder compile(ctx: ptr) {
     return 0
 }
 
+// --- builder: aether_objects -----------------------------------------
+//
+// Codegen-only target: compile each declared aether_source via
+// `aetherc --emit=lib` into a C object, and publish the object set
+// as the "c_objects" artifact — the same key c.compile uses, so a
+// dependent c.program picks them up through build.dep automatically.
+//
+// Also publishes "c_needs_aether_runtime" = "1" so a dependent
+// c.program knows to link libaether.a (the generated objects
+// reference the Aether runtime).
+//
+// This is the file-to-file-DAG composition: codegen is its own node;
+// the C program that consumes the objects is a separate node with a
+// build.dep edge to it.
+
+builder aether_objects(ctx: ptr) {
+    source_dir = build._get(ctx, "source_dir")
+    target_dir = build._get(ctx, "target_dir")
+    mod_dir = build._get(ctx, "module_dir")
+
+    gen_dir = path.join(target_dir, "gen")
+    build._mkdirs(gen_dir)
+
+    compiler = _cc_of(_builder)
+    cflags = _opt_str(_builder, "c_cflags")
+    ae_srcs = _expand_sources(source_dir, _opt_str(_builder, "c_aether_sources"))
+
+    n = list.size(ae_srcs)
+    if n == 0 {
+        println("${mod_dir}: c.aether_objects: no aether_source() declared")
+        return 1
+    }
+
+    ts_file = path.join(gen_dir, ".timestamp")
+    if _sources_changed(source_dir, ae_srcs, ts_file) == 0 {
+        println("${mod_dir}: skipping Aether codegen (not changed)")
+        return 0
+    }
+
+    aether_dir = build._resolve_aether_dir()
+    lib_dir = build._resolve_libaether_dir(aether_dir)
+    if string.length(lib_dir) == 0 {
+        println("${mod_dir}: c.aether_objects: cannot locate libaether.a")
+        return 1
+    }
+    ae_inc = build._aether_include_flags(aether_dir)
+    aetherc = path.join(aether_dir, "aetherc")
+
+    println("${mod_dir}: Aether codegen — ${n} source(s)")
+
+    objects = ""
+    i = 0
+    while i < n {
+        ae_rel, _ = list.get(ae_srcs, i)
+        i = i + 1
+        ae_full = path.join(source_dir, ae_rel)
+        stem = _strip_ext(path.basename(ae_rel))
+        gen_c = path.join(gen_dir, string.concat(stem, "_gen.c"))
+        gen_o = path.join(gen_dir, string.concat(stem, "_gen.o"))
+        emit_cmd = "${aetherc} --emit=lib '${ae_full}' '${gen_c}'"
+        ecg = os.system(emit_cmd)
+        if ecg != 0 {
+            println("${mod_dir}: aetherc --emit=lib failed for ${ae_rel}")
+            return ecg
+        }
+        ocmd = "${compiler} ${cflags}${ae_inc} -c -o '${gen_o}' '${gen_c}'"
+        eco = os.system(ocmd)
+        if eco != 0 {
+            println("${mod_dir}: C compile of generated ${gen_c} failed")
+            return eco
+        }
+        if string.length(objects) > 0 {
+            objects = string.concat(objects, "\n")
+        }
+        objects = string.concat(objects, gen_o)
+    }
+
+    build._write_artifact(ctx, "c_objects", objects)
+    build._write_artifact(ctx, "c_needs_aether_runtime", "1")
+    _ets = io.write_file(ts_file, "")
+    return 0
+}
+
 // --- builder: program ------------------------------------------------
 //
 // Compile all sources and link a standalone native binary. Pulls in
@@ -286,12 +382,21 @@ builder program(ctx: ptr) {
     // c.compile target, or lib/aether codegen output).
     dep_objs = _collect_dep_objects(ctx)
 
-    // Rebuild when any resolved source changed, or the binary is
-    // missing. (dep-object changes are caught by the depended-on
-    // module's own rebuild check re-running its c.compile.)
+    // Rebuild when any resolved source — C or Aether — changed, or
+    // the binary is missing. (dep-object changes are caught by the
+    // depended-on module's own rebuild check.)
     ts_file = path.join(bin_dir, ".timestamp")
+    change_set = _expand_sources(source_dir, _opt_str(_builder, "c_sources"))
+    ae_for_check = _expand_sources(source_dir, _opt_str(_builder, "c_aether_sources"))
+    ci = 0
+    cn = list.size(ae_for_check)
+    while ci < cn {
+        aep, _ = list.get(ae_for_check, ci)
+        ci = ci + 1
+        list.add(change_set, aep)
+    }
     if file.exists(out_path) == 1 {
-        if _sources_changed(source_dir, srcs, ts_file) == 0 {
+        if _sources_changed(source_dir, change_set, ts_file) == 0 {
             println("${mod_dir}: skipping C program link (not changed)")
             return 0
         }
@@ -300,8 +405,10 @@ builder program(ctx: ptr) {
     n = list.size(srcs)
     if n == 0 {
         if string.length(dep_objs) == 0 {
-            println("${mod_dir}: c.program: no sources and no dep objects")
-            return 1
+            if list.size(ae_for_check) == 0 {
+                println("${mod_dir}: c.program: no sources and no dep objects")
+                return 1
+            }
         }
     }
     println("${mod_dir}: building C program ${out_name}")
@@ -327,8 +434,69 @@ builder program(ctx: ptr) {
         own_objs = string.concat(own_objs, "'")
     }
 
+    // Compile any declared Aether sources: aetherc --emit=lib turns
+    // each .ae into a C unit; compile that to an object. When present,
+    // the link must also pull in libaether.a (the Aether runtime).
+    ae_srcs = _expand_sources(source_dir, _opt_str(_builder, "c_aether_sources"))
+    ae_objs = ""
+    aether_link = ""
+    ae_n = list.size(ae_srcs)
+    if ae_n > 0 {
+        aether_dir = build._resolve_aether_dir()
+        lib_dir = build._resolve_libaether_dir(aether_dir)
+        if string.length(lib_dir) == 0 {
+            println("${mod_dir}: c.program: cannot locate libaether.a — is Aether installed?")
+            return 1
+        }
+        ae_inc = build._aether_include_flags(aether_dir)
+        aetherc = path.join(aether_dir, "aetherc")
+        gen_dir = path.join(target_dir, "gen")
+        build._mkdirs(gen_dir)
+        k = 0
+        while k < ae_n {
+            ae_rel, _ = list.get(ae_srcs, k)
+            k = k + 1
+            ae_full = path.join(source_dir, ae_rel)
+            stem = _strip_ext(path.basename(ae_rel))
+            gen_c = path.join(gen_dir, string.concat(stem, "_gen.c"))
+            gen_o = path.join(gen_dir, string.concat(stem, "_gen.o"))
+            emit_cmd = "${aetherc} --emit=lib '${ae_full}' '${gen_c}'"
+            ecg = os.system(emit_cmd)
+            if ecg != 0 {
+                println("${mod_dir}: aetherc --emit=lib failed for ${ae_rel}")
+                return ecg
+            }
+            ocmd = "${compiler} ${cflags}${ae_inc} -c -o '${gen_o}' '${gen_c}'"
+            eco = os.system(ocmd)
+            if eco != 0 {
+                println("${mod_dir}: C compile of generated ${gen_c} failed")
+                return eco
+            }
+            ae_objs = string.concat(ae_objs, " '")
+            ae_objs = string.concat(ae_objs, gen_o)
+            ae_objs = string.concat(ae_objs, "'")
+        }
+        aether_link = " -L'${lib_dir}' -laether -lpthread -lm"
+    }
+
+    // A dependency module's c.aether_objects may have published
+    // generated objects that reference the Aether runtime. If so —
+    // and this program didn't already add libaether.a for its own
+    // aether_source()s — add it now.
+    if string.length(aether_link) == 0 {
+        if _deps_need_aether_runtime(ctx) == 1 {
+            adir = build._resolve_aether_dir()
+            ldir = build._resolve_libaether_dir(adir)
+            if string.length(ldir) == 0 {
+                println("${mod_dir}: c.program: a dep needs libaether.a but it cannot be located")
+                return 1
+            }
+            aether_link = " -L'${ldir}' -laether -lpthread -lm"
+        }
+    }
+
     // Link.
-    link_cmd = "${compiler} ${own_objs}${dep_objs} ${link_flags} -o '${out_path}'"
+    link_cmd = "${compiler} ${own_objs}${ae_objs}${dep_objs} ${link_flags}${aether_link} -o '${out_path}'"
     ec2 = os.system(link_cmd)
     if ec2 != 0 {
         println("${mod_dir}: C link failed")
@@ -370,6 +538,25 @@ _collect_dep_objects(ctx: ptr) {
         }
     }
     return out
+}
+
+// 1 if any dependency module published c_needs_aether_runtime — i.e.
+// it ran c.aether_objects and its objects reference the Aether
+// runtime, so a program linking them must add libaether.a.
+_deps_need_aether_runtime(ctx: ptr) {
+    deps, _ = map.get(ctx, "deps")
+    dep_count = list.size(deps)
+    n = 0
+    while n < dep_count {
+        dp, _ = list.get(deps, n)
+        n = n + 1
+        dm = build._strip_lang(dp)
+        flag = build._read_dep_artifact(ctx, dm, "c_needs_aether_runtime")
+        if string.trim(flag) == "1" {
+            return 1
+        }
+    }
+    return 0
 }
 
 // Strip the final extension from a filename ("foo.c" -> "foo",

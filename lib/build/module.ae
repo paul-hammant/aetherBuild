@@ -400,6 +400,70 @@ _exe_suffix() {
     return ""
 }
 
+// --- Aether toolchain resolution -------------------------------------
+//
+// Shared by lib/aether and lib/c (any SDK that compiles or links
+// Aether-generated C). Probe order matches aeb-link and the Aether
+// compiler's own tools/ae.c.
+
+// Directory containing the `ae` binary (honours $AETHER).
+_resolve_aether_dir() {
+    ae = os.getenv("AETHER")
+    if string.length(ae) == 0 {
+        ae = "ae"
+    }
+    raw, _eerr = os.exec("dirname $(command -v ${ae})")
+    return string.trim(raw)
+}
+
+// Directory containing libaether.a, for gcc's -L. "" if not found
+// (caller treats that as a misconfigured Aether install).
+_resolve_libaether_dir(aether_dir: string) {
+    cand1 = string.concat(aether_dir, "/../lib/aether/libaether.a")
+    if fs.exists(cand1) == 1 {
+        return string.concat(aether_dir, "/../lib/aether")
+    }
+    cand2 = string.concat(aether_dir, "/../lib/libaether.a")
+    if fs.exists(cand2) == 1 {
+        return string.concat(aether_dir, "/../lib")
+    }
+    cand3 = string.concat(aether_dir, "/libaether.a")
+    if fs.exists(cand3) == 1 {
+        return aether_dir
+    }
+    return ""
+}
+
+// Aether runtime include root for nested-header installs. Honours
+// $AETHER_INCLUDE. "" for a dev-tree layout with no nested include
+// dir — caller then skips the -I block.
+_resolve_aether_include(aether_dir: string) {
+    env_inc = os.getenv("AETHER_INCLUDE")
+    if string.length(env_inc) > 0 {
+        if dir.exists(env_inc) == 1 {
+            return env_inc
+        }
+    }
+    cand = string.concat(aether_dir, "/../include/aether")
+    if dir.exists(cand) == 1 {
+        return cand
+    }
+    return ""
+}
+
+// Leading-space-prefixed -I block covering every directory under the
+// Aether include root, or "" if there is no nested include tree.
+// aetherc --emit=lib output uses bare #include names (aether_panic.h,
+// aether_stringseq.h, ...) that live in nested subdirs, so each dir
+// needs its own -I.
+_aether_include_flags(aether_dir: string) {
+    inc_root = _resolve_aether_include(aether_dir)
+    if string.length(inc_root) == 0 {
+        return ""
+    }
+    return " $(find ${inc_root} -type d -print | sed 's|^|-I|')"
+}
+
 _mkdirs(dir_path: string) {
     os.system("mkdir -p ${dir_path}")
 }
